@@ -85,7 +85,9 @@ pub struct SetCookieRequest {
     pub name: String,
     #[schemars(description = "Cookie value")]
     pub value: String,
-    #[schemars(description = "Cookie domain (e.g. '.example.com'). If omitted, uses current page domain.")]
+    #[schemars(
+        description = "Cookie domain (e.g. '.example.com'). If omitted, uses current page domain."
+    )]
     pub domain: Option<String>,
     #[schemars(description = "Cookie path (default: '/')")]
     pub path: Option<String>,
@@ -122,7 +124,11 @@ fn resolve_target(session: &Session, target: &str) -> Result<usize, ErrorData> {
             return Ok(idx);
         }
         return Err(ErrorData::invalid_params(
-            format!("Index {} out of range (have {} elements)", idx, session.len()),
+            format!(
+                "Index {} out of range (have {} elements)",
+                idx,
+                session.len()
+            ),
             None::<Value>,
         ));
     }
@@ -320,7 +326,9 @@ impl EokaServer {
         text_ok(format!("Filled {} with \"{}\"", desc, req.0.text))
     }
 
-    #[tool(description = "Select dropdown option. Target can be index or text. Value matches option value or visible text.")]
+    #[tool(
+        description = "Select dropdown option. Target can be index or text. Value matches option value or visible text."
+    )]
     async fn select(&self, req: Parameters<SelectRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().ok_or_else(|| {
@@ -336,7 +344,9 @@ impl EokaServer {
         text_ok(format!("Selected \"{}\" in element [{}]", req.0.value, idx))
     }
 
-    #[tool(description = "Hover over element to trigger tooltips, menus, or hover states. Target can be index or text.")]
+    #[tool(
+        description = "Hover over element to trigger tooltips, menus, or hover states. Target can be index or text."
+    )]
     async fn hover(&self, req: Parameters<HoverRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().ok_or_else(|| {
@@ -357,7 +367,9 @@ impl EokaServer {
         text_ok(format!("Hovered {}", desc))
     }
 
-    #[tool(description = "Press keyboard key. Common: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, Space.")]
+    #[tool(
+        description = "Press keyboard key. Common: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, Space."
+    )]
     async fn type_key(&self, req: Parameters<TypeKeyRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {
@@ -429,7 +441,9 @@ impl EokaServer {
         }
     }
 
-    #[tool(description = "Run JavaScript and return result. Expression should return a JSON-serializable value.")]
+    #[tool(
+        description = "Run JavaScript and return result. Expression should return a JSON-serializable value."
+    )]
     async fn extract(&self, req: Parameters<ExtractRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {
@@ -440,7 +454,9 @@ impl EokaServer {
         text_ok(json_str)
     }
 
-    #[tool(description = "Get all visible text on the page. Useful for reading content without elements.")]
+    #[tool(
+        description = "Get all visible text on the page. Useful for reading content without elements."
+    )]
     async fn page_text(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {
@@ -483,7 +499,9 @@ impl EokaServer {
         text_ok(format!("Navigated forward to: {}", url))
     }
 
-    #[tool(description = "Get all cookies for the current page. Returns JSON array of cookies with name, value, domain, path, etc.")]
+    #[tool(
+        description = "Get all cookies for the current page. Returns JSON array of cookies with name, value, domain, path, etc."
+    )]
     async fn cookies(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {
