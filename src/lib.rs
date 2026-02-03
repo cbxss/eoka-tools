@@ -59,6 +59,32 @@ pub struct InteractiveElement {
     pub value: Option<String>,
     /// Bounding box in viewport coordinates
     pub bbox: BoundingBox,
+    /// Fingerprint for stale element detection (hash of tag+text+attributes)
+    pub fingerprint: u64,
+}
+
+impl InteractiveElement {
+    /// Create a fingerprint from element properties for stale detection.
+    pub fn compute_fingerprint(
+        tag: &str,
+        text: &str,
+        role: Option<&str>,
+        input_type: Option<&str>,
+    ) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        tag.hash(&mut hasher);
+        text.hash(&mut hasher);
+        role.hash(&mut hasher);
+        input_type.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Check if this element's fingerprint matches another.
+    pub fn matches_fingerprint(&self, other: &InteractiveElement) -> bool {
+        self.fingerprint == other.fingerprint
+    }
 }
 
 impl fmt::Display for InteractiveElement {
@@ -582,6 +608,43 @@ impl<'a> AgentPage<'a> {
     }
 
     // =========================================================================
+    // Smart Waiting
+    // =========================================================================
+
+    /// Wait for the page to stabilize after an action.
+    /// Waits for network idle and a brief DOM settle period.
+    pub async fn wait_for_stable(&self) -> Result<()> {
+        // Wait for network to quiet down (max 2s)
+        let _ = self.page.wait_for_network_idle(200, 2000).await;
+        // Small additional delay for DOM to settle
+        self.page.wait(50).await;
+        Ok(())
+    }
+
+    /// Click an element and wait for page to stabilize.
+    pub async fn click_and_wait(&mut self, index: usize) -> Result<()> {
+        self.click(index).await?;
+        self.wait_for_stable().await?;
+        // Invalidate elements since page likely changed
+        self.elements.clear();
+        Ok(())
+    }
+
+    /// Fill an element and wait for page to stabilize.
+    pub async fn fill_and_wait(&mut self, index: usize, text: &str) -> Result<()> {
+        self.fill(index, text).await?;
+        self.wait_for_stable().await?;
+        Ok(())
+    }
+
+    /// Select an option and wait for page to stabilize.
+    pub async fn select_and_wait(&mut self, index: usize, value: &str) -> Result<()> {
+        self.select(index, value).await?;
+        self.wait_for_stable().await?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Internal
     // =========================================================================
 
@@ -593,6 +656,362 @@ impl<'a> AgentPage<'a> {
                 self.elements.len()
             ))
         })
+    }
+}
+
+// =============================================================================
+// OwnedAgentPage - owns Browser and Page, no lifetime gymnastics
+// =============================================================================
+
+/// An agent page that owns its browser and page.
+/// Use this when you need to store the agent in a struct (e.g., MCP server).
+pub struct OwnedAgentPage {
+    browser: Browser,
+    page: Page,
+    elements: Vec<InteractiveElement>,
+    config: ObserveConfig,
+}
+
+impl OwnedAgentPage {
+    /// Launch a new browser and create an owned agent page.
+    pub async fn launch() -> Result<Self> {
+        let browser = Browser::launch().await?;
+        let page = browser.new_page("about:blank").await?;
+        Ok(Self {
+            browser,
+            page,
+            elements: Vec::new(),
+            config: ObserveConfig::default(),
+        })
+    }
+
+    /// Launch with custom stealth config.
+    pub async fn launch_with_config(stealth: StealthConfig) -> Result<Self> {
+        let browser = Browser::launch_with_config(stealth).await?;
+        let page = browser.new_page("about:blank").await?;
+        Ok(Self {
+            browser,
+            page,
+            elements: Vec::new(),
+            config: ObserveConfig::default(),
+        })
+    }
+
+    /// Set observation config.
+    pub fn set_observe_config(&mut self, config: ObserveConfig) {
+        self.config = config;
+    }
+
+    /// Get reference to underlying page.
+    pub fn page(&self) -> &Page {
+        &self.page
+    }
+
+    /// Get reference to browser.
+    pub fn browser(&self) -> &Browser {
+        &self.browser
+    }
+
+    // =========================================================================
+    // Observation
+    // =========================================================================
+
+    /// Snapshot the page: enumerate all interactive elements.
+    pub async fn observe(&mut self) -> Result<&[InteractiveElement]> {
+        self.elements = observe::observe(&self.page, self.config.viewport_only).await?;
+        Ok(&self.elements)
+    }
+
+    /// Take an annotated screenshot with numbered boxes on each element.
+    pub async fn screenshot(&mut self) -> Result<Vec<u8>> {
+        if self.elements.is_empty() {
+            self.observe().await?;
+        }
+        annotate::annotated_screenshot(&self.page, &self.elements).await
+    }
+
+    /// Compact text list for LLM consumption.
+    pub fn element_list(&self) -> String {
+        let mut out = String::with_capacity(self.elements.len() * 40);
+        for el in &self.elements {
+            out.push_str(&el.to_string());
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Get element info by index.
+    pub fn get(&self, index: usize) -> Option<&InteractiveElement> {
+        self.elements.get(index)
+    }
+
+    /// Get all observed elements.
+    pub fn elements(&self) -> &[InteractiveElement] {
+        &self.elements
+    }
+
+    /// Number of observed elements.
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Whether the element list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    /// Find first element whose text contains the given substring (case-insensitive).
+    pub fn find_by_text(&self, needle: &str) -> Option<usize> {
+        let needle_lower = needle.to_lowercase();
+        self.elements
+            .iter()
+            .find(|e| e.text.to_lowercase().contains(&needle_lower))
+            .map(|e| e.index)
+    }
+
+    // =========================================================================
+    // Actions with auto-recovery
+    // =========================================================================
+
+    /// Get an element, verifying it still exists. Re-observes if stale.
+    async fn require_fresh(&mut self, index: usize) -> Result<&InteractiveElement> {
+        // First check if element exists at index
+        let stored = self.elements.get(index).cloned();
+
+        if let Some(ref el) = stored {
+            // Verify the element still exists in DOM with matching fingerprint
+            let js = format!(
+                "!!document.querySelector({})",
+                serde_json::to_string(&el.selector).unwrap()
+            );
+            let exists: bool = self.page.evaluate(&js).await.unwrap_or(false);
+
+            if exists {
+                return self.elements.get(index).ok_or_else(|| {
+                    eoka::Error::ElementNotFound(format!("element [{}] disappeared", index))
+                });
+            }
+
+            // Element gone - try to find by fingerprint after re-observe
+            self.observe().await?;
+
+            // Find element with matching fingerprint
+            if let Some(new_idx) = self
+                .elements
+                .iter()
+                .position(|e| e.fingerprint == el.fingerprint)
+            {
+                return self.elements.get(new_idx).ok_or_else(|| {
+                    eoka::Error::ElementNotFound(format!(
+                        "element [{}] not found after re-observe",
+                        index
+                    ))
+                });
+            }
+
+            return Err(eoka::Error::ElementNotFound(format!(
+                "element [{}] \"{}\" no longer exists on page",
+                index, el.text
+            )));
+        }
+
+        Err(eoka::Error::ElementNotFound(format!(
+            "element [{}] (observed {} elements)",
+            index,
+            self.elements.len()
+        )))
+    }
+
+    /// Click an element, auto-recovering if stale.
+    pub async fn click(&mut self, index: usize) -> Result<()> {
+        let el = self.require_fresh(index).await?;
+        let selector = el.selector.clone();
+        self.page.click(&selector).await?;
+        self.wait_for_stable().await?;
+        self.elements.clear(); // Invalidate after action
+        Ok(())
+    }
+
+    /// Fill an element, auto-recovering if stale.
+    pub async fn fill(&mut self, index: usize, text: &str) -> Result<()> {
+        let el = self.require_fresh(index).await?;
+        let selector = el.selector.clone();
+        self.page.fill(&selector, text).await?;
+        self.wait_for_stable().await?;
+        Ok(())
+    }
+
+    /// Select a dropdown option, auto-recovering if stale.
+    pub async fn select(&mut self, index: usize, value: &str) -> Result<()> {
+        let el = self.require_fresh(index).await?;
+        let selector = el.selector.clone();
+        let arg = serde_json::json!({ "sel": selector, "val": value });
+        let js = format!(
+            r#"(() => {{
+                const arg = {arg};
+                const sel = document.querySelector(arg.sel);
+                if (!sel) return false;
+                const opt = Array.from(sel.options).find(o => o.value === arg.val || o.text === arg.val);
+                if (!opt) return false;
+                sel.value = opt.value;
+                sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return true;
+            }})()"#,
+            arg = serde_json::to_string(&arg).unwrap()
+        );
+        let selected: bool = self.page.evaluate(&js).await?;
+        if !selected {
+            return Err(eoka::Error::ElementNotFound(format!(
+                "option \"{}\" in element [{}]",
+                value, index
+            )));
+        }
+        self.wait_for_stable().await?;
+        Ok(())
+    }
+
+    /// Hover over element.
+    pub async fn hover(&mut self, index: usize) -> Result<()> {
+        let el = self.require_fresh(index).await?;
+        let cx = el.bbox.x + el.bbox.width / 2.0;
+        let cy = el.bbox.y + el.bbox.height / 2.0;
+        self.page
+            .session()
+            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
+            .await
+    }
+
+    /// Scroll element into view.
+    pub async fn scroll_to(&mut self, index: usize) -> Result<()> {
+        let el = self.require_fresh(index).await?;
+        let selector = el.selector.clone();
+        let js = format!(
+            "document.querySelector({})?.scrollIntoView({{behavior:'smooth',block:'center'}})",
+            serde_json::to_string(&selector).unwrap()
+        );
+        self.page.execute(&js).await
+    }
+
+    // =========================================================================
+    // Navigation
+    // =========================================================================
+
+    /// Navigate to a URL.
+    pub async fn goto(&mut self, url: &str) -> Result<()> {
+        self.elements.clear();
+        self.page.goto(url).await?;
+        self.wait_for_stable().await
+    }
+
+    /// Go back in history.
+    pub async fn back(&mut self) -> Result<()> {
+        self.elements.clear();
+        self.page.back().await?;
+        self.wait_for_stable().await
+    }
+
+    /// Go forward in history.
+    pub async fn forward(&mut self) -> Result<()> {
+        self.elements.clear();
+        self.page.forward().await?;
+        self.wait_for_stable().await
+    }
+
+    // =========================================================================
+    // Page state
+    // =========================================================================
+
+    /// Get the current URL.
+    pub async fn url(&self) -> Result<String> {
+        self.page.url().await
+    }
+
+    /// Get the page title.
+    pub async fn title(&self) -> Result<String> {
+        self.page.title().await
+    }
+
+    /// Get visible text content of the page.
+    pub async fn text(&self) -> Result<String> {
+        self.page.text().await
+    }
+
+    // =========================================================================
+    // Scrolling
+    // =========================================================================
+
+    /// Scroll down by approximately one viewport height.
+    pub async fn scroll_down(&self) -> Result<()> {
+        self.page
+            .execute("window.scrollBy(0, window.innerHeight * 0.8)")
+            .await
+    }
+
+    /// Scroll up by approximately one viewport height.
+    pub async fn scroll_up(&self) -> Result<()> {
+        self.page
+            .execute("window.scrollBy(0, -window.innerHeight * 0.8)")
+            .await
+    }
+
+    /// Scroll to top.
+    pub async fn scroll_to_top(&self) -> Result<()> {
+        self.page.execute("window.scrollTo(0, 0)").await
+    }
+
+    /// Scroll to bottom.
+    pub async fn scroll_to_bottom(&self) -> Result<()> {
+        self.page
+            .execute("window.scrollTo(0, document.body.scrollHeight)")
+            .await
+    }
+
+    // =========================================================================
+    // Smart Waiting
+    // =========================================================================
+
+    /// Wait for the page to stabilize after an action.
+    pub async fn wait_for_stable(&self) -> Result<()> {
+        let _ = self.page.wait_for_network_idle(200, 2000).await;
+        self.page.wait(50).await;
+        Ok(())
+    }
+
+    /// Fixed delay in milliseconds.
+    pub async fn wait(&self, ms: u64) {
+        self.page.wait(ms).await;
+    }
+
+    // =========================================================================
+    // Keyboard
+    // =========================================================================
+
+    /// Press a key.
+    pub async fn press_key(&self, key: &str) -> Result<()> {
+        self.page.human().press_key(key).await
+    }
+
+    // =========================================================================
+    // JavaScript
+    // =========================================================================
+
+    /// Evaluate JavaScript and return the result.
+    pub async fn eval<T: serde::de::DeserializeOwned>(&self, js: &str) -> Result<T> {
+        self.page.evaluate(js).await
+    }
+
+    /// Execute JavaScript (no return value).
+    pub async fn exec(&self, js: &str) -> Result<()> {
+        self.page.execute(js).await
+    }
+
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+
+    /// Close the browser.
+    pub async fn close(self) -> Result<()> {
+        self.browser.close().await
     }
 }
 
@@ -610,6 +1029,7 @@ mod tests {
         value: Option<&str>,
         checked: bool,
     ) -> InteractiveElement {
+        let fingerprint = InteractiveElement::compute_fingerprint(tag, text, role, input_type);
         InteractiveElement {
             index,
             tag: tag.to_string(),
@@ -626,6 +1046,7 @@ mod tests {
                 width: 100.0,
                 height: 30.0,
             },
+            fingerprint,
         }
     }
 

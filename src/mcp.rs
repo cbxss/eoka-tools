@@ -9,57 +9,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use eoka::Page;
-use eoka_agent::{AgentPage, Browser, InteractiveElement};
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
-struct State {
-    browser: Option<Browser>,
-    page: Option<Page>,
-    elements: Vec<InteractiveElement>,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            browser: None,
-            page: None,
-            elements: Vec::new(),
-        }
-    }
-
-    async fn ensure_page(&mut self) -> anyhow::Result<()> {
-        if self.page.is_none() {
-            let browser = Browser::launch().await?;
-            let page = browser.new_page("about:blank").await?;
-            self.browser = Some(browser);
-            self.page = Some(page);
-        }
-        Ok(())
-    }
-
-    fn require_page(&self) -> Result<&Page, ErrorData> {
-        self.page.as_ref().ok_or_else(|| {
-            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
-        })
-    }
-
-    fn require_element(&self, index: usize) -> Result<&InteractiveElement, ErrorData> {
-        self.elements.get(index).ok_or_else(|| {
-            ErrorData::internal_error(
-                format!(
-                    "Element [{}] not found ({} observed). Run observe first.",
-                    index,
-                    self.elements.len()
-                ),
-                None::<Value>,
-            )
-        })
-    }
-}
+use eoka_agent::OwnedAgentPage;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -139,15 +89,26 @@ fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
 
 #[derive(Clone)]
 pub struct EokaServer {
-    state: Arc<Mutex<State>>,
+    agent: Arc<Mutex<Option<OwnedAgentPage>>>,
     tool_router: ToolRouter<Self>,
+}
+
+impl EokaServer {
+    async fn ensure_agent(&self) -> Result<(), ErrorData> {
+        let mut guard = self.agent.lock().await;
+        if guard.is_none() {
+            let agent = OwnedAgentPage::launch().await.map_err(err)?;
+            *guard = Some(agent);
+        }
+        Ok(())
+    }
 }
 
 #[tool_router]
 impl EokaServer {
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(State::new())),
+            agent: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -157,14 +118,12 @@ impl EokaServer {
         &self,
         req: Parameters<NavigateRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        state.ensure_page().await.map_err(err)?;
-        let page = state.require_page()?;
-        page.goto(&req.0.url).await.map_err(err)?;
-        state.elements.clear();
-        let page = state.require_page()?;
-        let url = page.url().await.map_err(err)?;
-        let title = page.title().await.map_err(err)?;
+        self.ensure_agent().await?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().unwrap();
+        agent.goto(&req.0.url).await.map_err(err)?;
+        let url = agent.url().await.map_err(err)?;
+        let title = agent.title().await.map_err(err)?;
         text_ok(format!("Navigated to: {}\nTitle: {}", url, title))
     }
 
@@ -172,12 +131,11 @@ impl EokaServer {
         description = "Enumerate all interactive elements on the page. Returns a compact text list. Must be called before click/fill/select actions."
     )]
     async fn observe(&self) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        let page = state.require_page()?;
-        let mut agent = AgentPage::new(page);
+        self.ensure_agent().await?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().unwrap();
         agent.observe().await.map_err(err)?;
         let list = agent.element_list();
-        state.elements = agent.elements().to_vec();
         text_ok(if list.is_empty() {
             "No interactive elements found.".into()
         } else {
@@ -189,76 +147,63 @@ impl EokaServer {
         description = "Take an annotated screenshot with numbered element labels. Returns base64 PNG image. Also runs observe() to refresh the element list."
     )]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        let page = state.require_page()?;
-        // AgentPage starts with no elements, so screenshot() will call observe()
-        // internally, giving us a fresh element snapshot every time.
-        let mut agent = AgentPage::new(page);
+        self.ensure_agent().await?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().unwrap();
         let png = agent.screenshot().await.map_err(err)?;
-        state.elements = agent.elements().to_vec();
+        let count = agent.len();
         let b64 = BASE64.encode(&png);
         Ok(CallToolResult::success(vec![
             Content::image(b64, "image/png"),
-            Content::text(format!(
-                "{} interactive elements on page.",
-                state.elements.len()
-            )),
+            Content::text(format!("{} interactive elements on page.", count)),
         ]))
     }
 
-    #[tool(description = "Click an element by its index from observe.")]
+    #[tool(
+        description = "Click an element by its index from observe. Auto-recovers if element moved, waits for page to stabilize."
+    )]
     async fn click(&self, req: Parameters<ClickRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let el = state.require_element(req.0.index)?;
-        let desc = el.to_string();
-        let sel = el.selector.clone();
-        let page = state.require_page()?;
-        page.click(&sel).await.map_err(err)?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
+        // Get element description before action
+        let desc = agent
+            .get(req.0.index)
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| format!("[{}]", req.0.index));
+
+        agent.click(req.0.index).await.map_err(err)?;
         text_ok(format!("Clicked {}", desc))
     }
 
-    #[tool(description = "Clear and type text into an input element by index.")]
+    #[tool(
+        description = "Clear and type text into an input element by index. Auto-recovers if element moved."
+    )]
     async fn fill(&self, req: Parameters<FillRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let el = state.require_element(req.0.index)?;
-        let desc = el.to_string();
-        let sel = el.selector.clone();
-        let page = state.require_page()?;
-        page.fill(&sel, &req.0.text).await.map_err(err)?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
+        let desc = agent
+            .get(req.0.index)
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| format!("[{}]", req.0.index));
+
+        agent.fill(req.0.index, &req.0.text).await.map_err(err)?;
         text_ok(format!("Filled {} with \"{}\"", desc, req.0.text))
     }
 
     #[tool(description = "Select a dropdown option by element index and value/text.")]
     async fn select(&self, req: Parameters<SelectRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let el = state.require_element(req.0.index)?;
-        let sel = el.selector.clone();
-        let page = state.require_page()?;
-        // Duplicates AgentPage::select logic — can't use AgentPage here due to lifetime constraints.
-        let arg = serde_json::json!({ "sel": sel, "val": req.0.value });
-        let js = format!(
-            r#"(() => {{
-                const arg = {arg};
-                const sel = document.querySelector(arg.sel);
-                if (!sel) return false;
-                const opt = Array.from(sel.options).find(o => o.value === arg.val || o.text === arg.val);
-                if (!opt) return false;
-                sel.value = opt.value;
-                sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return true;
-            }})()"#,
-            arg = serde_json::to_string(&arg).unwrap()
-        );
-        let selected: bool = page.evaluate(&js).await.map_err(err)?;
-        if !selected {
-            return Err(ErrorData::internal_error(
-                format!(
-                    "Option \"{}\" not found in element [{}]",
-                    req.0.value, req.0.index
-                ),
-                None::<Value>,
-            ));
-        }
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
+        agent.select(req.0.index, &req.0.value).await.map_err(err)?;
         text_ok(format!(
             "Selected \"{}\" in element [{}]",
             req.0.value, req.0.index
@@ -269,24 +214,27 @@ impl EokaServer {
         description = "Hover over an element by index to trigger hover states, tooltips, or menus."
     )]
     async fn hover(&self, req: Parameters<HoverRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let el = state.require_element(req.0.index)?;
-        let desc = el.to_string();
-        let cx = el.bbox.x + el.bbox.width / 2.0;
-        let cy = el.bbox.y + el.bbox.height / 2.0;
-        let page = state.require_page()?;
-        page.session()
-            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
-            .await
-            .map_err(err)?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
+        let desc = agent
+            .get(req.0.index)
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| format!("[{}]", req.0.index));
+
+        agent.hover(req.0.index).await.map_err(err)?;
         text_ok(format!("Hovered {}", desc))
     }
 
     #[tool(description = "Press a keyboard key (e.g. Enter, Tab, Escape, ArrowDown, Backspace).")]
     async fn type_key(&self, req: Parameters<TypeKeyRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let page = state.require_page()?;
-        page.human().press_key(&req.0.key).await.map_err(err)?;
+        let guard = self.agent.lock().await;
+        let agent = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        agent.press_key(&req.0.key).await.map_err(err)?;
         text_ok(format!("Pressed {}", req.0.key))
     }
 
@@ -294,22 +242,16 @@ impl EokaServer {
         description = "Scroll the page. Target: 'up', 'down', 'top', 'bottom', or an element index to scroll into view."
     )]
     async fn scroll(&self, req: Parameters<ScrollRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let page = state.require_page()?;
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
         match req.0.target.as_str() {
-            "up" => page
-                .execute("window.scrollBy(0, -window.innerHeight * 0.8)")
-                .await
-                .map_err(err)?,
-            "down" => page
-                .execute("window.scrollBy(0, window.innerHeight * 0.8)")
-                .await
-                .map_err(err)?,
-            "top" => page.execute("window.scrollTo(0, 0)").await.map_err(err)?,
-            "bottom" => page
-                .execute("window.scrollTo(0, document.body.scrollHeight)")
-                .await
-                .map_err(err)?,
+            "up" => agent.scroll_up().await.map_err(err)?,
+            "down" => agent.scroll_down().await.map_err(err)?,
+            "top" => agent.scroll_to_top().await.map_err(err)?,
+            "bottom" => agent.scroll_to_bottom().await.map_err(err)?,
             other => {
                 let idx: usize = other.parse().map_err(|_| {
                     ErrorData::invalid_params(
@@ -317,12 +259,7 @@ impl EokaServer {
                         None::<Value>,
                     )
                 })?;
-                let el = state.require_element(idx)?;
-                let js = format!(
-                    "document.querySelector({})?.scrollIntoView({{behavior:'smooth',block:'center'}})",
-                    serde_json::to_string(&el.selector).unwrap()
-                );
-                page.execute(&js).await.map_err(err)?;
+                agent.scroll_to(idx).await.map_err(err)?;
             }
         }
         text_ok(format!("Scrolled {}", req.0.target))
@@ -335,19 +272,25 @@ impl EokaServer {
         &self,
         req: Parameters<FindTextRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        if state.elements.is_empty() {
+        let guard = self.agent.lock().await;
+        let agent = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+
+        if agent.is_empty() {
             return Err(ErrorData::internal_error(
                 "No elements observed. Run observe first.",
                 None::<Value>,
             ));
         }
+
         let needle = req.0.text.to_lowercase();
-        let matches: Vec<&InteractiveElement> = state
-            .elements
+        let matches: Vec<_> = agent
+            .elements()
             .iter()
             .filter(|e| e.text.to_lowercase().contains(&needle))
             .collect();
+
         if matches.is_empty() {
             text_ok(format!("No elements found matching \"{}\"", req.0.text))
         } else {
@@ -358,54 +301,62 @@ impl EokaServer {
 
     #[tool(description = "Run a JavaScript expression and return the result as JSON.")]
     async fn extract(&self, req: Parameters<ExtractRequest>) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let page = state.require_page()?;
+        let guard = self.agent.lock().await;
+        let agent = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
         let js = format!("JSON.stringify((()=>{{ return {}; }})())", req.0.js);
-        let json_str: String = page.evaluate(&js).await.map_err(err)?;
+        let json_str: String = agent.eval(&js).await.map_err(err)?;
         text_ok(json_str)
     }
 
     #[tool(description = "Get the visible text content of the page.")]
     async fn page_text(&self) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let page = state.require_page()?;
-        let text = page.text().await.map_err(err)?;
+        let guard = self.agent.lock().await;
+        let agent = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        let text = agent.text().await.map_err(err)?;
         text_ok(text)
     }
 
     #[tool(description = "Get the current page URL and title.")]
     async fn page_info(&self) -> Result<CallToolResult, ErrorData> {
-        let state = self.state.lock().await;
-        let page = state.require_page()?;
-        let url = page.url().await.map_err(err)?;
-        let title = page.title().await.map_err(err)?;
+        let guard = self.agent.lock().await;
+        let agent = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        let url = agent.url().await.map_err(err)?;
+        let title = agent.title().await.map_err(err)?;
         text_ok(format!("URL: {}\nTitle: {}", url, title))
     }
 
     #[tool(description = "Go back in browser history.")]
     async fn back(&self) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        let page = state.require_page()?;
-        page.back().await.map_err(err)?;
-        state.elements.clear();
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        agent.back().await.map_err(err)?;
         text_ok("Navigated back.")
     }
 
     #[tool(description = "Go forward in browser history.")]
     async fn forward(&self) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        let page = state.require_page()?;
-        page.forward().await.map_err(err)?;
-        state.elements.clear();
+        let mut guard = self.agent.lock().await;
+        let agent = guard.as_mut().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        agent.forward().await.map_err(err)?;
         text_ok("Navigated forward.")
     }
 
     #[tool(description = "Close the browser and release resources.")]
     async fn close(&self) -> Result<CallToolResult, ErrorData> {
-        let mut state = self.state.lock().await;
-        state.elements.clear();
-        state.page = None;
-        state.browser = None;
+        let mut guard = self.agent.lock().await;
+        if let Some(agent) = guard.take() {
+            agent.close().await.map_err(err)?;
+        }
         text_ok("Browser closed.")
     }
 }
@@ -427,6 +378,7 @@ impl ServerHandler for EokaServer {
                 "Browser automation server. Use 'navigate' to open a URL (launches browser automatically), \
                  'observe' to list interactive elements, 'screenshot' for annotated screenshots, \
                  then interact by element index with click/fill/select/hover. \
+                 Actions auto-wait for page stability and recover from stale elements. \
                  Use 'scroll' and 'type_key' for navigation. 'extract' runs JS expressions."
                     .into(),
             ),

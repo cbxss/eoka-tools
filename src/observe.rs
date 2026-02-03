@@ -200,26 +200,35 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
     Ok(raw
         .into_iter()
         .enumerate()
-        .map(|(i, r)| InteractiveElement {
-            index: i,
-            tag: r.tag,
-            role: r.role,
-            text: r.text,
-            placeholder: r.placeholder,
-            input_type: r.input_type,
-            selector: r.selector,
-            checked: r.checked,
-            value: if r.value.is_empty() {
-                None
-            } else {
-                Some(r.value)
-            },
-            bbox: eoka::BoundingBox {
-                x: r.x,
-                y: r.y,
-                width: r.width,
-                height: r.height,
-            },
+        .map(|(i, r)| {
+            let fingerprint = InteractiveElement::compute_fingerprint(
+                &r.tag,
+                &r.text,
+                r.role.as_deref(),
+                r.input_type.as_deref(),
+            );
+            InteractiveElement {
+                index: i,
+                tag: r.tag,
+                role: r.role,
+                text: r.text,
+                placeholder: r.placeholder,
+                input_type: r.input_type,
+                selector: r.selector,
+                checked: r.checked,
+                value: if r.value.is_empty() {
+                    None
+                } else {
+                    Some(r.value)
+                },
+                bbox: eoka::BoundingBox {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                },
+                fingerprint,
+            }
         })
         .collect())
 }
