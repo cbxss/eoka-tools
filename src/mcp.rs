@@ -79,12 +79,34 @@ pub struct ExtractRequest {
     pub js: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetCookieRequest {
+    #[schemars(description = "Cookie name")]
+    pub name: String,
+    #[schemars(description = "Cookie value")]
+    pub value: String,
+    #[schemars(description = "Cookie domain (e.g. '.example.com'). If omitted, uses current page domain.")]
+    pub domain: Option<String>,
+    #[schemars(description = "Cookie path (default: '/')")]
+    pub path: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
 fn err(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None::<Value>)
+}
+
+/// Check if an error indicates a broken connection that requires session reset
+fn is_transport_error(e: &impl std::fmt::Display) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("websocket")
+        || msg.contains("transport")
+        || msg.contains("connection")
+        || msg.contains("broken pipe")
+        || msg.contains("reset by peer")
 }
 
 fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
@@ -144,6 +166,29 @@ impl EokaServer {
         }
         Ok(())
     }
+
+    /// Reset session (call this when connection is broken)
+    async fn reset_session(&self) {
+        let mut guard = self.session.lock().await;
+        if let Some(session) = guard.take() {
+            let _ = session.close().await;
+        }
+    }
+
+    /// Check error and reset session if it's a transport error.
+    /// Returns an error with a hint to retry.
+    async fn check_transport_err<E: std::fmt::Display>(&self, e: E) -> ErrorData {
+        let msg = e.to_string();
+        if is_transport_error(&e) {
+            self.reset_session().await;
+            ErrorData::internal_error(
+                format!("{} (connection lost - retry to reconnect)", msg),
+                None::<Value>,
+            )
+        } else {
+            err(e)
+        }
+    }
 }
 
 #[tool_router]
@@ -169,7 +214,12 @@ impl EokaServer {
         self.ensure_session().await?;
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().unwrap();
-        session.goto(&req.0.url).await.map_err(err)?;
+
+        if let Err(e) = session.goto(&req.0.url).await {
+            drop(guard);
+            return Err(self.check_transport_err(e).await);
+        }
+
         let url = session.url().await.map_err(err)?;
         let title = session.title().await.map_err(err)?;
         text_ok(format!("Navigated to: {}\nTitle: {}", url, title))
@@ -182,7 +232,12 @@ impl EokaServer {
         self.ensure_session().await?;
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().unwrap();
-        session.observe().await.map_err(err)?;
+
+        if let Err(e) = session.observe().await {
+            drop(guard);
+            return Err(self.check_transport_err(e).await);
+        }
+
         let list = session.element_list();
         text_ok(if list.is_empty() {
             "No interactive elements found.".into()
@@ -198,7 +253,14 @@ impl EokaServer {
         self.ensure_session().await?;
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().unwrap();
-        let png = session.screenshot().await.map_err(err)?;
+
+        let png = match session.screenshot().await {
+            Ok(p) => p,
+            Err(e) => {
+                drop(guard);
+                return Err(self.check_transport_err(e).await);
+            }
+        };
         let list = session.element_list();
         let b64 = BASE64.encode(&png);
         Ok(CallToolResult::success(vec![
@@ -421,6 +483,39 @@ impl EokaServer {
         text_ok(format!("Navigated forward to: {}", url))
     }
 
+    #[tool(description = "Get all cookies for the current page. Returns JSON array of cookies with name, value, domain, path, etc.")]
+    async fn cookies(&self) -> Result<CallToolResult, ErrorData> {
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        let cookies = session.page().cookies().await.map_err(err)?;
+        let json = serde_json::to_string_pretty(&cookies).map_err(err)?;
+        text_ok(json)
+    }
+
+    #[tool(description = "Set a cookie. Useful for restoring sessions or authentication.")]
+    async fn set_cookie(
+        &self,
+        req: Parameters<SetCookieRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("No page open. Use navigate first.", None::<Value>)
+        })?;
+        session
+            .page()
+            .set_cookie(
+                &req.0.name,
+                &req.0.value,
+                req.0.domain.as_deref(),
+                req.0.path.as_deref(),
+            )
+            .await
+            .map_err(err)?;
+        text_ok(format!("Cookie '{}' set", req.0.name))
+    }
+
     #[tool(description = "Close the browser. Call when done to free resources.")]
     async fn close(&self) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.session.lock().await;
@@ -452,6 +547,7 @@ impl ServerHandler for EokaServer {
                  - screenshot returns both image AND element list\n\
                  - Actions auto-observe if needed\n\
                  - Actions auto-wait for page stability\n\
+                 - Use cookies/set_cookie for session persistence\n\
                  - Set EOKA_HEADLESS=false to see browser window"
                     .into(),
             ),

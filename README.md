@@ -29,6 +29,7 @@ session.close().await?;
 - **Navigation** — `goto(url)`, `back()`, `forward()`
 - **Scrolling** — `scroll_down()`, `scroll_up()`, `scroll_to_top()`, `scroll_to_bottom()`
 - **Extraction** — `eval(js)` for structured data, `text()` for visible page text
+- **Session persistence** — `cookies()` get/set for maintaining login state across runs
 
 ## Element List Format
 
@@ -72,6 +73,8 @@ claude mcp add eoka-tools -- eoka-tools
 | `extract` | Run JavaScript and return result |
 | `page_text` | Get visible text content |
 | `page_info` | Get current URL and title |
+| `cookies` | Get all cookies (for session persistence) |
+| `set_cookie` | Set a cookie (restore sessions) |
 | `back` / `forward` | Browser history navigation |
 | `close` | Close browser |
 
