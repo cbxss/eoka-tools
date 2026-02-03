@@ -17,12 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout eoka dependency
-        uses: actions/checkout@v4
-        with:
-          repository: cbxss/eoka
-          path: eoka
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -37,12 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout eoka dependency
-        uses: actions/checkout@v4
-        with:
-          repository: cbxss/eoka
-          path: eoka
 
       - uses: dtolnay/rust-toolchain@stable
         with:
