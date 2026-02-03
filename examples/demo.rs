@@ -1,7 +1,7 @@
 //! Demo: observe, annotated screenshot, fill, click, extract, keyboard.
 
 use eoka::Browser;
-use eoka_agent::AgentPage;
+use eoka_tools::AgentPage;
 
 #[tokio::main]
 async fn main() -> eoka::Result<()> {

@@ -1,26 +1,23 @@
-//! # eoka-agent
+//! # eoka-tools
 //!
-//! AI agent interaction layer for eoka browser automation.
-//!
-//! Provides numbered interactive elements, annotated screenshots,
-//! and index-based interaction. Designed for minimal token usage.
+//! Browser automation tools for AI agents. Use directly or via MCP.
 //!
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use eoka::Browser;
-//! use eoka_agent::AgentPage;
+//! use eoka_tools::Session;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> eoka::Result<()> {
-//! let browser = Browser::launch().await?;
-//! let page = browser.new_page("https://example.com").await?;
-//! let mut agent = AgentPage::new(&page);
+//! let mut session = Session::launch().await?;
+//! session.goto("https://example.com").await?;
 //!
 //! // Observe → get compact element list → act by index
-//! agent.observe().await?;
-//! println!("{}", agent.element_list());
-//! agent.click(0).await?;
+//! session.observe().await?;
+//! println!("{}", session.element_list());
+//! session.click(0).await?;
+//!
+//! session.close().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -574,7 +571,7 @@ impl<'a> AgentPage<'a> {
     ///
     /// Example:
     /// ```rust,no_run
-    /// # use eoka_agent::AgentPage;
+    /// # use eoka_tools::AgentPage;
     /// # async fn example(agent: &AgentPage<'_>) -> eoka::Result<()> {
     /// let titles: Vec<String> = agent.extract(
     ///     "Array.from(document.querySelectorAll('h2')).map(h => h.textContent.trim())"
@@ -662,19 +659,19 @@ impl<'a> AgentPage<'a> {
 }
 
 // =============================================================================
-// OwnedAgentPage - owns Browser and Page, no lifetime gymnastics
+// Session - owns Browser and Page, no lifetime gymnastics
 // =============================================================================
 
-/// An agent page that owns its browser and page.
-/// Use this when you need to store the agent in a struct (e.g., MCP server).
-pub struct OwnedAgentPage {
+/// A browser session that owns its browser and page.
+/// This is the primary API for most use cases.
+pub struct Session {
     browser: Browser,
     page: Page,
     elements: Vec<InteractiveElement>,
     config: ObserveConfig,
 }
 
-impl OwnedAgentPage {
+impl Session {
     /// Launch a new browser and create an owned agent page.
     pub async fn launch() -> Result<Self> {
         let browser = Browser::launch().await?;

@@ -12,7 +12,7 @@
 //! Optional: --max-turns <N> overrides max turns (default 200).
 
 use eoka::Browser;
-use eoka_agent::AgentPage;
+use eoka_tools::AgentPage;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Instant;

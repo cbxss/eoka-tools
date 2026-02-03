@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use eoka_agent::OwnedAgentPage;
+use eoka_tools::Session;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -89,7 +89,7 @@ fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
 
 #[derive(Clone)]
 pub struct EokaServer {
-    agent: Arc<Mutex<Option<OwnedAgentPage>>>,
+    agent: Arc<Mutex<Option<Session>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -97,7 +97,7 @@ impl EokaServer {
     async fn ensure_agent(&self) -> Result<(), ErrorData> {
         let mut guard = self.agent.lock().await;
         if guard.is_none() {
-            let agent = OwnedAgentPage::launch().await.map_err(err)?;
+            let agent = Session::launch().await.map_err(err)?;
             *guard = Some(agent);
         }
         Ok(())
@@ -368,7 +368,7 @@ impl ServerHandler for EokaServer {
             protocol_version: ProtocolVersion::LATEST,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
-                name: "eoka-agent".into(),
+                name: "eoka-tools".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: None,
                 icons: None,

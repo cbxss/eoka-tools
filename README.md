@@ -1,54 +1,82 @@
-# eoka-agent
+# eoka-tools
 
-AI agent interaction layer for [eoka](../eoka) browser automation.
+Browser automation tools for AI agents. Use directly in Rust or via MCP server.
 
-Wraps an eoka `Page` with numbered interactive elements, annotated screenshots, and index-based actions. Designed for minimal token usage when driven by an LLM.
-
-## Core loop
+## Quick Start
 
 ```rust
-use eoka::Browser;
-use eoka_agent::AgentPage;
+use eoka_tools::Session;
 
-let browser = Browser::launch().await?;
-let page = browser.new_page("https://example.com").await?;
-let mut agent = AgentPage::new(&page);
+let mut session = Session::launch().await?;
+session.goto("https://example.com").await?;
 
 // Observe → act by index → repeat
-agent.observe().await?;
-println!("{}", agent.element_list());
-agent.click(0).await?;
+session.observe().await?;
+println!("{}", session.element_list());
+session.click(0).await?;
+
+session.close().await?;
 ```
 
 ## Features
 
-- **observe()** — enumerates all interactive elements (links, buttons, inputs, selects, etc.) with Shadow DOM support
+- **observe()** — enumerate all interactive elements (links, buttons, inputs, selects) with Shadow DOM support
 - **element_list()** — compact text format for LLM consumption: `[0] <button> "Submit"`
-- **observe_diff()** — returns only what changed since last observation (saves tokens in multi-step sessions)
 - **screenshot()** — annotated PNG with numbered red boxes on each element
-- **Index-based actions** — `click(i)`, `fill(i, text)`, `select(i, value)`, `hover(i)`, `scroll_to(i)`, `submit(i)`
-- **Human-like variants** — `human_click(i)`, `human_fill(i, text)` for stealth
-- **Navigation** — `goto(url)`, `back()`, `forward()`, `reload()`
+- **Index-based actions** — `click(i)`, `fill(i, text)`, `select(i, value)`, `hover(i)`, `scroll_to(i)`
+- **Auto-wait** — actions wait for network idle and DOM stability
+- **Stale detection** — detects moved/removed elements with helpful error messages
+- **Navigation** — `goto(url)`, `back()`, `forward()`
 - **Scrolling** — `scroll_down()`, `scroll_up()`, `scroll_to_top()`, `scroll_to_bottom()`
-- **Extraction** — `extract(js)` for structured data, `text()` for visible page text
-- **Waiting** — `wait_for_text()`, `wait_for_url()`, `wait_for_idle()`
+- **Extraction** — `eval(js)` for structured data, `text()` for visible page text
 
-## Element list format
+## Element List Format
 
 ```
 [0] <input type="text"> placeholder="Customer name"
 [1] <input type="tel"> placeholder="Telephone"
 [2] <input type="email"> placeholder="E-mail address"
 [3] <input type="radio"> "Small" [checked]
-[4] <input type="radio"> "Medium"
-[5] <input type="checkbox"> "Bacon"
-[6] <button> "Submit"
+[4] <input type="checkbox"> "Bacon"
+[5] <button> "Submit"
 ```
 
-## Example
+## MCP Server
+
+The crate includes an MCP server binary for use with Claude Desktop, Claude Code, etc.
+
+### Setup
+
+```sh
+# Install
+cargo install eoka-tools
+
+# Add to Claude Code
+claude mcp add eoka-tools -- eoka-tools
+```
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `navigate` | Go to URL (launches browser on first call) |
+| `observe` | List all interactive elements |
+| `screenshot` | Annotated screenshot with numbered elements |
+| `click` | Click element by index |
+| `fill` | Type into input by index |
+| `select` | Select dropdown option by index |
+| `hover` | Hover over element by index |
+| `scroll` | Scroll page or element into view |
+| `type_key` | Press keyboard key (Enter, Tab, etc.) |
+| `find_text` | Search elements by text content |
+| `extract` | Run JavaScript and return result |
+| `page_text` | Get visible text content |
+| `page_info` | Get current URL and title |
+| `back` / `forward` | Browser history navigation |
+| `close` | Close browser |
+
+## Examples
 
 ```sh
 cargo run --example demo
 ```
-
-Fills out a form on httpbin.org, submits it, then extracts top HN titles. Saves an annotated screenshot to `demo_form.png`.

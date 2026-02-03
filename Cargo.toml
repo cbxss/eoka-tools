@@ -1,19 +1,19 @@
 [package]
-name = "eoka-agent"
+name = "eoka-tools"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "AI agent interaction layer for eoka browser automation"
-keywords = ["browser", "automation", "ai-agent", "web", "scraping"]
+description = "Browser automation tools for AI agents — use directly or via MCP"
+keywords = ["browser", "automation", "ai-agent", "mcp", "tools"]
 categories = ["web-programming", "development-tools"]
-repository = "https://github.com/cbxss/eoka-agent"
-homepage = "https://github.com/cbxss/eoka-agent"
-documentation = "https://docs.rs/eoka-agent"
+repository = "https://github.com/cbxss/eoka-tools"
+homepage = "https://github.com/cbxss/eoka-tools"
+documentation = "https://docs.rs/eoka-tools"
 readme = "README.md"
 authors = ["cbxss"]
 
 [[bin]]
-name = "eoka-agent"
+name = "eoka-tools"
 path = "src/main.rs"
 
 [dependencies]
