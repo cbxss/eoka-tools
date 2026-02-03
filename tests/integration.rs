@@ -377,3 +377,82 @@ async fn test_select_dropdown() {
 
     browser.close().await.expect("Failed to close browser");
 }
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_stale_element_detection() {
+    use eoka_agent::OwnedAgentPage;
+
+    if !chrome_available() {
+        eprintln!("Chrome not found, skipping test");
+        return;
+    }
+
+    let mut agent = OwnedAgentPage::launch().await.expect("Failed to launch");
+
+    // Page with a button that removes itself when clicked
+    agent
+        .goto(
+            r#"data:text/html,
+            <button id="btn" onclick="this.remove()">Click to Remove</button>
+            <button id="other">Other Button</button>
+        "#,
+        )
+        .await
+        .expect("Failed to navigate");
+
+    agent.observe().await.expect("Failed to observe");
+    assert_eq!(agent.len(), 2);
+
+    // Remove the button via JS (simulating DOM mutation)
+    agent
+        .exec("document.getElementById('btn').remove()")
+        .await
+        .expect("Failed to exec");
+
+    // Try to click the removed element - should error
+    let result = agent.click(0).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("no longer exists") || err.contains("moved"),
+        "Expected stale element error, got: {}",
+        err
+    );
+
+    agent.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_owned_agent_page_basic() {
+    use eoka_agent::OwnedAgentPage;
+
+    if !chrome_available() {
+        eprintln!("Chrome not found, skipping test");
+        return;
+    }
+
+    let mut agent = OwnedAgentPage::launch().await.expect("Failed to launch");
+
+    agent
+        .goto(
+            r#"data:text/html,
+            <button onclick="document.body.innerHTML += '<p>Clicked!</p>'">Click Me</button>
+        "#,
+        )
+        .await
+        .expect("Failed to navigate");
+
+    agent.observe().await.expect("Failed to observe");
+    assert_eq!(agent.len(), 1);
+
+    // Click should work and auto-wait
+    agent.click(0).await.expect("Failed to click");
+
+    // Verify the click worked
+    let text = agent.text().await.expect("Failed to get text");
+    assert!(text.contains("Clicked!"), "Page text: {}", text);
+
+    agent.close().await.expect("Failed to close");
+}

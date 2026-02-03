@@ -65,11 +65,14 @@ pub struct InteractiveElement {
 
 impl InteractiveElement {
     /// Create a fingerprint from element properties for stale detection.
+    /// Includes enough fields to distinguish similar elements.
     pub fn compute_fingerprint(
         tag: &str,
         text: &str,
         role: Option<&str>,
         input_type: Option<&str>,
+        placeholder: Option<&str>,
+        selector: &str,
     ) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -78,12 +81,10 @@ impl InteractiveElement {
         text.hash(&mut hasher);
         role.hash(&mut hasher);
         input_type.hash(&mut hasher);
+        placeholder.hash(&mut hasher);
+        // Include selector prefix (first 50 chars) for positional uniqueness
+        selector[..selector.len().min(50)].hash(&mut hasher);
         hasher.finish()
-    }
-
-    /// Check if this element's fingerprint matches another.
-    pub fn matches_fingerprint(&self, other: &InteractiveElement) -> bool {
-        self.fingerprint == other.fingerprint
     }
 }
 
@@ -612,11 +613,12 @@ impl<'a> AgentPage<'a> {
     // =========================================================================
 
     /// Wait for the page to stabilize after an action.
-    /// Waits for network idle and a brief DOM settle period.
+    /// Waits up to 2s for network idle, then 50ms for DOM settle.
+    /// Intentionally succeeds even if network doesn't fully idle (some sites never stop polling).
     pub async fn wait_for_stable(&self) -> Result<()> {
-        // Wait for network to quiet down (max 2s)
+        // Best-effort network wait - ignore timeout (some sites have constant polling)
         let _ = self.page.wait_for_network_idle(200, 2000).await;
-        // Small additional delay for DOM to settle
+        // Brief DOM settle time
         self.page.wait(50).await;
         Ok(())
     }
@@ -773,13 +775,14 @@ impl OwnedAgentPage {
     // Actions with auto-recovery
     // =========================================================================
 
-    /// Get an element, verifying it still exists. Re-observes if stale.
+    /// Get an element, verifying it still exists in DOM.
+    /// If element moved, returns error with hint about new location.
     async fn require_fresh(&mut self, index: usize) -> Result<&InteractiveElement> {
         // First check if element exists at index
         let stored = self.elements.get(index).cloned();
 
         if let Some(ref el) = stored {
-            // Verify the element still exists in DOM with matching fingerprint
+            // Verify the element still exists in DOM
             let js = format!(
                 "!!document.querySelector({})",
                 serde_json::to_string(&el.selector).unwrap()
@@ -792,21 +795,20 @@ impl OwnedAgentPage {
                 });
             }
 
-            // Element gone - try to find by fingerprint after re-observe
+            // Element gone from DOM - re-observe and look for it
             self.observe().await?;
 
-            // Find element with matching fingerprint
+            // Try to find element with matching fingerprint
             if let Some(new_idx) = self
                 .elements
                 .iter()
                 .position(|e| e.fingerprint == el.fingerprint)
             {
-                return self.elements.get(new_idx).ok_or_else(|| {
-                    eoka::Error::ElementNotFound(format!(
-                        "element [{}] not found after re-observe",
-                        index
-                    ))
-                });
+                // Found at different index - error with helpful message
+                return Err(eoka::Error::ElementNotFound(format!(
+                    "element [{}] \"{}\" moved to [{}] - call observe() to refresh",
+                    index, el.text, new_idx
+                )));
             }
 
             return Err(eoka::Error::ElementNotFound(format!(
@@ -816,23 +818,25 @@ impl OwnedAgentPage {
         }
 
         Err(eoka::Error::ElementNotFound(format!(
-            "element [{}] (observed {} elements)",
+            "element [{}] not found (observed {} elements)",
             index,
             self.elements.len()
         )))
     }
 
     /// Click an element, auto-recovering if stale.
+    /// Clears element cache since clicks often trigger navigation/DOM changes.
     pub async fn click(&mut self, index: usize) -> Result<()> {
         let el = self.require_fresh(index).await?;
         let selector = el.selector.clone();
         self.page.click(&selector).await?;
         self.wait_for_stable().await?;
-        self.elements.clear(); // Invalidate after action
+        self.elements.clear(); // Clicks often change the page
         Ok(())
     }
 
     /// Fill an element, auto-recovering if stale.
+    /// Does NOT clear element cache (typing rarely changes DOM structure).
     pub async fn fill(&mut self, index: usize, text: &str) -> Result<()> {
         let el = self.require_fresh(index).await?;
         let selector = el.selector.clone();
@@ -842,6 +846,7 @@ impl OwnedAgentPage {
     }
 
     /// Select a dropdown option, auto-recovering if stale.
+    /// Clears element cache since onChange handlers may modify DOM.
     pub async fn select(&mut self, index: usize, value: &str) -> Result<()> {
         let el = self.require_fresh(index).await?;
         let selector = el.selector.clone();
@@ -867,6 +872,7 @@ impl OwnedAgentPage {
             )));
         }
         self.wait_for_stable().await?;
+        self.elements.clear(); // onChange handlers may modify DOM
         Ok(())
     }
 
@@ -971,8 +977,12 @@ impl OwnedAgentPage {
     // =========================================================================
 
     /// Wait for the page to stabilize after an action.
+    /// Waits up to 2s for network idle, then 50ms for DOM settle.
+    /// Intentionally succeeds even if network doesn't fully idle (some sites never stop polling).
     pub async fn wait_for_stable(&self) -> Result<()> {
+        // Best-effort network wait - ignore timeout (some sites have constant polling)
         let _ = self.page.wait_for_network_idle(200, 2000).await;
+        // Brief DOM settle time
         self.page.wait(50).await;
         Ok(())
     }
@@ -1029,7 +1039,15 @@ mod tests {
         value: Option<&str>,
         checked: bool,
     ) -> InteractiveElement {
-        let fingerprint = InteractiveElement::compute_fingerprint(tag, text, role, input_type);
+        let selector = format!("[data-idx=\"{}\"]", index);
+        let fingerprint = InteractiveElement::compute_fingerprint(
+            tag,
+            text,
+            role,
+            input_type,
+            placeholder,
+            &selector,
+        );
         InteractiveElement {
             index,
             tag: tag.to_string(),
@@ -1039,7 +1057,7 @@ mod tests {
             placeholder: placeholder.map(|s| s.to_string()),
             value: value.map(|s| s.to_string()),
             checked,
-            selector: format!("[data-idx=\"{}\"]", index),
+            selector,
             bbox: BoundingBox {
                 x: 0.0,
                 y: 0.0,

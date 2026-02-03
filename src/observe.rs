@@ -206,6 +206,8 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
                 &r.text,
                 r.role.as_deref(),
                 r.input_type.as_deref(),
+                r.placeholder.as_deref(),
+                &r.selector,
             );
             InteractiveElement {
                 index: i,
