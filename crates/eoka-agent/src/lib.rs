@@ -24,6 +24,9 @@
 
 pub mod annotate;
 pub mod observe;
+pub mod spa;
+
+pub use spa::{RouterType, SpaRouterInfo};
 
 use std::collections::HashSet;
 use std::fmt;
@@ -648,6 +651,34 @@ impl<'a> AgentPage<'a> {
     }
 
     // =========================================================================
+    // SPA Navigation
+    // =========================================================================
+
+    /// Detect the SPA router type and current route state.
+    pub async fn spa_info(&self) -> Result<SpaRouterInfo> {
+        spa::detect_router(self.page).await
+    }
+
+    /// Navigate the SPA to a new path without page reload.
+    /// Automatically detects the router type and uses the appropriate navigation method.
+    /// Clears element list since the DOM will change.
+    pub async fn spa_navigate(&mut self, path: &str) -> Result<String> {
+        let info = spa::detect_router(self.page).await?;
+        let result = spa::spa_navigate(self.page, &info.router_type, path).await?;
+        self.elements.clear();
+        Ok(result)
+    }
+
+    /// Navigate browser history by delta steps.
+    /// delta = -1 goes back, delta = 1 goes forward.
+    /// Clears element list since the DOM will change.
+    pub async fn history_go(&mut self, delta: i32) -> Result<()> {
+        spa::history_go(self.page, delta).await?;
+        self.elements.clear();
+        Ok(())
+    }
+
+    // =========================================================================
     // Internal
     // =========================================================================
 
@@ -1014,6 +1045,34 @@ impl Session {
     /// Execute JavaScript (no return value).
     pub async fn exec(&self, js: &str) -> Result<()> {
         self.page.execute(js).await
+    }
+
+    // =========================================================================
+    // SPA Navigation
+    // =========================================================================
+
+    /// Detect the SPA router type and current route state.
+    pub async fn spa_info(&self) -> Result<SpaRouterInfo> {
+        spa::detect_router(&self.page).await
+    }
+
+    /// Navigate the SPA to a new path without page reload.
+    /// Automatically detects the router type and uses the appropriate navigation method.
+    /// Clears element cache since the DOM will change.
+    pub async fn spa_navigate(&mut self, path: &str) -> Result<String> {
+        let info = spa::detect_router(&self.page).await?;
+        let result = spa::spa_navigate(&self.page, &info.router_type, path).await?;
+        self.elements.clear();
+        Ok(result)
+    }
+
+    /// Navigate browser history by delta steps.
+    /// delta = -1 goes back, delta = 1 goes forward.
+    /// Clears element cache since the DOM will change.
+    pub async fn history_go(&mut self, delta: i32) -> Result<()> {
+        spa::history_go(&self.page, delta).await?;
+        self.elements.clear();
+        Ok(())
     }
 
     // =========================================================================

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use eoka::{Browser, Page, StealthConfig, TabInfo};
-use eoka_agent::{annotate, observe, InteractiveElement, ObserveConfig};
+use eoka_agent::{annotate, observe, spa, InteractiveElement, ObserveConfig};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -106,6 +106,18 @@ pub struct NewTabRequest {
 pub struct TabIdRequest {
     #[schemars(description = "Tab ID (from list_tabs)")]
     pub tab_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SpaNavigateRequest {
+    #[schemars(description = "Target path to navigate to (e.g. '/docs', '/about')")]
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HistoryGoRequest {
+    #[schemars(description = "History delta: -1 for back, 1 for forward, -2 for back twice, etc.")]
+    pub delta: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +601,7 @@ impl EokaServer {
 
         tab.page.fill(&selector, &req.0.text).await.map_err(err)?;
         wait_for_stable(&tab.page).await.map_err(err)?;
+        tab.elements.clear(); // Input often triggers DOM changes
         text_ok(format!("Filled {} with \"{}\"", desc, req.0.text))
     }
 
@@ -839,6 +852,68 @@ impl EokaServer {
         text_ok(format!("Navigated forward to: {}", url))
     }
 
+    // =========================================================================
+    // SPA Navigation
+    // =========================================================================
+
+    #[tool(
+        description = "Detect SPA router type and current route state. Returns router type (React Router, Next.js, Vue Router, etc.), current path, query params, and whether programmatic navigation is available."
+    )]
+    async fn spa_info(&self) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        let info = spa::detect_router(&tab.page).await.map_err(err)?;
+        text_ok(info.to_string())
+    }
+
+    #[tool(
+        description = "Navigate SPA to a new path without page reload. Uses the detected router (React Router, Next.js, Vue Router, etc.) or falls back to History API. Much faster than full page navigation for SPAs."
+    )]
+    async fn spa_navigate(
+        &self,
+        req: Parameters<SpaNavigateRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut guard = self.state.lock().await;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        let info = spa::detect_router(&tab.page).await.map_err(err)?;
+        let new_path = spa::spa_navigate(&tab.page, &info.router_type, &req.0.path)
+            .await
+            .map_err(err)?;
+
+        tab.elements.clear(); // DOM will change
+        text_ok(format!(
+            "Navigated to {} via {} (no page reload)",
+            new_path, info.router_type
+        ))
+    }
+
+    #[tool(
+        description = "Navigate browser history by delta steps. Use delta=-1 for back, delta=1 for forward, delta=-2 for back twice, etc. Works with both SPAs and regular pages."
+    )]
+    async fn history_go(
+        &self,
+        req: Parameters<HistoryGoRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut guard = self.state.lock().await;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        spa::history_go(&tab.page, req.0.delta).await.map_err(err)?;
+        tab.elements.clear(); // DOM will change
+
+        let url = tab.page.url().await.map_err(err)?;
+        let direction = if req.0.delta < 0 { "back" } else { "forward" };
+        let steps = req.0.delta.abs();
+        text_ok(format!(
+            "Navigated {} {} step(s) to: {}",
+            direction, steps, url
+        ))
+    }
+
     #[tool(description = "Get all cookies for the current page. Returns JSON array of cookies.")]
     async fn cookies(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
@@ -910,10 +985,15 @@ impl ServerHandler for EokaServer {
                  - new_tab: open a new tab\n\
                  - switch_tab: switch to a tab by ID\n\
                  - close_tab: close a tab\n\n\
+                 SPA Navigation:\n\
+                 - spa_info: detect router type (React Router, Next.js, Vue Router, etc.)\n\
+                 - spa_navigate: navigate SPA without page reload (faster)\n\
+                 - history_go: navigate browser history by delta (-1=back, 1=forward)\n\n\
                  Tips:\n\
                  - screenshot returns both image AND element list\n\
                  - Actions auto-observe if needed\n\
                  - Actions auto-wait for page stability\n\
+                 - Use spa_navigate for SPAs (no reload, much faster)\n\
                  - Use cookies/set_cookie for session persistence\n\
                  - Set EOKA_HEADLESS=false to see browser window"
                     .into(),
