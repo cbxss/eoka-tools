@@ -456,3 +456,258 @@ async fn test_session_basic() {
 
     agent.close().await.expect("Failed to close");
 }
+
+// =============================================================================
+// Live targeting tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_text() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<button>Submit Form</button><button>Cancel</button>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Text("Submit".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert_eq!(r.tag, "button");
+    assert!(r.text.contains("Submit"));
+
+    // Case insensitive
+    let r2 = target::resolve(&page, &LivePattern::Text("cancel".into()))
+        .await
+        .unwrap();
+    assert!(r2.found);
+    assert!(r2.text.contains("Cancel"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_placeholder() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<input placeholder="Enter your email"><input placeholder="Password">"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Placeholder("email".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert_eq!(r.tag, "input");
+
+    let r2 = target::resolve(&page, &LivePattern::Placeholder("Password".into()))
+        .await
+        .unwrap();
+    assert!(r2.found);
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_css() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<button class="primary">OK</button><button class="secondary">Cancel</button>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Css("button.primary".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert!(r.text.contains("OK"));
+
+    let r2 = target::resolve(&page, &LivePattern::Css(".secondary".into()))
+        .await
+        .unwrap();
+    assert!(r2.found);
+    assert!(r2.text.contains("Cancel"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_id() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<button id="submit-btn">Submit</button>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Id("submit-btn".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert_eq!(r.selector, "#submit-btn");
+    assert!(r.text.contains("Submit"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_role() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<div role="button" tabindex="0">Custom Button</div>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Role("button".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert!(r.text.contains("Custom Button"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_not_found() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<button>OK</button>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Text("NonExistent".into()))
+        .await
+        .unwrap();
+    assert!(!r.found);
+    assert!(r.error.is_some());
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_resolve_bbox() {
+    use eoka_agent::{target, LivePattern};
+
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,<style>body{margin:0}</style><button style="width:100px;height:50px">Click</button>"#)
+        .await
+        .unwrap();
+
+    let r = target::resolve(&page, &LivePattern::Text("Click".into()))
+        .await
+        .unwrap();
+    assert!(r.found);
+    assert!(r.bbox.width >= 100.0);
+    assert!(r.bbox.height >= 50.0);
+
+    browser.close().await.unwrap();
+}
+
+// =============================================================================
+// SPA tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_spa_info_history_api() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(r#"data:text/html,<button>Hello</button>"#)
+        .await
+        .unwrap();
+
+    let info = agent.spa_info().await.unwrap();
+    // data: URLs should fall back to history API
+    assert!(info.can_navigate);
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_history_go() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+
+    // Navigate to two pages
+    agent
+        .goto(r#"data:text/html,<h1>Page 1</h1>"#)
+        .await
+        .unwrap();
+    agent
+        .goto(r#"data:text/html,<h1>Page 2</h1>"#)
+        .await
+        .unwrap();
+
+    // Go back
+    agent.history_go(-1).await.unwrap();
+
+    let text = agent.text().await.unwrap();
+    assert!(text.contains("Page 1"), "Expected Page 1, got: {}", text);
+
+    // Go forward
+    agent.history_go(1).await.unwrap();
+
+    let text = agent.text().await.unwrap();
+    assert!(text.contains("Page 2"), "Expected Page 2, got: {}", text);
+
+    agent.close().await.unwrap();
+}

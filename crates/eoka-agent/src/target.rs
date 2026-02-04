@@ -181,6 +181,7 @@ mod tests {
     fn parse_index() {
         assert!(matches!(Target::parse("0"), Target::Index(0)));
         assert!(matches!(Target::parse("15"), Target::Index(15)));
+        assert!(matches!(Target::parse("  42  "), Target::Index(42)));
     }
 
     #[test]
@@ -214,5 +215,39 @@ mod tests {
             Target::parse("Submit"),
             Target::Live(LivePattern::Text(_))
         ));
+        assert!(matches!(
+            Target::parse("Click Me"),
+            Target::Live(LivePattern::Text(_))
+        ));
+    }
+
+    #[test]
+    fn parse_preserves_value() {
+        if let Target::Live(LivePattern::Text(v)) = Target::parse("Submit Form") {
+            assert_eq!(v, "Submit Form");
+        } else {
+            panic!("Expected Text");
+        }
+
+        if let Target::Live(LivePattern::Css(v)) = Target::parse("css:button.primary") {
+            assert_eq!(v, "button.primary");
+        } else {
+            panic!("Expected Css");
+        }
+
+        if let Target::Live(LivePattern::Placeholder(v)) = Target::parse("placeholder:Enter email") {
+            assert_eq!(v, "Enter email");
+        } else {
+            panic!("Expected Placeholder");
+        }
+    }
+
+    #[test]
+    fn as_js_args() {
+        assert_eq!(LivePattern::Text("foo".into()).as_js_args(), ("text", "foo"));
+        assert_eq!(LivePattern::Placeholder("bar".into()).as_js_args(), ("placeholder", "bar"));
+        assert_eq!(LivePattern::Css("div.x".into()).as_js_args(), ("css", "div.x"));
+        assert_eq!(LivePattern::Id("myid".into()).as_js_args(), ("id", "myid"));
+        assert_eq!(LivePattern::Role("button".into()).as_js_args(), ("role", "button"));
     }
 }
