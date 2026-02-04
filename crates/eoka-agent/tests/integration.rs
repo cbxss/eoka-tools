@@ -711,3 +711,379 @@ async fn test_history_go() {
 
     agent.close().await.unwrap();
 }
+
+// =============================================================================
+// Session method tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_hover() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(r#"data:text/html,
+            <style>.hover:hover { background: red; }</style>
+            <button class="hover" onmouseenter="this.dataset.hovered='yes'">Hover Me</button>
+        "#)
+        .await
+        .unwrap();
+
+    agent.observe().await.unwrap();
+    agent.hover(0).await.unwrap();
+
+    // Check hover triggered
+    let hovered: String = agent.eval("document.querySelector('button').dataset.hovered || 'no'").await.unwrap();
+    assert_eq!(hovered, "yes");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_scroll_to() {
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,
+            <style>body{height:3000px;margin:0}</style>
+            <button style="position:absolute;top:2000px">Far Button</button>
+        "#)
+        .await
+        .unwrap();
+
+    // Use AgentPage with viewport_only=false
+    let config = ObserveConfig { viewport_only: false };
+    let mut agent = AgentPage::with_config(&page, config);
+    agent.observe().await.unwrap();
+
+    // Scroll to button
+    agent.scroll_to(0).await.unwrap();
+    agent.wait(200).await;
+
+    // Check we scrolled (allow some tolerance)
+    let scroll_y: f64 = agent.eval("window.scrollY").await.unwrap();
+    assert!(scroll_y > 500.0, "Expected scroll > 500, got {}", scroll_y);
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_back_forward() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+
+    agent.goto(r#"data:text/html,<h1>Page A</h1>"#).await.unwrap();
+    agent.goto(r#"data:text/html,<h1>Page B</h1>"#).await.unwrap();
+
+    agent.back().await.unwrap();
+    assert!(agent.text().await.unwrap().contains("Page A"));
+
+    agent.forward().await.unwrap();
+    assert!(agent.text().await.unwrap().contains("Page B"));
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_scroll_directions() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(r#"data:text/html,<style>body{height:5000px}</style><p>Top</p>"#)
+        .await
+        .unwrap();
+
+    // Scroll down
+    agent.scroll_down().await.unwrap();
+    agent.wait(100).await;
+    let y1: f64 = agent.eval("window.scrollY").await.unwrap();
+    assert!(y1 > 0.0);
+
+    // Scroll to bottom
+    agent.scroll_to_bottom().await.unwrap();
+    agent.wait(100).await;
+    let y2: f64 = agent.eval("window.scrollY").await.unwrap();
+    assert!(y2 > y1);
+
+    // Scroll to top
+    agent.scroll_to_top().await.unwrap();
+    agent.wait(100).await;
+    let y3: f64 = agent.eval("window.scrollY").await.unwrap();
+    assert_eq!(y3, 0.0);
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_press_key() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+
+    // Test page with keyboard event listener
+    agent
+        .goto(r#"data:text/html,
+            <input id="inp"><div id="log"></div>
+            <script>
+                document.addEventListener('keydown', e => {
+                    document.getElementById('log').textContent += e.key + ',';
+                });
+            </script>
+        "#)
+        .await
+        .unwrap();
+    agent.wait(100).await;
+
+    // Focus the document body for key events
+    agent.exec("document.body.focus()").await.unwrap();
+    agent.wait(50).await;
+
+    // Press various keys - they should be captured by the listener
+    agent.press_key("Tab").await.unwrap();
+    agent.press_key("Escape").await.unwrap();
+    agent.press_key("Enter").await.unwrap();
+    agent.wait(100).await;
+
+    // Verify keys were captured
+    let log: String = agent.eval("document.getElementById('log').textContent").await.unwrap();
+    assert!(log.contains("Tab"), "Expected Tab key, got: {}", log);
+    assert!(log.contains("Escape"), "Expected Escape key, got: {}", log);
+    assert!(log.contains("Enter"), "Expected Enter key, got: {}", log);
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_eval_exec() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto(r#"data:text/html,<div id="target">Hello</div>"#).await.unwrap();
+
+    // eval returns value
+    let text: String = agent.eval("document.getElementById('target').textContent").await.unwrap();
+    assert_eq!(text, "Hello");
+
+    // exec modifies DOM
+    agent.exec("document.getElementById('target').textContent = 'World'").await.unwrap();
+    let text: String = agent.eval("document.getElementById('target').textContent").await.unwrap();
+    assert_eq!(text, "World");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_agent_extract() {
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,
+            <ul>
+                <li data-price="10">Apple</li>
+                <li data-price="20">Banana</li>
+            </ul>
+        "#)
+        .await
+        .unwrap();
+
+    let agent = AgentPage::new(&page);
+    let prices: Vec<String> = agent
+        .extract("[...document.querySelectorAll('li')].map(e => e.dataset.price)")
+        .await
+        .unwrap();
+    assert_eq!(prices, vec!["10", "20"]);
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_session_url_title() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(r#"data:text/html,<title>Test Title</title><p>Content</p>"#)
+        .await
+        .unwrap();
+
+    let title = agent.title().await.unwrap();
+    assert_eq!(title, "Test Title");
+
+    let url = agent.url().await.unwrap();
+    assert!(url.starts_with("data:"));
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_agent_options() {
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,
+            <select id="sel">
+                <option value="a">Alpha</option>
+                <option value="b">Beta</option>
+                <option value="c">Gamma</option>
+            </select>
+        "#)
+        .await
+        .unwrap();
+
+    let mut agent = AgentPage::new(&page);
+    agent.observe().await.unwrap();
+    let opts = agent.options(0).await.unwrap();
+
+    assert_eq!(opts.len(), 3);
+    assert_eq!(opts[0], ("a".to_string(), "Alpha".to_string()));
+    assert_eq!(opts[1], ("b".to_string(), "Beta".to_string()));
+    assert_eq!(opts[2], ("c".to_string(), "Gamma".to_string()));
+
+    browser.close().await.unwrap();
+}
+
+// =============================================================================
+// Edge cases and error handling
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_click_out_of_bounds() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto(r#"data:text/html,<button>OK</button>"#).await.unwrap();
+    agent.observe().await.unwrap();
+
+    let result = agent.click(999).await;
+    assert!(result.is_err());
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_fill_clears_existing() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto(r#"data:text/html,<input value="old">"#).await.unwrap();
+
+    agent.observe().await.unwrap();
+    agent.fill(0, "new").await.unwrap();
+
+    agent.observe().await.unwrap();
+    let el = agent.get(0).unwrap();
+    assert_eq!(el.value.as_deref(), Some("new"));
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_multiple_elements_same_text() {
+    if !chrome_available() {
+        return;
+    }
+
+    let browser = Browser::launch().await.unwrap();
+    let page = browser
+        .new_page(r#"data:text/html,
+            <button id="b1">Submit</button>
+            <button id="b2">Submit</button>
+            <button id="b3">Cancel</button>
+        "#)
+        .await
+        .unwrap();
+
+    let mut agent = AgentPage::new(&page);
+    agent.observe().await.unwrap();
+
+    let all = agent.find_all_by_text("Submit");
+    assert_eq!(all.len(), 2);
+
+    let first = agent.find_by_text("Submit");
+    assert_eq!(first, Some(0));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_hidden_elements_filtered() {
+    use eoka_agent::Session;
+
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(r#"data:text/html,
+            <button>Visible</button>
+            <button style="display:none">Hidden</button>
+            <button style="visibility:hidden">Invisible</button>
+        "#)
+        .await
+        .unwrap();
+
+    agent.observe().await.unwrap();
+
+    // Should only find the visible button
+    assert_eq!(agent.len(), 1);
+    assert!(agent.element_list().contains("Visible"));
+
+    agent.close().await.unwrap();
+}
