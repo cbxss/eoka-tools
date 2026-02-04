@@ -17,7 +17,7 @@ name = "eoka-runner"
 path = "src/bin/main.rs"
 
 [dependencies]
-eoka = "0.3.2"
+eoka = "0.3.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

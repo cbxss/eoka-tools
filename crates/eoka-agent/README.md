@@ -37,6 +37,21 @@ session.close().await?;
 [2] <button> "Submit"
 ```
 
+## Live Targeting
+
+Actions support both index-based and live targeting:
+
+```
+click(target: "2")              // By index from observe()
+click(target: "text:Submit")    // By visible text
+click(target: "css:button.primary")  // By CSS selector
+click(target: "id:submit-btn")  // By element ID
+click(target: "placeholder:Email")   // By placeholder text
+click(target: "role:button")    // By tag or ARIA role
+```
+
+Live targets resolve at action time via JS injection, avoiding stale element issues in dynamic pages.
+
 ## MCP Server
 
 The crate includes an MCP server binary for use with Claude Desktop, Claude Code, etc.
@@ -53,24 +68,48 @@ claude mcp add eoka-agent -- eoka-agent
 
 ### Tools
 
+**Tab Management:**
+| Tool | Description |
+|------|-------------|
+| `list_tabs` | List all open tabs with IDs, titles, URLs |
+| `new_tab` | Open new tab (optionally with URL) |
+| `switch_tab` | Switch to tab by ID |
+| `close_tab` | Close tab by ID |
+
+**Navigation:**
 | Tool | Description |
 |------|-------------|
 | `navigate` | Go to URL (launches browser on first call) |
-| `observe` | List all interactive elements |
+| `back` / `forward` | Browser history navigation |
+| `spa_info` | Detect SPA router (React, Next.js, Vue, etc.) |
+| `spa_navigate` | Navigate SPA without page reload |
+
+**Observation:**
+| Tool | Description |
+|------|-------------|
+| `observe` | List interactive elements (filter by type, limit count) |
 | `screenshot` | Annotated screenshot with numbered elements |
-| `click` | Click element by index |
-| `fill` | Type into input by index |
-| `select` | Select dropdown option by index |
-| `hover` | Hover over element by index |
-| `scroll` | Scroll page or element into view |
-| `type_key` | Press keyboard key (Enter, Tab, etc.) |
 | `find_text` | Search elements by text content |
-| `extract` | Run JavaScript and return result |
 | `page_text` | Get visible text content |
 | `page_info` | Get current URL and title |
+
+**Actions (support live targeting: `text:Submit`, `css:button`, `id:btn`):**
+| Tool | Description |
+|------|-------------|
+| `click` | Click element by index or live target |
+| `fill` | Type into input field |
+| `select` | Select dropdown option |
+| `hover` | Hover over element |
+| `scroll` | Scroll page or element into view |
+| `type_key` | Press keyboard key (Enter, Tab, etc.) |
+| `batch` | Execute multiple actions in one call |
+
+**Other:**
+| Tool | Description |
+|------|-------------|
+| `extract` | Run JavaScript and return result |
 | `cookies` | Get all cookies |
 | `set_cookie` | Set a cookie |
-| `back` / `forward` | Browser history navigation |
 | `close` | Close browser |
 
 ## Examples
