@@ -170,12 +170,17 @@ impl BrowserState {
                 tab.page.goto(url).await?;
             }
         }
-        Ok(self.tabs.get_mut(self.current_tab_id.as_ref().unwrap()).unwrap())
+        Ok(self
+            .tabs
+            .get_mut(self.current_tab_id.as_ref().unwrap())
+            .unwrap())
     }
 
     /// Get current tab or error
     fn current_tab(&self) -> Option<&TabState> {
-        self.current_tab_id.as_ref().and_then(|id| self.tabs.get(id))
+        self.current_tab_id
+            .as_ref()
+            .and_then(|id| self.tabs.get(id))
     }
 
     fn current_tab_mut(&mut self) -> Option<&mut TabState> {
@@ -194,13 +199,21 @@ impl BrowserState {
         self.tabs.insert(tab_id.clone(), TabState::new(page));
         self.browser.activate_tab(&tab_id).await?;
         self.current_tab_id = Some(tab_id.clone());
-        Ok((tab_id, self.tabs.get_mut(self.current_tab_id.as_ref().unwrap()).unwrap()))
+        Ok((
+            tab_id,
+            self.tabs
+                .get_mut(self.current_tab_id.as_ref().unwrap())
+                .unwrap(),
+        ))
     }
 
     /// Switch to a tab by ID
     async fn switch_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
         if !self.tabs.contains_key(tab_id) {
-            return Err(eoka::Error::ElementNotFound(format!("Tab {} not found", tab_id)));
+            return Err(eoka::Error::ElementNotFound(format!(
+                "Tab {} not found",
+                tab_id
+            )));
         }
         self.browser.activate_tab(tab_id).await?;
         self.current_tab_id = Some(tab_id.to_string());
@@ -213,7 +226,10 @@ impl BrowserState {
             return Err(eoka::Error::CdpSimple("Cannot close the last tab".into()));
         }
         if !self.tabs.contains_key(tab_id) {
-            return Err(eoka::Error::ElementNotFound(format!("Tab {} not found", tab_id)));
+            return Err(eoka::Error::ElementNotFound(format!(
+                "Tab {} not found",
+                tab_id
+            )));
         }
 
         self.browser.close_tab(tab_id).await?;
@@ -374,8 +390,15 @@ impl EokaServer {
 
         let mut out = String::new();
         for tab in tabs {
-            let marker = if Some(tab.id.as_str()) == current_id { " *" } else { "" };
-            out.push_str(&format!("[{}]{} {}\n  {}\n", tab.id, marker, tab.title, tab.url));
+            let marker = if Some(tab.id.as_str()) == current_id {
+                " *"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "[{}]{} {}\n  {}\n",
+                tab.id, marker, tab.title, tab.url
+            ));
         }
         if out.is_empty() {
             out = "No tabs open.".into();
@@ -393,7 +416,10 @@ impl EokaServer {
 
         let url = tab.page.url().await.map_err(err)?;
         let title = tab.page.title().await.map_err(err)?;
-        text_ok(format!("Opened new tab [{}]\nURL: {}\nTitle: {}", tab_id, url, title))
+        text_ok(format!(
+            "Opened new tab [{}]\nURL: {}\nTitle: {}",
+            tab_id, url, title
+        ))
     }
 
     #[tool(description = "Switch to a different browser tab by ID. Get IDs from list_tabs.")]
@@ -406,7 +432,10 @@ impl EokaServer {
         let tab = state.current_tab().unwrap();
         let url = tab.page.url().await.map_err(err)?;
         let title = tab.page.title().await.map_err(err)?;
-        text_ok(format!("Switched to tab [{}]\nURL: {}\nTitle: {}", req.0.tab_id, url, title))
+        text_ok(format!(
+            "Switched to tab [{}]\nURL: {}\nTitle: {}",
+            req.0.tab_id, url, title
+        ))
     }
 
     #[tool(description = "Close a browser tab by ID. Cannot close the last remaining tab.")]
@@ -475,17 +504,15 @@ impl EokaServer {
     )]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         // Auto-observe if needed
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let png = match annotate::annotated_screenshot(&tab.page, &tab.elements).await {
@@ -512,21 +539,20 @@ impl EokaServer {
     )]
     async fn click(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         // Auto-observe if empty
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab.elements
+        let desc = tab
+            .elements
             .get(idx)
             .map(|e| e.to_string())
             .unwrap_or_else(|| format!("[{}]", idx));
@@ -543,20 +569,19 @@ impl EokaServer {
     )]
     async fn fill(&self, req: Parameters<FillRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab.elements
+        let desc = tab
+            .elements
             .get(idx)
             .map(|e| e.to_string())
             .unwrap_or_else(|| format!("[{}]", idx));
@@ -572,16 +597,14 @@ impl EokaServer {
     )]
     async fn select(&self, req: Parameters<SelectRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let idx = resolve_target(&tab.elements, &req.0.target)?;
@@ -618,20 +641,19 @@ impl EokaServer {
     )]
     async fn hover(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab.elements
+        let desc = tab
+            .elements
             .get(idx)
             .map(|e| e.to_string())
             .unwrap_or_else(|| format!("[{}]", idx));
@@ -652,12 +674,8 @@ impl EokaServer {
     )]
     async fn type_key(&self, req: Parameters<TypeKeyRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         tab.page.human().press_key(&req.0.key).await.map_err(err)?;
         text_ok(format!("Pressed {}", req.0.key))
     }
@@ -667,22 +685,36 @@ impl EokaServer {
     )]
     async fn scroll(&self, req: Parameters<ScrollRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         match req.0.target.as_str() {
-            "up" => tab.page.execute("window.scrollBy(0, -window.innerHeight * 0.8)").await.map_err(err)?,
-            "down" => tab.page.execute("window.scrollBy(0, window.innerHeight * 0.8)").await.map_err(err)?,
-            "top" => tab.page.execute("window.scrollTo(0, 0)").await.map_err(err)?,
-            "bottom" => tab.page.execute("window.scrollTo(0, document.body.scrollHeight)").await.map_err(err)?,
+            "up" => tab
+                .page
+                .execute("window.scrollBy(0, -window.innerHeight * 0.8)")
+                .await
+                .map_err(err)?,
+            "down" => tab
+                .page
+                .execute("window.scrollBy(0, window.innerHeight * 0.8)")
+                .await
+                .map_err(err)?,
+            "top" => tab
+                .page
+                .execute("window.scrollTo(0, 0)")
+                .await
+                .map_err(err)?,
+            "bottom" => tab
+                .page
+                .execute("window.scrollTo(0, document.body.scrollHeight)")
+                .await
+                .map_err(err)?,
             target => {
                 if tab.elements.is_empty() {
-                    tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+                    tab.elements = observe::observe(&tab.page, config_viewport_only)
+                        .await
+                        .map_err(err)?;
                 }
                 let idx = resolve_target(&tab.elements, target)?;
                 let selector = &tab.elements[idx].selector;
@@ -704,20 +736,19 @@ impl EokaServer {
         req: Parameters<FindTextRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
         if tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only).await.map_err(err)?;
+            tab.elements = observe::observe(&tab.page, config_viewport_only)
+                .await
+                .map_err(err)?;
         }
 
         let needle = req.0.text.to_lowercase();
-        let matches: Vec<_> = tab.elements
+        let matches: Vec<_> = tab
+            .elements
             .iter()
             .filter(|e| {
                 e.text.to_lowercase().contains(&needle)
@@ -741,12 +772,8 @@ impl EokaServer {
     )]
     async fn extract(&self, req: Parameters<JsRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         // Use eval() to handle multi-statement code - returns value of last expression
         // Safely escape the JS code as a JSON string to prevent injection
         let escaped_js = serde_json::to_string(&req.0.js).map_err(err)?;
@@ -760,12 +787,8 @@ impl EokaServer {
     )]
     async fn exec(&self, req: Parameters<JsRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         // Execute JS without caring about return value
         tab.page.execute(&req.0.js).await.map_err(err)?;
         text_ok("Executed successfully")
@@ -776,12 +799,8 @@ impl EokaServer {
     )]
     async fn page_text(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         let text = tab.page.text().await.map_err(err)?;
         text_ok(text)
     }
@@ -789,12 +808,8 @@ impl EokaServer {
     #[tool(description = "Get current URL and page title.")]
     async fn page_info(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         let url = tab.page.url().await.map_err(err)?;
         let title = tab.page.title().await.map_err(err)?;
         text_ok(format!("URL: {}\nTitle: {}", url, title))
@@ -803,12 +818,8 @@ impl EokaServer {
     #[tool(description = "Go back in browser history.")]
     async fn back(&self) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
         tab.elements.clear();
         tab.page.back().await.map_err(err)?;
         wait_for_stable(&tab.page).await.map_err(err)?;
@@ -819,12 +830,8 @@ impl EokaServer {
     #[tool(description = "Go forward in browser history.")]
     async fn forward(&self) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
-        let state = guard.as_mut().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab_mut().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
         tab.elements.clear();
         tab.page.forward().await.map_err(err)?;
         wait_for_stable(&tab.page).await.map_err(err)?;
@@ -832,17 +839,11 @@ impl EokaServer {
         text_ok(format!("Navigated forward to: {}", url))
     }
 
-    #[tool(
-        description = "Get all cookies for the current page. Returns JSON array of cookies."
-    )]
+    #[tool(description = "Get all cookies for the current page. Returns JSON array of cookies.")]
     async fn cookies(&self) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         let cookies = tab.page.cookies().await.map_err(err)?;
         let json = serde_json::to_string_pretty(&cookies).map_err(err)?;
         text_ok(json)
@@ -854,12 +855,8 @@ impl EokaServer {
         req: Parameters<SetCookieRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
-        let state = guard.as_ref().ok_or_else(|| {
-            err(ERR_NO_BROWSER)
-        })?;
-        let tab = state.current_tab().ok_or_else(|| {
-            err(ERR_NO_TAB)
-        })?;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         tab.page
             .set_cookie(
                 &req.0.name,
