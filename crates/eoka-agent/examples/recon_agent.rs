@@ -371,29 +371,36 @@ async fn main() -> anyhow::Result<()> {
             source.len()
         );
 
-        if combined.is_empty() {
-            println!("  No relevant blocks found, falling back to last 100KB");
-            let fallback_start = source.len().saturating_sub(100_000);
-            combined = source[fallback_start..].to_string();
-        }
-
         // Split into ~40KB batches so the LLM can focus on each chunk
         let batch_size = 40_000;
         let mut batches: Vec<String> = Vec::new();
-        let mut current_batch = String::new();
-        for (_score, block) in &relevant_blocks {
-            if current_batch.len() + block.len() > batch_size && !current_batch.is_empty() {
-                batches.push(current_batch.clone());
-                current_batch.clear();
+
+        if combined.is_empty() {
+            // No relevant blocks found, fall back to last 100KB split into batches
+            println!("  No relevant blocks found, falling back to last 100KB");
+            let fallback_start = source.len().saturating_sub(100_000);
+            let fallback = &source[fallback_start..];
+            for chunk in fallback.as_bytes().chunks(batch_size) {
+                if let Ok(s) = std::str::from_utf8(chunk) {
+                    batches.push(s.to_string());
+                }
             }
-            if current_batch.len() + block.len() <= batch_size * 3 {
-                // don't skip huge blocks
-                current_batch.push_str(block);
-                current_batch.push_str("\n\n");
+        } else {
+            let mut current_batch = String::new();
+            for (_score, block) in &relevant_blocks {
+                if current_batch.len() + block.len() > batch_size && !current_batch.is_empty() {
+                    batches.push(current_batch.clone());
+                    current_batch.clear();
+                }
+                if current_batch.len() + block.len() <= batch_size * 3 {
+                    // don't skip huge blocks
+                    current_batch.push_str(block);
+                    current_batch.push_str("\n\n");
+                }
             }
-        }
-        if !current_batch.is_empty() {
-            batches.push(current_batch);
+            if !current_batch.is_empty() {
+                batches.push(current_batch);
+            }
         }
 
         // Cap at 4 batches to stay within budget
@@ -447,7 +454,7 @@ async fn main() -> anyhow::Result<()> {
     let mut verbatim_section =
         String::from("\n=== VERBATIM EXTRACTIONS (DO NOT MODIFY — COPY EXACTLY) ===\n\n");
 
-    for (script_url, source) in &formatted_sources {
+    for (_script_url, source) in &formatted_sources {
         // Extract quoted string literals that look like charsets, keys, or identifiers
         let string_re = regex::Regex::new(r#""([A-Z0-9]{10,})""#).unwrap();
         for cap in string_re.captures_iter(source) {

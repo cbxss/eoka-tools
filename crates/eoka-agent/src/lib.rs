@@ -1,11 +1,11 @@
-//! # eoka-tools
+//! # eoka-agent
 //!
-//! Browser automation tools for AI agents. Use directly or via MCP.
+//! AI agent interaction layer for browser automation. Use directly or via MCP.
 //!
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use eoka_tools::Session;
+//! use eoka_agent::Session;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> eoka::Result<()> {
@@ -22,8 +22,8 @@
 //! # }
 //! ```
 
-mod annotate;
-mod observe;
+pub mod annotate;
+pub mod observe;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -571,7 +571,7 @@ impl<'a> AgentPage<'a> {
     ///
     /// Example:
     /// ```rust,no_run
-    /// # use eoka_tools::AgentPage;
+    /// # use eoka_agent::AgentPage;
     /// # async fn example(agent: &AgentPage<'_>) -> eoka::Result<()> {
     /// let titles: Vec<String> = agent.extract(
     ///     "Array.from(document.querySelectorAll('h2')).map(h => h.textContent.trim())"
@@ -580,7 +580,11 @@ impl<'a> AgentPage<'a> {
     /// # }
     /// ```
     pub async fn extract<T: serde::de::DeserializeOwned>(&self, js_expression: &str) -> Result<T> {
-        let js = format!("JSON.stringify((()=>{{ return {}; }})())", js_expression);
+        // Use eval() to handle multi-statement code - returns value of last expression
+        // Safely escape the JS code to prevent injection
+        let escaped_js = serde_json::to_string(js_expression)
+            .map_err(|e| eoka::Error::CdpSimple(format!("Failed to escape JS: {}", e)))?;
+        let js = format!("JSON.stringify(eval({}))", escaped_js);
         let json_str: String = self.page.evaluate(&js).await?;
         if json_str == "null" || json_str == "undefined" || json_str.is_empty() {
             return Err(eoka::Error::CdpSimple(format!(

@@ -1,0 +1,22 @@
+name: "Example Automation"
+
+browser:
+  headless: false
+
+target:
+  url: "https://example.com"
+
+actions:
+  - wait_for_network_idle:
+      idle_ms: 500
+      timeout_ms: 10000
+
+  - screenshot:
+      path: "example.png"
+
+  - log:
+      message: "Page loaded successfully"
+
+success:
+  any:
+    - text_contains: "Example Domain"

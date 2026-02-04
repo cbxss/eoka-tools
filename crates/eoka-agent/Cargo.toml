@@ -1,0 +1,55 @@
+[package]
+name = "eoka-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "AI agent interaction layer for browser automation — MCP server, observe/act loop"
+keywords = ["browser", "automation", "ai-agent", "mcp", "llm"]
+categories = ["web-programming", "development-tools"]
+repository = "https://github.com/cbxss/eoka-tools"
+homepage = "https://github.com/cbxss/eoka-tools"
+documentation = "https://docs.rs/eoka-agent"
+readme = "README.md"
+authors = ["cbxss"]
+
+[[bin]]
+name = "eoka-agent"
+path = "src/main.rs"
+
+[dependencies]
+eoka = "0.3.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+rmcp = { version = "0.13", features = ["server", "transport-io"] }
+schemars = "1.0"
+anyhow = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+regex = "1"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[[example]]
+name = "agent_loop"
+path = "examples/agent_loop.rs"
+
+[[example]]
+name = "generic_agent"
+path = "examples/generic_agent.rs"
+
+[[example]]
+name = "recon_agent"
+path = "examples/recon_agent.rs"
+
+[[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
+
+[[example]]
+name = "stealth_test"
+path = "examples/stealth_test.rs"

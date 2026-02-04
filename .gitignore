@@ -1,6 +1,5 @@
 # Rust
 /target/
-Cargo.lock
 
 # IDE
 .idea/
@@ -16,9 +15,6 @@ Thumbs.db
 # Test artifacts
 *.png
 !examples/*.png
-
-# Internal docs
-PLAN.md
 
 # GitHub Actions local testing
 .act

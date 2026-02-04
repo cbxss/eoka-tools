@@ -1,0 +1,57 @@
+# Parameterized login flow
+# Usage: eoka-runner configs/login.yaml -P email=user@example.com -P password=secret
+
+name: "Login Flow"
+
+params:
+  email:
+    required: true
+    description: "User email address"
+  password:
+    required: true
+    description: "User password"
+  base_url:
+    default: "https://example.com"
+    description: "Base URL of the application"
+
+browser:
+  headless: false
+
+target:
+  url: "${base_url}/login"
+
+actions:
+  - wait_for_network_idle: {}
+
+  # Dismiss cookie banner if present
+  - try_click_any:
+      texts: ["Accept", "Accept All", "OK", "Got it"]
+
+  - fill:
+      selector: "#email, input[type=email], input[name=email]"
+      value: "${email}"
+      human: true
+
+  - fill:
+      selector: "#password, input[type=password], input[name=password]"
+      value: "${password}"
+      human: true
+
+  - click:
+      text: "Sign In"
+      human: true
+
+  - wait_for_network_idle:
+      timeout_ms: 10000
+
+success:
+  any:
+    - url_contains: "/dashboard"
+    - url_contains: "/home"
+    - text_contains: "Welcome"
+
+on_failure:
+  screenshot: "login_failed_{timestamp}.png"
+  retry:
+    attempts: 2
+    delay_ms: 1000

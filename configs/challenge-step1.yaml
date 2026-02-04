@@ -1,0 +1,69 @@
+# Browser Navigation Challenge - Step 1 Solver
+# Uses try_click_any to handle fake vs real buttons
+
+name: "Challenge Step 1"
+
+browser:
+  headless: false
+
+target:
+  url: "https://serene-frangipane-7fd25b.netlify.app/"
+
+actions:
+  # Start the challenge
+  - wait_for_network_idle: {}
+  - click:
+      text: "START"
+  - wait: { ms: 1000 }
+
+  # Accept cookie consent if present
+  - try_click_any:
+      texts: ["Accept", "Accept All"]
+  - wait: { ms: 500 }
+
+  # Close modals by clicking all "Close" buttons (real ones will work)
+  # The fake ones just won't do anything
+  - repeat:
+      times: 5
+      actions:
+        - try_click:
+            text: "Close"
+        - wait: { ms: 300 }
+
+  # Scroll to reveal code section
+  - scroll:
+      direction: up
+      amount: 10
+
+  # Click reveal code
+  - wait: { ms: 500 }
+  - try_click:
+      text: "Reveal Code"
+  - wait: { ms: 1000 }
+
+  # Take screenshot to see revealed code
+  - screenshot:
+      path: "challenge_step1_code.png"
+
+  # Try to find and click the correct radio option
+  # Based on analysis: "Option D" or "This is correct"
+  - try_click:
+      text: "Correct answer"
+  - wait: { ms: 300 }
+  - try_click:
+      text: "This is correct"
+  - wait: { ms: 300 }
+
+  # Submit
+  - try_click:
+      text: "Submit & Continue"
+  - wait: { ms: 1000 }
+
+  # Screenshot result
+  - screenshot:
+      path: "challenge_step1_result.png"
+
+success:
+  any:
+    - text_contains: "Step 2"
+    - url_contains: "step2"

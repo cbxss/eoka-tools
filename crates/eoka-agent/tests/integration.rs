@@ -3,7 +3,7 @@
 //! These tests require Chrome to be installed and available.
 //! Run with: cargo test --test integration -- --ignored
 
-use eoka_tools::{AgentPage, Browser, ObserveConfig};
+use eoka_agent::{AgentPage, Browser, ObserveConfig};
 
 /// Check if Chrome is available
 fn chrome_available() -> bool {
@@ -381,7 +381,7 @@ async fn test_select_dropdown() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_stale_element_detection() {
-    use eoka_tools::Session;
+    use eoka_agent::Session;
 
     if !chrome_available() {
         eprintln!("Chrome not found, skipping test");
@@ -426,7 +426,7 @@ async fn test_stale_element_detection() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_basic() {
-    use eoka_tools::Session;
+    use eoka_agent::Session;
 
     if !chrome_available() {
         eprintln!("Chrome not found, skipping test");

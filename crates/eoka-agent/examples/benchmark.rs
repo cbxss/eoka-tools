@@ -10,7 +10,7 @@
 //! - Form interactions
 
 use eoka::{Browser, StealthConfig};
-use eoka_tools::AgentPage;
+use eoka_agent::AgentPage;
 use std::time::Instant;
 
 fn ms(start: Instant) -> u128 {

@@ -5,7 +5,7 @@
 //! Set ANTHROPIC_API_KEY env var before running.
 
 use eoka::Browser;
-use eoka_tools::AgentPage;
+use eoka_agent::AgentPage;
 use reqwest::Client;
 use serde_json::{json, Value};
 

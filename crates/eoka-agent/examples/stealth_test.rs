@@ -3,7 +3,7 @@
 //! Run with: cargo run --release --example stealth_test
 
 use eoka::{Browser, StealthConfig};
-use eoka_tools::AgentPage;
+use eoka_agent::AgentPage;
 
 #[tokio::main]
 async fn main() -> eoka::Result<()> {

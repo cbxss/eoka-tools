@@ -1,0 +1,44 @@
+# Example: Search flow with reusable includes
+# Usage: eoka-runner configs/search.yaml -P query="rust automation"
+
+name: "Search Flow"
+
+params:
+  query:
+    required: true
+    description: "Search query"
+  site:
+    default: "https://www.google.com"
+    description: "Search engine URL"
+
+browser:
+  headless: false
+
+target:
+  url: "${site}"
+
+actions:
+  - wait_for_network_idle: {}
+
+  # Include reusable cookie dismissal flow
+  - include:
+      path: "flows/dismiss_cookies.yaml"
+
+  # Perform search
+  - fill:
+      selector: "input[name=q], input[type=search], #search"
+      value: "${query}"
+      human: true
+
+  - press_key:
+      key: "Enter"
+
+  - wait_for_network_idle:
+      timeout_ms: 10000
+
+  - screenshot:
+      path: "search_results.png"
+
+success:
+  any:
+    - text_contains: "${query}"

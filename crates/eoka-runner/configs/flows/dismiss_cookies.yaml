@@ -1,0 +1,21 @@
+# Reusable cookie banner dismissal
+# Include this at the start of flows that may encounter cookie banners
+
+name: "Dismiss Cookies"
+
+target:
+  url: "about:blank"  # Not used when included
+
+actions:
+  - try_click_any:
+      texts:
+        - "Accept"
+        - "Accept All"
+        - "Accept Cookies"
+        - "I Accept"
+        - "OK"
+        - "Got it"
+        - "Agree"
+        - "Allow All"
+  - wait:
+      ms: 300
