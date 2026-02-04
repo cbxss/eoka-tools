@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use eoka::{Browser, Page, StealthConfig, TabInfo};
-use eoka_agent::{annotate, observe, spa, InteractiveElement, ObserveConfig};
+use eoka_agent::{annotate, observe, spa, target, InteractiveElement, ObserveConfig, Target};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -33,7 +33,7 @@ pub struct NavigateRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TargetRequest {
     #[schemars(
-        description = "Element index (number) OR text to find (string). Examples: 0, \"Submit\", \"Sign in\""
+        description = "Target element. Supports: index (0), text:Submit, placeholder:Email, role:button, css:form button, id:my-btn, or plain text search"
     )]
     pub target: String,
 }
@@ -41,7 +41,7 @@ pub struct TargetRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FillRequest {
     #[schemars(
-        description = "Element index (number) OR text/placeholder to find. Examples: 0, \"Email\", \"Search\""
+        description = "Target input. Supports: index (0), text:Email, placeholder:Enter code, css:input.search, id:email-field, or plain text search"
     )]
     pub target: String,
     #[schemars(description = "Text to type into the element")]
@@ -118,6 +118,32 @@ pub struct SpaNavigateRequest {
 pub struct HistoryGoRequest {
     #[schemars(description = "History delta: -1 for back, 1 for forward, -2 for back twice, etc.")]
     pub delta: i32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ObserveRequest {
+    #[schemars(
+        description = "Filter: 'inputs' (form elements), 'buttons' (buttons/links), 'all' (default)"
+    )]
+    pub filter: Option<String>,
+    #[schemars(description = "Maximum elements to return (default: unlimited)")]
+    pub max: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BatchAction {
+    #[schemars(description = "Action type: 'click', 'fill', 'type_key'")]
+    pub action: String,
+    #[schemars(description = "Target element (for click/fill)")]
+    pub target: Option<String>,
+    #[schemars(description = "Text value (for fill/type_key)")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BatchRequest {
+    #[schemars(description = "Array of actions to execute in sequence")]
+    pub actions: Vec<BatchAction>,
 }
 
 // ---------------------------------------------------------------------------
@@ -292,38 +318,54 @@ fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::success(vec![Content::text(s.into())]))
 }
 
-/// Parse target as either an index or text to find.
-fn resolve_target(elements: &[InteractiveElement], target: &str) -> Result<usize, ErrorData> {
-    // Try parsing as number first
-    if let Ok(idx) = target.parse::<usize>() {
-        if idx < elements.len() {
-            return Ok(idx);
-        }
-        return Err(ErrorData::invalid_params(
-            format!(
-                "Index {} out of range (have {} elements)",
-                idx,
-                elements.len()
-            ),
-            None::<Value>,
-        ));
-    }
+/// Resolved target ready for action.
+struct ResolvedTarget {
+    selector: String,
+    desc: String,
+    bbox: target::BBox,
+}
 
-    // Otherwise search by text
-    let needle = target.to_lowercase();
-    elements
-        .iter()
-        .find(|e| e.text.to_lowercase().contains(&needle))
-        .map(|e| e.index)
-        .ok_or_else(|| {
-            ErrorData::invalid_params(
-                format!(
-                    "No element found matching \"{}\". Run observe first or check spelling.",
-                    target
-                ),
-                None::<Value>,
-            )
-        })
+/// Resolve target to selector + bbox. Index uses cache, everything else is live.
+async fn resolve_target(
+    page: &Page,
+    elements: &[InteractiveElement],
+    target_str: &str,
+) -> Result<ResolvedTarget, ErrorData> {
+    match Target::parse(target_str) {
+        Target::Index(idx) => {
+            let el = elements.get(idx).ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!("Index {} out of range (have {})", idx, elements.len()),
+                    None::<Value>,
+                )
+            })?;
+            Ok(ResolvedTarget {
+                selector: el.selector.clone(),
+                desc: el.to_string(),
+                bbox: target::BBox {
+                    x: el.bbox.x,
+                    y: el.bbox.y,
+                    width: el.bbox.width,
+                    height: el.bbox.height,
+                },
+            })
+        }
+        Target::Live(pattern) => {
+            let r = target::resolve(page, &pattern).await.map_err(err)?;
+            if !r.found {
+                return Err(ErrorData::invalid_params(
+                    r.error
+                        .unwrap_or_else(|| format!("{} not found", target_str)),
+                    None::<Value>,
+                ));
+            }
+            Ok(ResolvedTarget {
+                selector: r.selector,
+                desc: format!("<{}> \"{}\"", r.tag, r.text),
+                bbox: r.bbox,
+            })
+        }
+    }
 }
 
 /// Wait for page stability after an action
@@ -487,9 +529,9 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "List all interactive elements on the page. Returns indexed list like [0] <button> \"Submit\". Call before click/fill/select, or use text targeting."
+        description = "List interactive elements. Optional filter: 'inputs' (form elements), 'buttons' (clickables), 'all'. Optional max limit. Use live targeting (text:, css:) to skip observe."
     )]
-    async fn observe(&self) -> Result<CallToolResult, ErrorData> {
+    async fn observe(&self, req: Parameters<ObserveRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
         let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let viewport_only = state.config.viewport_only;
@@ -503,7 +545,35 @@ impl EokaServer {
             }
         };
 
-        let list = element_list(&tab.elements);
+        // Apply filter
+        let filtered: Vec<&InteractiveElement> = match req.0.filter.as_deref() {
+            Some("inputs") => tab
+                .elements
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.tag.as_str(),
+                        "input" | "select" | "textarea" | "contenteditable"
+                    )
+                })
+                .collect(),
+            Some("buttons") => tab
+                .elements
+                .iter()
+                .filter(|e| {
+                    matches!(e.tag.as_str(), "button" | "a") || e.role.as_deref() == Some("button")
+                })
+                .collect(),
+            _ => tab.elements.iter().collect(),
+        };
+
+        // Apply max limit
+        let limited: Vec<&InteractiveElement> = match req.0.max {
+            Some(max) => filtered.into_iter().take(max).collect(),
+            None => filtered,
+        };
+
+        let list: String = limited.iter().map(|e| format!("{}\n", e)).collect();
         text_ok(if list.is_empty() {
             "No interactive elements found.".into()
         } else {
@@ -547,7 +617,7 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "Click an element. Target can be index (0) or text (\"Submit\"). Auto-waits for page stability."
+        description = "Click an element. Target: index (0), text:Submit, placeholder:Search, role:button, css:selector, id:my-btn, or plain text. Auto-retries once on stale element."
     )]
     async fn click(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
@@ -555,29 +625,39 @@ impl EokaServer {
         let config_viewport_only = state.config.viewport_only;
         let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
-        // Auto-observe if empty
-        if tab.elements.is_empty() {
+        // Only auto-observe for cached targets (index or plain text)
+        let target = Target::parse(&req.0.target);
+        if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             tab.elements = observe::observe(&tab.page, config_viewport_only)
                 .await
                 .map_err(err)?;
         }
 
-        let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab
-            .elements
-            .get(idx)
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| format!("[{}]", idx));
-        let selector = tab.elements[idx].selector.clone();
+        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
 
-        tab.page.click(&selector).await.map_err(err)?;
+        // Try click with auto-retry on element not found
+        match tab.page.click(&resolved.selector).await {
+            Ok(_) => {}
+            Err(e)
+                if e.to_string().contains("not found") || e.to_string().contains("not visible") =>
+            {
+                // Re-resolve and retry once
+                tab.elements = observe::observe(&tab.page, config_viewport_only)
+                    .await
+                    .map_err(err)?;
+                let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+                tab.page.click(&resolved2.selector).await.map_err(err)?;
+            }
+            Err(e) => return Err(err(e)),
+        }
+
         wait_for_stable(&tab.page).await.map_err(err)?;
-        tab.elements.clear(); // Clicks often change the page
-        text_ok(format!("Clicked {}", desc))
+        tab.elements.clear();
+        text_ok(format!("Clicked {}", resolved.desc))
     }
 
     #[tool(
-        description = "Type text into an input. Target can be index (0) or text/placeholder (\"Email\", \"Search\"). Clears existing text first."
+        description = "Type text into an input. Target: index, text:Label, placeholder:Enter code, css:input, id:field. Auto-retries once on stale element. Clears existing text."
     )]
     async fn fill(&self, req: Parameters<FillRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
@@ -585,28 +665,40 @@ impl EokaServer {
         let config_viewport_only = state.config.viewport_only;
         let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
-        if tab.elements.is_empty() {
+        let target = Target::parse(&req.0.target);
+        if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             tab.elements = observe::observe(&tab.page, config_viewport_only)
                 .await
                 .map_err(err)?;
         }
 
-        let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab
-            .elements
-            .get(idx)
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| format!("[{}]", idx));
-        let selector = tab.elements[idx].selector.clone();
+        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
 
-        tab.page.fill(&selector, &req.0.text).await.map_err(err)?;
+        // Try fill with auto-retry on element not found
+        match tab.page.fill(&resolved.selector, &req.0.text).await {
+            Ok(_) => {}
+            Err(e)
+                if e.to_string().contains("not found") || e.to_string().contains("not visible") =>
+            {
+                tab.elements = observe::observe(&tab.page, config_viewport_only)
+                    .await
+                    .map_err(err)?;
+                let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+                tab.page
+                    .fill(&resolved2.selector, &req.0.text)
+                    .await
+                    .map_err(err)?;
+            }
+            Err(e) => return Err(err(e)),
+        }
+
         wait_for_stable(&tab.page).await.map_err(err)?;
-        tab.elements.clear(); // Input often triggers DOM changes
-        text_ok(format!("Filled {} with \"{}\"", desc, req.0.text))
+        tab.elements.clear();
+        text_ok(format!("Filled {} with \"{}\"", resolved.desc, req.0.text))
     }
 
     #[tool(
-        description = "Select dropdown option. Target can be index or text. Value matches option value or visible text."
+        description = "Select dropdown option. Target: index, text:Label, css:select, id:dropdown. Value matches option value or visible text."
     )]
     async fn select(&self, req: Parameters<SelectRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
@@ -614,16 +706,15 @@ impl EokaServer {
         let config_viewport_only = state.config.viewport_only;
         let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
-        if tab.elements.is_empty() {
+        let target = Target::parse(&req.0.target);
+        if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             tab.elements = observe::observe(&tab.page, config_viewport_only)
                 .await
                 .map_err(err)?;
         }
 
-        let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let selector = tab.elements[idx].selector.clone();
-
-        let arg = serde_json::json!({ "sel": selector, "val": req.0.value });
+        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+        let arg = serde_json::json!({ "sel": resolved.selector, "val": req.0.value });
         let js = format!(
             r#"(() => {{
                 const arg = {arg};
@@ -640,17 +731,17 @@ impl EokaServer {
         let selected: bool = tab.page.evaluate(&js).await.map_err(err)?;
         if !selected {
             return Err(ErrorData::invalid_params(
-                format!("Option \"{}\" not found in element [{}]", req.0.value, idx),
+                format!("Option \"{}\" not found in {}", req.0.value, resolved.desc),
                 None::<Value>,
             ));
         }
         wait_for_stable(&tab.page).await.map_err(err)?;
         tab.elements.clear();
-        text_ok(format!("Selected \"{}\" in element [{}]", req.0.value, idx))
+        text_ok(format!("Selected \"{}\" in {}", req.0.value, resolved.desc))
     }
 
     #[tool(
-        description = "Hover over element to trigger tooltips, menus, or hover states. Target can be index or text."
+        description = "Hover over element to trigger tooltips, menus, or hover states. Target: index, text:Label, css:selector, etc."
     )]
     async fn hover(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
@@ -658,28 +749,22 @@ impl EokaServer {
         let config_viewport_only = state.config.viewport_only;
         let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
 
-        if tab.elements.is_empty() {
+        let target = Target::parse(&req.0.target);
+        if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             tab.elements = observe::observe(&tab.page, config_viewport_only)
                 .await
                 .map_err(err)?;
         }
 
-        let idx = resolve_target(&tab.elements, &req.0.target)?;
-        let desc = tab
-            .elements
-            .get(idx)
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| format!("[{}]", idx));
-        let el = &tab.elements[idx];
-
-        let cx = el.bbox.x + el.bbox.width / 2.0;
-        let cy = el.bbox.y + el.bbox.height / 2.0;
+        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+        let cx = resolved.bbox.x + resolved.bbox.width / 2.0;
+        let cy = resolved.bbox.y + resolved.bbox.height / 2.0;
         tab.page
             .session()
             .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
             .await
             .map_err(err)?;
-        text_ok(format!("Hovered {}", desc))
+        text_ok(format!("Hovered {}", resolved.desc))
     }
 
     #[tool(
@@ -694,7 +779,76 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "Scroll page. Target: 'up', 'down', 'top', 'bottom', or element index/text to scroll into view."
+        description = "Execute multiple actions in sequence. Reduces round trips. Actions: click, fill, type_key. Uses live targeting."
+    )]
+    async fn batch(&self, req: Parameters<BatchRequest>) -> Result<CallToolResult, ErrorData> {
+        let mut guard = self.state.lock().await;
+        let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab_mut().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        let mut results = Vec::new();
+
+        for (i, action) in req.0.actions.iter().enumerate() {
+            let result = match action.action.as_str() {
+                "click" => {
+                    let target = action.target.as_ref().ok_or_else(|| {
+                        ErrorData::invalid_params(
+                            format!("Action {} (click): missing target", i),
+                            None::<Value>,
+                        )
+                    })?;
+                    let resolved = resolve_target(&tab.page, &tab.elements, target).await?;
+                    tab.page.click(&resolved.selector).await.map_err(err)?;
+                    format!("click {}", resolved.desc)
+                }
+                "fill" => {
+                    let target = action.target.as_ref().ok_or_else(|| {
+                        ErrorData::invalid_params(
+                            format!("Action {} (fill): missing target", i),
+                            None::<Value>,
+                        )
+                    })?;
+                    let text = action.text.as_ref().ok_or_else(|| {
+                        ErrorData::invalid_params(
+                            format!("Action {} (fill): missing text", i),
+                            None::<Value>,
+                        )
+                    })?;
+                    let resolved = resolve_target(&tab.page, &tab.elements, target).await?;
+                    tab.page.fill(&resolved.selector, text).await.map_err(err)?;
+                    format!("fill {} with \"{}\"", resolved.desc, text)
+                }
+                "type_key" => {
+                    let key = action.text.as_ref().ok_or_else(|| {
+                        ErrorData::invalid_params(
+                            format!("Action {} (type_key): missing text (key name)", i),
+                            None::<Value>,
+                        )
+                    })?;
+                    tab.page.human().press_key(key).await.map_err(err)?;
+                    format!("press {}", key)
+                }
+                other => {
+                    return Err(ErrorData::invalid_params(
+                        format!("Action {} unknown action type: {}", i, other),
+                        None::<Value>,
+                    ));
+                }
+            };
+            results.push(result);
+        }
+
+        wait_for_stable(&tab.page).await.map_err(err)?;
+        tab.elements.clear();
+        text_ok(format!(
+            "Executed {} actions:\n{}",
+            results.len(),
+            results.join("\n")
+        ))
+    }
+
+    #[tool(
+        description = "Scroll page. Target: 'up', 'down', 'top', 'bottom', or element target (index, text:Label, css:selector) to scroll into view."
     )]
     async fn scroll(&self, req: Parameters<ScrollRequest>) -> Result<CallToolResult, ErrorData> {
         let mut guard = self.state.lock().await;
@@ -723,17 +877,17 @@ impl EokaServer {
                 .execute("window.scrollTo(0, document.body.scrollHeight)")
                 .await
                 .map_err(err)?,
-            target => {
-                if tab.elements.is_empty() {
+            target_str => {
+                let target = Target::parse(target_str);
+                if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
                     tab.elements = observe::observe(&tab.page, config_viewport_only)
                         .await
                         .map_err(err)?;
                 }
-                let idx = resolve_target(&tab.elements, target)?;
-                let selector = &tab.elements[idx].selector;
+                let resolved = resolve_target(&tab.page, &tab.elements, target_str).await?;
                 let js = format!(
                     "document.querySelector({})?.scrollIntoView({{behavior:'smooth',block:'center'}})",
-                    serde_json::to_string(selector).unwrap()
+                    serde_json::to_string(&resolved.selector).unwrap()
                 );
                 tab.page.execute(&js).await.map_err(err)?;
             }
@@ -978,24 +1132,14 @@ impl ServerHandler for EokaServer {
                 website_url: None,
             },
             instructions: Some(
-                "Browser automation with multi-tab support.\n\n\
-                 Workflow: navigate → screenshot (see page + elements) → click/fill by index or text.\n\n\
-                 Tab Management:\n\
-                 - list_tabs: see all open tabs (* marks current)\n\
-                 - new_tab: open a new tab\n\
-                 - switch_tab: switch to a tab by ID\n\
-                 - close_tab: close a tab\n\n\
-                 SPA Navigation:\n\
-                 - spa_info: detect router type (React Router, Next.js, Vue Router, etc.)\n\
-                 - spa_navigate: navigate SPA without page reload (faster)\n\
-                 - history_go: navigate browser history by delta (-1=back, 1=forward)\n\n\
-                 Tips:\n\
-                 - screenshot returns both image AND element list\n\
-                 - Actions auto-observe if needed\n\
-                 - Actions auto-wait for page stability\n\
-                 - Use spa_navigate for SPAs (no reload, much faster)\n\
-                 - Use cookies/set_cookie for session persistence\n\
-                 - Set EOKA_HEADLESS=false to see browser window"
+                "Browser automation.\n\n\
+                 TARGETING: Index (0) uses cache. Everything else is LIVE (resolved at action time):\n\
+                 Submit, text:Submit, placeholder:code, css:button, id:btn, role:button\n\n\
+                 OBSERVE: filter='inputs'|'buttons', max=N\n\
+                 BATCH: batch([{action:'fill',target:'placeholder:code',text:'X'},{action:'click',target:'Submit'}])\n\
+                 AUTO-RETRY: click/fill retry once on stale\n\
+                 SPA: spa_info, spa_navigate, history_go\n\
+                 Tabs: list_tabs, new_tab, switch_tab, close_tab"
                     .into(),
             ),
         }

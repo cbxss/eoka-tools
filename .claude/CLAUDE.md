@@ -7,6 +7,8 @@ AI agent interaction layer for eoka browser automation. Rust crate in eoka-tools
 - `src/lib.rs` — `AgentPage`, `Session`, `InteractiveElement`, all public API (click, fill, select, scroll, navigate, extract, etc.)
 - `src/observe.rs` — JS injection that enumerates interactive DOM elements, returns them as JSON
 - `src/annotate.rs` — Injects numbered red overlay labels, takes screenshot, cleans up
+- `src/target.rs` — Smart targeting with live resolution (text:, placeholder:, css:, id:, role:)
+- `src/spa/` — SPA router detection and navigation (React Router, Next.js, Vue Router, etc.)
 - `src/main.rs` — MCP server binary entry point
 - `src/mcp.rs` — MCP server implementation (multi-tab state management, tools, stdio transport)
 - `examples/demo.rs` — End-to-end demo (form fill, screenshot, extraction)
@@ -22,11 +24,44 @@ AI agent interaction layer for eoka browser automation. Rust crate in eoka-tools
 - `AgentPage` wraps an `eoka::Page` reference with a lifetime (for library use)
 - `Session` owns Browser + Page for simpler single-tab usage
 - MCP server manages multiple tabs with `BrowserState` (HashMap of tab ID → TabState)
-- Elements are index-based and ephemeral — indices are only valid until the next `observe()` call
 - `observe()` runs JS in the page to find all interactive elements, parses the JSON result into `Vec<InteractiveElement>`
 - Annotated screenshots inject a temporary DOM overlay, screenshot, then remove it
 - Viewport-only filtering is on by default to reduce token count
 - CSS selectors are auto-generated for each element and used internally for actions
+
+## Targeting (click, fill, hover, scroll)
+
+**Index (cached):** `0`, `15` — from observe/screenshot, can go stale
+
+**Live (resolved at action time):**
+- `text:Submit` or just `Submit` — find by visible text
+- `placeholder:Enter code` — find by placeholder
+- `css:form button` — CSS selector
+- `id:submit-btn` — find by ID
+- `role:button` — find by tag/role
+
+Non-numeric targets default to live text search. Indices need cached elements.
+
+## Observe filtering
+
+Reduce token usage with filtered observation:
+- `observe(filter: "inputs")` — only form elements
+- `observe(filter: "buttons")` — only buttons/links
+- `observe(max: 10)` — limit to 10 elements
+
+## Action batching
+
+Execute multiple actions in one call to reduce round trips:
+```json
+batch([
+  { "action": "fill", "target": "placeholder:code", "text": "ABC123" },
+  { "action": "click", "target": "text:Submit" }
+])
+```
+
+## Auto-retry
+
+`click` and `fill` automatically retry once on stale element errors (re-observe and re-resolve).
 
 ## MCP server
 
@@ -56,8 +91,13 @@ The server maintains `BrowserState` with:
 **Actions:**
 `click`, `fill`, `select`, `hover`, `type_key`, `scroll`
 
+**SPA Navigation:**
+- `spa_info` — detect router type (React Router, Next.js, Vue Router, etc.)
+- `spa_navigate` — navigate SPA without page reload
+- `history_go` — browser history navigation (delta: -1=back, 1=forward)
+
 **Other:**
-`extract`, `cookies`, `set_cookie`, `close`
+`extract`, `exec`, `cookies`, `set_cookie`, `close`
 
 ### Setup
 

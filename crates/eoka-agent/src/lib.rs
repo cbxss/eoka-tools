@@ -25,8 +25,10 @@
 pub mod annotate;
 pub mod observe;
 pub mod spa;
+pub mod target;
 
 pub use spa::{RouterType, SpaRouterInfo};
+pub use target::{BBox, LivePattern, Resolved, Target};
 
 use std::collections::HashSet;
 use std::fmt;
