@@ -727,10 +727,12 @@ async fn test_session_hover() {
 
     let mut agent = Session::launch().await.unwrap();
     agent
-        .goto(r#"data:text/html,
+        .goto(
+            r#"data:text/html,
             <style>.hover:hover { background: red; }</style>
             <button class="hover" onmouseenter="this.dataset.hovered='yes'">Hover Me</button>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 
@@ -738,7 +740,10 @@ async fn test_session_hover() {
     agent.hover(0).await.unwrap();
 
     // Check hover triggered
-    let hovered: String = agent.eval("document.querySelector('button').dataset.hovered || 'no'").await.unwrap();
+    let hovered: String = agent
+        .eval("document.querySelector('button').dataset.hovered || 'no'")
+        .await
+        .unwrap();
     assert_eq!(hovered, "yes");
 
     agent.close().await.unwrap();
@@ -753,15 +758,19 @@ async fn test_session_scroll_to() {
 
     let browser = Browser::launch().await.unwrap();
     let page = browser
-        .new_page(r#"data:text/html,
+        .new_page(
+            r#"data:text/html,
             <style>body{height:3000px;margin:0}</style>
             <button style="position:absolute;top:2000px">Far Button</button>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 
     // Use AgentPage with viewport_only=false
-    let config = ObserveConfig { viewport_only: false };
+    let config = ObserveConfig {
+        viewport_only: false,
+    };
     let mut agent = AgentPage::with_config(&page, config);
     agent.observe().await.unwrap();
 
@@ -787,8 +796,14 @@ async fn test_session_back_forward() {
 
     let mut agent = Session::launch().await.unwrap();
 
-    agent.goto(r#"data:text/html,<h1>Page A</h1>"#).await.unwrap();
-    agent.goto(r#"data:text/html,<h1>Page B</h1>"#).await.unwrap();
+    agent
+        .goto(r#"data:text/html,<h1>Page A</h1>"#)
+        .await
+        .unwrap();
+    agent
+        .goto(r#"data:text/html,<h1>Page B</h1>"#)
+        .await
+        .unwrap();
 
     agent.back().await.unwrap();
     assert!(agent.text().await.unwrap().contains("Page A"));
@@ -848,14 +863,16 @@ async fn test_session_press_key() {
 
     // Test page with keyboard event listener
     agent
-        .goto(r#"data:text/html,
+        .goto(
+            r#"data:text/html,
             <input id="inp"><div id="log"></div>
             <script>
                 document.addEventListener('keydown', e => {
                     document.getElementById('log').textContent += e.key + ',';
                 });
             </script>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
     agent.wait(100).await;
@@ -871,7 +888,10 @@ async fn test_session_press_key() {
     agent.wait(100).await;
 
     // Verify keys were captured
-    let log: String = agent.eval("document.getElementById('log').textContent").await.unwrap();
+    let log: String = agent
+        .eval("document.getElementById('log').textContent")
+        .await
+        .unwrap();
     assert!(log.contains("Tab"), "Expected Tab key, got: {}", log);
     assert!(log.contains("Escape"), "Expected Escape key, got: {}", log);
     assert!(log.contains("Enter"), "Expected Enter key, got: {}", log);
@@ -889,15 +909,27 @@ async fn test_session_eval_exec() {
     }
 
     let mut agent = Session::launch().await.unwrap();
-    agent.goto(r#"data:text/html,<div id="target">Hello</div>"#).await.unwrap();
+    agent
+        .goto(r#"data:text/html,<div id="target">Hello</div>"#)
+        .await
+        .unwrap();
 
     // eval returns value
-    let text: String = agent.eval("document.getElementById('target').textContent").await.unwrap();
+    let text: String = agent
+        .eval("document.getElementById('target').textContent")
+        .await
+        .unwrap();
     assert_eq!(text, "Hello");
 
     // exec modifies DOM
-    agent.exec("document.getElementById('target').textContent = 'World'").await.unwrap();
-    let text: String = agent.eval("document.getElementById('target').textContent").await.unwrap();
+    agent
+        .exec("document.getElementById('target').textContent = 'World'")
+        .await
+        .unwrap();
+    let text: String = agent
+        .eval("document.getElementById('target').textContent")
+        .await
+        .unwrap();
     assert_eq!(text, "World");
 
     agent.close().await.unwrap();
@@ -912,12 +944,14 @@ async fn test_agent_extract() {
 
     let browser = Browser::launch().await.unwrap();
     let page = browser
-        .new_page(r#"data:text/html,
+        .new_page(
+            r#"data:text/html,
             <ul>
                 <li data-price="10">Apple</li>
                 <li data-price="20">Banana</li>
             </ul>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 
@@ -964,13 +998,15 @@ async fn test_agent_options() {
 
     let browser = Browser::launch().await.unwrap();
     let page = browser
-        .new_page(r#"data:text/html,
+        .new_page(
+            r#"data:text/html,
             <select id="sel">
                 <option value="a">Alpha</option>
                 <option value="b">Beta</option>
                 <option value="c">Gamma</option>
             </select>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 
@@ -1000,7 +1036,10 @@ async fn test_click_out_of_bounds() {
     }
 
     let mut agent = Session::launch().await.unwrap();
-    agent.goto(r#"data:text/html,<button>OK</button>"#).await.unwrap();
+    agent
+        .goto(r#"data:text/html,<button>OK</button>"#)
+        .await
+        .unwrap();
     agent.observe().await.unwrap();
 
     let result = agent.click(999).await;
@@ -1019,7 +1058,10 @@ async fn test_fill_clears_existing() {
     }
 
     let mut agent = Session::launch().await.unwrap();
-    agent.goto(r#"data:text/html,<input value="old">"#).await.unwrap();
+    agent
+        .goto(r#"data:text/html,<input value="old">"#)
+        .await
+        .unwrap();
 
     agent.observe().await.unwrap();
     agent.fill(0, "new").await.unwrap();
@@ -1040,11 +1082,13 @@ async fn test_multiple_elements_same_text() {
 
     let browser = Browser::launch().await.unwrap();
     let page = browser
-        .new_page(r#"data:text/html,
+        .new_page(
+            r#"data:text/html,
             <button id="b1">Submit</button>
             <button id="b2">Submit</button>
             <button id="b3">Cancel</button>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 
@@ -1071,11 +1115,13 @@ async fn test_hidden_elements_filtered() {
 
     let mut agent = Session::launch().await.unwrap();
     agent
-        .goto(r#"data:text/html,
+        .goto(
+            r#"data:text/html,
             <button>Visible</button>
             <button style="display:none">Hidden</button>
             <button style="visibility:hidden">Invisible</button>
-        "#)
+        "#,
+        )
         .await
         .unwrap();
 

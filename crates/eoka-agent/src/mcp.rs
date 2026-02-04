@@ -194,24 +194,22 @@ impl BrowserState {
 
     /// Get or create the current tab, navigating to URL
     async fn ensure_tab(&mut self, url: &str) -> eoka::Result<&mut TabState> {
-        if self.current_tab_id.is_none() {
-            // Create first tab
-            let page = self.browser.new_page(url).await?;
-            let tab_id = page.target_id().to_string();
-            self.tabs.insert(tab_id.clone(), TabState::new(page));
-            self.current_tab_id = Some(tab_id);
-        } else {
+        let tab_id = if let Some(existing_id) = &self.current_tab_id {
             // Navigate current tab
-            let tab_id = self.current_tab_id.as_ref().unwrap();
-            if let Some(tab) = self.tabs.get_mut(tab_id) {
+            if let Some(tab) = self.tabs.get_mut(existing_id) {
                 tab.elements.clear();
                 tab.page.goto(url).await?;
             }
-        }
-        Ok(self
-            .tabs
-            .get_mut(self.current_tab_id.as_ref().unwrap())
-            .unwrap())
+            existing_id.clone()
+        } else {
+            // Create first tab
+            let page = self.browser.new_page(url).await?;
+            let new_id = page.target_id().to_string();
+            self.tabs.insert(new_id.clone(), TabState::new(page));
+            self.current_tab_id = Some(new_id.clone());
+            new_id
+        };
+        Ok(self.tabs.get_mut(&tab_id).unwrap())
     }
 
     /// Get current tab or error

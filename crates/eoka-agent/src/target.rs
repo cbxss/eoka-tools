@@ -235,7 +235,8 @@ mod tests {
             panic!("Expected Css");
         }
 
-        if let Target::Live(LivePattern::Placeholder(v)) = Target::parse("placeholder:Enter email") {
+        if let Target::Live(LivePattern::Placeholder(v)) = Target::parse("placeholder:Enter email")
+        {
             assert_eq!(v, "Enter email");
         } else {
             panic!("Expected Placeholder");
@@ -244,10 +245,22 @@ mod tests {
 
     #[test]
     fn as_js_args() {
-        assert_eq!(LivePattern::Text("foo".into()).as_js_args(), ("text", "foo"));
-        assert_eq!(LivePattern::Placeholder("bar".into()).as_js_args(), ("placeholder", "bar"));
-        assert_eq!(LivePattern::Css("div.x".into()).as_js_args(), ("css", "div.x"));
+        assert_eq!(
+            LivePattern::Text("foo".into()).as_js_args(),
+            ("text", "foo")
+        );
+        assert_eq!(
+            LivePattern::Placeholder("bar".into()).as_js_args(),
+            ("placeholder", "bar")
+        );
+        assert_eq!(
+            LivePattern::Css("div.x".into()).as_js_args(),
+            ("css", "div.x")
+        );
         assert_eq!(LivePattern::Id("myid".into()).as_js_args(), ("id", "myid"));
-        assert_eq!(LivePattern::Role("button".into()).as_js_args(), ("role", "button"));
+        assert_eq!(
+            LivePattern::Role("button".into()).as_js_args(),
+            ("role", "button")
+        );
     }
 }
