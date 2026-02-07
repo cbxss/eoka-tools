@@ -7,6 +7,7 @@ Browser automation toolkit built on [eoka](https://github.com/cbxss/eoka).
 | Crate | Description |
 |-------|-------------|
 | [**eoka-agent**](crates/eoka-agent) | AI agent interaction layer — MCP server, observe/act loop for LLMs |
+| [**eoka-email**](crates/eoka-email) | IMAP helpers — OTP codes, verification links, email polling |
 | [**eoka-runner**](crates/eoka-runner) | Config-based automation — YAML configs, CLI, scripted execution |
 
 ## Architecture

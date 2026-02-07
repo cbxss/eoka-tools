@@ -38,6 +38,7 @@ pub enum Action {
     WaitForHidden(WaitForAction),
     WaitForText(WaitForTextAction),
     WaitForUrl(WaitForUrlAction),
+    WaitForEmail(WaitForEmailAction),
 
     // Clicking
     Click(ClickAction),
@@ -95,6 +96,7 @@ impl Action {
             Self::WaitForHidden(_) => "wait_for_hidden",
             Self::WaitForText(_) => "wait_for_text",
             Self::WaitForUrl(_) => "wait_for_url",
+            Self::WaitForEmail(_) => "wait_for_email",
             Self::Click(_) => "click",
             Self::TryClick(_) => "try_click",
             Self::TryClickAny(_) => "try_click_any",
@@ -133,6 +135,7 @@ const ACTION_NAMES: &[&str] = &[
     "wait_for_hidden",
     "wait_for_text",
     "wait_for_url",
+    "wait_for_email",
     "click",
     "try_click",
     "try_click_any",
@@ -219,6 +222,7 @@ impl<'de> Visitor<'de> for ActionVisitor {
             "wait_for_hidden" => Action::WaitForHidden(map.next_value()?),
             "wait_for_text" => Action::WaitForText(map.next_value()?),
             "wait_for_url" => Action::WaitForUrl(map.next_value()?),
+            "wait_for_email" => Action::WaitForEmail(map.next_value()?),
             "click" => Action::Click(map.next_value()?),
             "try_click" => Action::TryClick(map.next_value()?),
             "try_click_any" => Action::TryClickAny(map.next_value()?),
@@ -294,6 +298,118 @@ pub struct WaitForUrlAction {
     pub contains: String,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImapConfigAction {
+    pub host: String,
+    #[serde(default = "ImapConfigAction::default_port")]
+    pub port: u16,
+    #[serde(default = "ImapConfigAction::default_tls")]
+    pub tls: bool,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "ImapConfigAction::default_mailbox")]
+    pub mailbox: String,
+}
+
+impl ImapConfigAction {
+    fn default_port() -> u16 { 993 }
+    fn default_tls() -> bool { true }
+    fn default_mailbox() -> String { "INBOX".into() }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailFilterAction {
+    pub from: Option<String>,
+    pub subject_contains: Option<String>,
+    #[serde(default = "EmailFilterAction::default_unseen_only")]
+    pub unseen_only: bool,
+    pub since_minutes: Option<i64>,
+    #[serde(default)]
+    pub mark_seen: bool,
+}
+
+impl EmailFilterAction {
+    fn default_unseen_only() -> bool { true }
+}
+
+impl Default for EmailFilterAction {
+    fn default() -> Self {
+        Self {
+            from: None,
+            subject_contains: None,
+            unseen_only: true,
+            since_minutes: None,
+            mark_seen: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WaitForEmailAction {
+    pub imap: ImapConfigAction,
+    #[serde(default)]
+    pub filter: EmailFilterAction,
+    #[serde(default = "WaitForEmailAction::default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "WaitForEmailAction::default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    #[serde(default)]
+    pub extract: EmailExtractAction,
+    #[serde(default)]
+    pub action: Option<EmailAction>,
+}
+
+impl WaitForEmailAction {
+    fn default_timeout_ms() -> u64 { 120_000 }
+    fn default_poll_interval_ms() -> u64 { 2_000 }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct EmailExtractAction {
+    pub link: Option<EmailLinkExtract>,
+    pub code: Option<EmailCodeExtract>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailLinkExtract {
+    pub allow_domains: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailCodeExtract {
+    pub regex: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailAction {
+    OpenLink(EmailOpenLinkAction),
+    Fill(EmailFillAction),
+}
+
+/// Empty config — accepts both `open_link: {}` and bare `open_link:` in YAML.
+#[derive(Debug, Clone, Default)]
+pub struct EmailOpenLinkAction;
+
+impl<'de> Deserialize<'de> for EmailOpenLinkAction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Accept null/unit (bare `open_link:`) or empty map (`open_link: {}`)
+        let v = serde_yaml::Value::deserialize(deserializer)?;
+        match v {
+            serde_yaml::Value::Null | serde_yaml::Value::Mapping(_) => Ok(Self),
+            _ => Err(serde::de::Error::custom("expected null or empty map for open_link")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailFillAction {
+    pub selector: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

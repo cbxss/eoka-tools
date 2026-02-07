@@ -1,9 +1,31 @@
-use crate::config::actions::{ScrollDirection, Target, TryClickAnyAction};
+use crate::config::actions::{
+    EmailAction, EmailExtractAction, EmailFilterAction, ImapConfigAction, ScrollDirection, Target,
+    TryClickAnyAction, WaitForEmailAction,
+};
 use crate::config::{Action, Config, Params};
 use crate::{Error, Result};
+use chrono::Duration as ChronoDuration;
 use eoka::Page;
+use eoka_email::{
+    extract_code, extract_first_link, AsyncImapClient, ImapConfig, LinkFilter, SearchCriteria,
+    WaitOptions,
+};
+use regex::Regex;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
+
+impl From<&ImapConfigAction> for ImapConfig {
+    fn from(a: &ImapConfigAction) -> Self {
+        Self {
+            host: a.host.clone(),
+            port: a.port,
+            tls: a.tls,
+            username: a.username.clone(),
+            password: a.password.clone(),
+            mailbox: a.mailbox.clone(),
+        }
+    }
+}
 
 /// Maximum include depth to prevent infinite loops.
 const MAX_INCLUDE_DEPTH: usize = 10;
@@ -129,6 +151,9 @@ pub async fn execute_with_context(
             debug!("wait_for_url: contains '{}'", a.contains);
             page.wait_for_url_contains(&a.contains, a.timeout_ms)
                 .await?;
+        }
+        Action::WaitForEmail(a) => {
+            wait_for_email(page, a).await?;
         }
         Action::Click(a) => {
             let selector = resolve_target(page, &a.target).await?;
@@ -315,6 +340,96 @@ pub async fn execute_with_context(
         }
     }
     Ok(())
+}
+
+async fn wait_for_email(page: &Page, action: &WaitForEmailAction) -> Result<()> {
+    let imap = ImapConfig::from(&action.imap);
+
+    let criteria = build_email_criteria(&action.filter);
+
+    let options = WaitOptions::new(
+        ChronoDuration::milliseconds(action.timeout_ms as i64),
+        ChronoDuration::milliseconds(action.poll_interval_ms as i64),
+    );
+
+    let mut client = AsyncImapClient::connect(&imap)
+        .await
+        .map_err(|e| Error::ActionFailed(e.to_string()))?;
+
+    let msg = client
+        .wait_for_message(&criteria, &options)
+        .await
+        .map_err(|e| Error::ActionFailed(e.to_string()))?;
+
+    let (link, code) = extract_email_values(&msg, &action.extract)?;
+
+    match &action.action {
+        Some(EmailAction::OpenLink(_)) => {
+            let link = link.ok_or_else(|| {
+                Error::ActionFailed("no link extracted from email".into())
+            })?;
+            info!("email link: {}", link);
+            page.goto(&link).await?;
+        }
+        Some(EmailAction::Fill(fill)) => {
+            let code = code.ok_or_else(|| {
+                Error::ActionFailed("no code extracted from email".into())
+            })?;
+            info!("email code: {}", code);
+            page.fill(&fill.selector, &code).await?;
+        }
+        None => {
+            if let Some(link) = link {
+                info!("email link: {}", link);
+            }
+            if let Some(code) = code {
+                info!("email code: {}", code);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_email_criteria(filter: &EmailFilterAction) -> SearchCriteria {
+    let mut criteria = SearchCriteria::new()
+        .unseen_only(filter.unseen_only)
+        .mark_seen(filter.mark_seen);
+
+    if let Some(ref from) = filter.from {
+        criteria = criteria.from(from.clone());
+    }
+    if let Some(ref subject) = filter.subject_contains {
+        criteria = criteria.subject_contains(subject.clone());
+    }
+    if let Some(minutes) = filter.since_minutes {
+        criteria = criteria.since_minutes(minutes);
+    }
+
+    criteria
+}
+
+fn extract_email_values(
+    msg: &eoka_email::EmailMessage,
+    extract: &EmailExtractAction,
+) -> Result<(Option<String>, Option<String>)> {
+    let mut link: Option<String> = None;
+    let mut code: Option<String> = None;
+
+    if let Some(ref link_cfg) = extract.link {
+        let filter = LinkFilter {
+            allow_domains: link_cfg.allow_domains.clone(),
+        };
+        link = extract_first_link(msg, &filter);
+    }
+
+    if let Some(ref code_cfg) = extract.code {
+        let re = Regex::new(&code_cfg.regex)
+            .map_err(|e| Error::ActionFailed(format!("invalid code regex: {}", e)))?;
+        code = extract_code(msg, &re);
+    }
+
+    Ok((link, code))
 }
 
 /// Resolve a Target to a CSS selector.

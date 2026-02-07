@@ -121,6 +121,7 @@ on_failure:
 - `wait_for_hidden: { selector, timeout_ms }`
 - `wait_for_text: { text, timeout_ms }`
 - `wait_for_url: { contains, timeout_ms }`
+- `wait_for_email: { ... }` — Wait for IMAP email, extract link/code
 
 ### Clicking
 - `click: { selector | text, human, scroll_into_view }`
@@ -161,6 +162,53 @@ on_failure:
 
 ### Composition
 - `include: { path, params? }` — Include another config's actions
+
+## wait_for_email
+
+Waits for an email via IMAP, extracts a link or code, and optionally acts on it.
+
+```yaml
+actions:
+  - wait_for_email:
+      imap:
+        host: "imap.gmail.com"
+        port: 993
+        tls: true
+        username: "${imap_user}"
+        password: "${imap_pass}"
+        mailbox: "INBOX"
+      filter:
+        from: "no-reply@example.com"
+        subject_contains: "Confirm your email"
+        unseen_only: true
+        since_minutes: 10
+        mark_seen: true
+      timeout_ms: 120000
+      poll_interval_ms: 2000
+      extract:
+        link:
+          allow_domains: ["example.com"]
+      action:
+        open_link: {}
+```
+
+```yaml
+actions:
+  - wait_for_email:
+      imap:
+        host: "imap.gmail.com"
+        username: "${imap_user}"
+        password: "${imap_pass}"
+      filter:
+        subject_contains: "Your verification code"
+        unseen_only: true
+      extract:
+        code:
+          regex: "(\\d{6})"
+      action:
+        fill:
+          selector: "input[name=code]"
+```
 
 ## Reusable Flows with Include
 
