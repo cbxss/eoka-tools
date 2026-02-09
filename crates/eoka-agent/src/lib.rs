@@ -23,6 +23,7 @@
 //! ```
 
 pub mod annotate;
+pub mod captcha;
 pub mod observe;
 pub mod spa;
 pub mod target;

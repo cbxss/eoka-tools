@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use eoka::{Browser, Page, StealthConfig, TabInfo};
-use eoka_agent::{annotate, observe, spa, target, InteractiveElement, ObserveConfig, Target};
+use eoka_agent::{annotate, captcha, observe, spa, target, InteractiveElement, ObserveConfig, Target};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,6 +146,28 @@ pub struct BatchRequest {
     pub actions: Vec<BatchAction>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SolveCaptchaRequest {
+    #[schemars(description = "Anti-captcha.com API key")]
+    pub api_key: String,
+    #[schemars(description = "Captcha type: 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'")]
+    pub captcha_type: String,
+    #[schemars(description = "Website/page URL")]
+    pub website_url: String,
+    #[schemars(description = "Site key for the captcha")]
+    pub website_key: String,
+    #[schemars(description = "Page action (for reCAPTCHA v3)")]
+    pub page_action: Option<String>,
+    #[schemars(description = "Minimum score (for reCAPTCHA v3, default 0.3)")]
+    pub min_score: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DetectCaptchaRequest {
+    #[schemars(description = "Auto-detect hCaptcha or reCAPTCHA on current page")]
+    pub auto_detect: Option<bool>,
+}
+
 // ---------------------------------------------------------------------------
 // Tab State
 // ---------------------------------------------------------------------------
@@ -171,6 +193,8 @@ struct BrowserState {
     tabs: HashMap<String, TabState>,
     current_tab_id: Option<String>,
     config: ObserveConfig,
+    /// Set to true when a transport error is detected; triggers relaunch on next call
+    unhealthy: bool,
 }
 
 impl BrowserState {
@@ -183,12 +207,14 @@ impl BrowserState {
                 ..Default::default()
             }
         };
+        eprintln!("[eoka-agent] launching browser (headless={})", headless);
         let browser = Browser::launch_with_config(config).await?;
         Ok(Self {
             browser,
             tabs: HashMap::new(),
             current_tab_id: None,
             config: ObserveConfig::default(),
+            unhealthy: false,
         })
     }
 
@@ -299,7 +325,11 @@ impl BrowserState {
 // ---------------------------------------------------------------------------
 
 fn err(e: impl std::fmt::Display) -> ErrorData {
-    ErrorData::internal_error(e.to_string(), None::<Value>)
+    let msg = e.to_string();
+    if is_transport_error(&e) {
+        eprintln!("[eoka-agent] transport error detected: {}", msg);
+    }
+    ErrorData::internal_error(msg, None::<Value>)
 }
 
 /// Check if an error indicates a broken connection that requires session reset
@@ -307,6 +337,7 @@ fn is_transport_error(e: &impl std::fmt::Display) -> bool {
     let msg = e.to_string().to_lowercase();
     msg.contains("websocket")
         || msg.contains("transport")
+        || msg.contains("timed out")
         || msg.contains("connection")
         || msg.contains("broken pipe")
         || msg.contains("reset by peer")
@@ -368,7 +399,7 @@ async fn resolve_target(
 
 /// Wait for page stability after an action
 async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
-    let _ = page.wait_for_network_idle(200, 2000).await;
+    let _ = page.wait_for_network_idle(200, 800).await;
     page.wait(50).await;
     Ok(())
 }
@@ -383,6 +414,13 @@ pub struct EokaServer {
 impl EokaServer {
     async fn ensure_browser(&self) -> Result<(), ErrorData> {
         let mut guard = self.state.lock().await;
+        // If browser is unhealthy (previous transport error), kill and relaunch
+        if guard.as_ref().map(|s| s.unhealthy).unwrap_or(false) {
+            eprintln!("[eoka-agent] browser unhealthy, relaunching...");
+            if let Some(state) = guard.take() {
+                let _ = state.close().await;
+            }
+        }
         if guard.is_none() {
             let state = BrowserState::new(self.headless).await.map_err(err)?;
             *guard = Some(state);
@@ -398,13 +436,18 @@ impl EokaServer {
         }
     }
 
-    /// Check error and reset state if it's a transport error.
+    /// Check error and mark state unhealthy if it's a transport error.
+    /// The unhealthy state will trigger a relaunch on the next ensure_browser() call.
     async fn check_transport_err<E: std::fmt::Display>(&self, e: E) -> ErrorData {
         let msg = e.to_string();
         if is_transport_error(&e) {
-            self.reset_state().await;
+            eprintln!("[eoka-agent] connection lost, marking unhealthy: {}", msg);
+            let mut guard = self.state.lock().await;
+            if let Some(state) = guard.as_mut() {
+                state.unhealthy = true;
+            }
             ErrorData::internal_error(
-                format!("{} (connection lost - retry to reconnect)", msg),
+                format!("{} (connection lost - will relaunch on next call)", msg),
                 None::<Value>,
             )
         } else {
@@ -618,6 +661,7 @@ impl EokaServer {
         description = "Click an element. Target: index (0), text:Submit, placeholder:Search, role:button, css:selector, id:my-btn, or plain text. Auto-retries once on stale element."
     )]
     async fn click(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
+        self.ensure_browser().await?;
         let mut guard = self.state.lock().await;
         let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
@@ -626,9 +670,10 @@ impl EokaServer {
         // Only auto-observe for cached targets (index or plain text)
         let target = Target::parse(&req.0.target);
         if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only)
-                .await
-                .map_err(err)?;
+            match observe::observe(&tab.page, config_viewport_only).await {
+                Ok(e) => tab.elements = e,
+                Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+            }
         }
 
         let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
@@ -639,17 +684,20 @@ impl EokaServer {
             Err(e)
                 if e.to_string().contains("not found") || e.to_string().contains("not visible") =>
             {
-                // Re-resolve and retry once
-                tab.elements = observe::observe(&tab.page, config_viewport_only)
-                    .await
-                    .map_err(err)?;
+                match observe::observe(&tab.page, config_viewport_only).await {
+                    Ok(e) => tab.elements = e,
+                    Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                }
                 let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
-                tab.page.click(&resolved2.selector).await.map_err(err)?;
+                if let Err(e) = tab.page.click(&resolved2.selector).await {
+                    drop(guard);
+                    return Err(self.check_transport_err(e).await);
+                }
             }
-            Err(e) => return Err(err(e)),
+            Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
         }
 
-        wait_for_stable(&tab.page).await.map_err(err)?;
+        let _ = wait_for_stable(&tab.page).await;
         tab.elements.clear();
         text_ok(format!("Clicked {}", resolved.desc))
     }
@@ -658,6 +706,7 @@ impl EokaServer {
         description = "Type text into an input. Target: index, text:Label, placeholder:Enter code, css:input, id:field. Auto-retries once on stale element. Clears existing text."
     )]
     async fn fill(&self, req: Parameters<FillRequest>) -> Result<CallToolResult, ErrorData> {
+        self.ensure_browser().await?;
         let mut guard = self.state.lock().await;
         let state = guard.as_mut().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let config_viewport_only = state.config.viewport_only;
@@ -665,9 +714,10 @@ impl EokaServer {
 
         let target = Target::parse(&req.0.target);
         if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
-            tab.elements = observe::observe(&tab.page, config_viewport_only)
-                .await
-                .map_err(err)?;
+            match observe::observe(&tab.page, config_viewport_only).await {
+                Ok(e) => tab.elements = e,
+                Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+            }
         }
 
         let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
@@ -678,19 +728,20 @@ impl EokaServer {
             Err(e)
                 if e.to_string().contains("not found") || e.to_string().contains("not visible") =>
             {
-                tab.elements = observe::observe(&tab.page, config_viewport_only)
-                    .await
-                    .map_err(err)?;
+                match observe::observe(&tab.page, config_viewport_only).await {
+                    Ok(e) => tab.elements = e,
+                    Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                }
                 let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
-                tab.page
-                    .fill(&resolved2.selector, &req.0.text)
-                    .await
-                    .map_err(err)?;
+                if let Err(e) = tab.page.fill(&resolved2.selector, &req.0.text).await {
+                    drop(guard);
+                    return Err(self.check_transport_err(e).await);
+                }
             }
-            Err(e) => return Err(err(e)),
+            Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
         }
 
-        wait_for_stable(&tab.page).await.map_err(err)?;
+        let _ = wait_for_stable(&tab.page).await;
         tab.elements.clear();
         text_ok(format!("Filled {} with \"{}\"", resolved.desc, req.0.text))
     }
@@ -963,21 +1014,29 @@ impl EokaServer {
         description = "Get all visible text on the page. Useful for reading content without elements."
     )]
     async fn page_text(&self) -> Result<CallToolResult, ErrorData> {
+        self.ensure_browser().await?;
         let guard = self.state.lock().await;
         let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
-        let text = tab.page.text().await.map_err(err)?;
-        text_ok(text)
+        match tab.page.text().await {
+            Ok(text) => text_ok(text),
+            Err(e) => { drop(guard); Err(self.check_transport_err(e).await) }
+        }
     }
 
     #[tool(description = "Get current URL and page title.")]
     async fn page_info(&self) -> Result<CallToolResult, ErrorData> {
+        self.ensure_browser().await?;
         let guard = self.state.lock().await;
         let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
-        let url = tab.page.url().await.map_err(err)?;
-        let title = tab.page.title().await.map_err(err)?;
-        text_ok(format!("URL: {}\nTitle: {}", url, title))
+        match tab.page.url().await {
+            Ok(url) => {
+                let title = tab.page.title().await.unwrap_or_default();
+                text_ok(format!("URL: {}\nTitle: {}", url, title))
+            }
+            Err(e) => { drop(guard); Err(self.check_transport_err(e).await) }
+        }
     }
 
     #[tool(description = "Go back in browser history.")]
@@ -1094,6 +1153,87 @@ impl EokaServer {
             .await
             .map_err(err)?;
         text_ok(format!("Cookie '{}' set", req.0.name))
+    }
+
+    #[tool(description = "Detect and solve CAPTCHAs (hCaptcha, reCAPTCHA) using anti-captcha.com API")]
+    async fn solve_captcha(
+        &self,
+        req: Parameters<SolveCaptchaRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let solver = captcha::AntiCaptcha::new(req.0.api_key);
+
+        let solution = match req.0.captcha_type.to_lowercase().as_str() {
+            "hcaptcha" => solver
+                .solve_hcaptcha(&req.0.website_url, &req.0.website_key)
+                .await,
+            "recaptcha_v2" => solver
+                .solve_recaptcha_v2(&req.0.website_url, &req.0.website_key)
+                .await,
+            "recaptcha_v3" => {
+                let page_action = req.0.page_action.unwrap_or_else(|| "submit".to_string());
+                let min_score = req.0.min_score.unwrap_or(0.3);
+                solver
+                    .solve_recaptcha_v3(
+                        &req.0.website_url,
+                        &req.0.website_key,
+                        &page_action,
+                        min_score,
+                    )
+                    .await
+            }
+            _ => return Err(err(&format!(
+                "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'",
+                req.0.captcha_type
+            ))),
+        };
+
+        match solution {
+            Ok(token) => {
+                text_ok(format!("Captcha solved! Token: {}...", &token[..token.len().min(50)]))
+            }
+            Err(e) => Err(err(&format!("Failed to solve captcha: {}", e))),
+        }
+    }
+
+    #[tool(description = "Detect hCaptcha or reCAPTCHA on the current page. Returns captcha type and sitekey.")]
+    async fn detect_captcha(
+        &self,
+        req: Parameters<DetectCaptchaRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        if req.0.auto_detect.unwrap_or(true) {
+            if let Some(info) = captcha::AntiCaptcha::detect_captcha_on_page(&tab.page).await {
+                text_ok(format!(
+                    "Captcha detected!\nType: {}\nSitekey: {}",
+                    info.captcha_type, info.sitekey
+                ))
+            } else {
+                text_ok("No captcha detected on current page".to_string())
+            }
+        } else {
+            text_ok("Captcha detection disabled".to_string())
+        }
+    }
+
+    #[tool(description = "Inject solved captcha token into page (for hCaptcha or reCAPTCHA v2)")]
+    async fn inject_captcha_token(
+        &self,
+        req: Parameters<JsRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+
+        // Execute the provided injection script
+        tab.page
+            .execute(&req.0.js)
+            .await
+            .map_err(err)?;
+
+        text_ok("Captcha token injected")
     }
 
     #[tool(description = "Close the browser. Call when done to free resources.")]
