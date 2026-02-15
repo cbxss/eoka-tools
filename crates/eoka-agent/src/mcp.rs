@@ -199,13 +199,13 @@ struct BrowserState {
 
 impl BrowserState {
     async fn new(headless: bool) -> eoka::Result<Self> {
-        let config = if headless {
-            StealthConfig::default()
-        } else {
-            StealthConfig {
-                headless: false,
-                ..Default::default()
-            }
+        let patch_binary = std::env::var("EOKA_PATCH_BINARY")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let config = StealthConfig {
+            headless,
+            patch_binary,
+            ..Default::default()
         };
         eprintln!("[eoka-agent] launching browser (headless={})", headless);
         let browser = Browser::launch_with_config(config).await?;

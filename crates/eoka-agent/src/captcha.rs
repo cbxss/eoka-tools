@@ -42,20 +42,20 @@ pub enum CaptchaTask {
 pub struct CreateTaskResponse {
     pub errorId: u32,
     pub errorCode: Option<String>,
-    pub taskId: Option<u32>,
+    pub taskId: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct GetResultRequest {
     pub clientKey: String,
-    pub taskId: u32,
+    pub taskId: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GetResultResponse {
     pub errorId: u32,
     pub errorCode: Option<String>,
-    pub ready: bool,
+    pub status: Option<String>,
     pub solution: Option<CaptchaSolution>,
 }
 
@@ -182,7 +182,7 @@ impl AntiCaptcha {
                 .into());
             }
 
-            if result_resp.ready {
+            if result_resp.status.as_deref() == Some("ready") {
                 if let Some(solution) = result_resp.solution {
                     return Ok(solution
                         .gRecaptchaResponse
