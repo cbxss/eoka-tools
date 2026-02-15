@@ -35,11 +35,3 @@ urlencoding = "2"
 [[example]]
 name = "demo"
 path = "examples/demo.rs"
-
-[[example]]
-name = "epstein_search"
-path = "examples/epstein_search.rs"
-
-[[example]]
-name = "epstein_debug"
-path = "examples/epstein_debug.rs"
