@@ -12,7 +12,8 @@ pub struct CaptchaConfig {
 
 #[derive(Debug, Serialize)]
 pub struct CreateTaskRequest {
-    pub clientKey: String,
+    #[serde(rename = "clientKey")]
+    pub client_key: String,
     pub task: CaptchaTask,
 }
 
@@ -21,50 +22,68 @@ pub struct CreateTaskRequest {
 pub enum CaptchaTask {
     #[serde(rename = "HCaptchaTaskProxyless")]
     HCaptchaProxyless {
-        websiteURL: String,
-        websiteKey: String,
+        #[serde(rename = "websiteURL")]
+        website_url: String,
+        #[serde(rename = "websiteKey")]
+        website_key: String,
     },
     #[serde(rename = "NoCaptchaTaskProxyless")]
     ReCaptchaV2Proxyless {
-        websiteURL: String,
-        websiteKey: String,
+        #[serde(rename = "websiteURL")]
+        website_url: String,
+        #[serde(rename = "websiteKey")]
+        website_key: String,
     },
     #[serde(rename = "RecaptchaV3TaskProxyless")]
     ReCaptchaV3Proxyless {
-        websiteURL: String,
-        websiteKey: String,
-        minScore: f32,
-        pageAction: String,
+        #[serde(rename = "websiteURL")]
+        website_url: String,
+        #[serde(rename = "websiteKey")]
+        website_key: String,
+        #[serde(rename = "minScore")]
+        min_score: f32,
+        #[serde(rename = "pageAction")]
+        page_action: String,
     },
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskResponse {
-    pub errorId: u32,
-    pub errorCode: Option<String>,
-    pub taskId: Option<u64>,
+    #[serde(rename = "errorId")]
+    pub error_id: u32,
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
+    #[serde(rename = "taskId")]
+    pub task_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct GetResultRequest {
-    pub clientKey: String,
-    pub taskId: u64,
+    #[serde(rename = "clientKey")]
+    pub client_key: String,
+    #[serde(rename = "taskId")]
+    pub task_id: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GetResultResponse {
-    pub errorId: u32,
-    pub errorCode: Option<String>,
+    #[serde(rename = "errorId")]
+    pub error_id: u32,
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
     pub status: Option<String>,
     pub solution: Option<CaptchaSolution>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CaptchaSolution {
-    pub gRecaptchaResponse: Option<String>,
-    pub gRecaptchaResponseWithoutSpaces: Option<String>,
+    #[serde(rename = "gRecaptchaResponse")]
+    pub g_recaptcha_response: Option<String>,
+    #[serde(rename = "gRecaptchaResponseWithoutSpaces")]
+    pub g_recaptcha_response_without_spaces: Option<String>,
     pub text: Option<String>,
-    pub expireTime: Option<i64>,
+    #[serde(rename = "expireTime")]
+    pub expire_time: Option<i64>,
 }
 
 pub struct AntiCaptcha {
@@ -87,8 +106,8 @@ impl AntiCaptcha {
         website_key: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
         self.solve_captcha(CaptchaTask::HCaptchaProxyless {
-            websiteURL: website_url.to_string(),
-            websiteKey: website_key.to_string(),
+            website_url: website_url.to_string(),
+            website_key: website_key.to_string(),
         })
         .await
     }
@@ -100,8 +119,8 @@ impl AntiCaptcha {
         website_key: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
         self.solve_captcha(CaptchaTask::ReCaptchaV2Proxyless {
-            websiteURL: website_url.to_string(),
-            websiteKey: website_key.to_string(),
+            website_url: website_url.to_string(),
+            website_key: website_key.to_string(),
         })
         .await
     }
@@ -115,10 +134,10 @@ impl AntiCaptcha {
         min_score: f32,
     ) -> Result<String, Box<dyn std::error::Error>> {
         self.solve_captcha(CaptchaTask::ReCaptchaV3Proxyless {
-            websiteURL: website_url.to_string(),
-            websiteKey: website_key.to_string(),
-            minScore: min_score,
-            pageAction: page_action.to_string(),
+            website_url: website_url.to_string(),
+            website_key: website_key.to_string(),
+            min_score,
+            page_action: page_action.to_string(),
         })
         .await
     }
@@ -130,7 +149,7 @@ impl AntiCaptcha {
     ) -> Result<String, Box<dyn std::error::Error>> {
         // Create task
         let create_req = CreateTaskRequest {
-            clientKey: self.api_key.clone(),
+            client_key: self.api_key.clone(),
             task,
         };
 
@@ -143,16 +162,16 @@ impl AntiCaptcha {
 
         let create_resp: CreateTaskResponse = response.json().await?;
 
-        if create_resp.errorId != 0 {
+        if create_resp.error_id != 0 {
             return Err(format!(
                 "Failed to create task: {} - {}",
-                create_resp.errorId,
-                create_resp.errorCode.unwrap_or_default()
+                create_resp.error_id,
+                create_resp.error_code.unwrap_or_default()
             )
             .into());
         }
 
-        let task_id = create_resp.taskId.ok_or("No task ID returned")?;
+        let task_id = create_resp.task_id.ok_or("No task ID returned")?;
 
         // Poll for result (max 5 minutes)
         let max_attempts = 300;
@@ -160,8 +179,8 @@ impl AntiCaptcha {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             let result_req = GetResultRequest {
-                clientKey: self.api_key.clone(),
-                taskId: task_id,
+                client_key: self.api_key.clone(),
+                task_id,
             };
 
             let response = self
@@ -173,11 +192,11 @@ impl AntiCaptcha {
 
             let result_resp: GetResultResponse = response.json().await?;
 
-            if result_resp.errorId != 0 {
+            if result_resp.error_id != 0 {
                 return Err(format!(
                     "Failed to get result: {} - {}",
-                    result_resp.errorId,
-                    result_resp.errorCode.unwrap_or_default()
+                    result_resp.error_id,
+                    result_resp.error_code.unwrap_or_default()
                 )
                 .into());
             }
@@ -185,8 +204,8 @@ impl AntiCaptcha {
             if result_resp.status.as_deref() == Some("ready") {
                 if let Some(solution) = result_resp.solution {
                     return Ok(solution
-                        .gRecaptchaResponse
-                        .or(solution.gRecaptchaResponseWithoutSpaces)
+                        .g_recaptcha_response
+                        .or(solution.g_recaptcha_response_without_spaces)
                         .or(solution.text)
                         .ok_or("No solution in response")?);
                 }
