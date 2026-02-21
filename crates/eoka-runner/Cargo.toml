@@ -17,8 +17,8 @@ name = "eoka-runner"
 path = "src/bin/main.rs"
 
 [dependencies]
-eoka = "0.3.4"
-eoka-email = { path = "../eoka-email", features = ["async"] }
+eoka = "0.3.9"
+eoka-email = { path = "../eoka-email", version = "0.1.0", features = ["async"] }
 chrono = { version = "0.4", features = ["clock"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

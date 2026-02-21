@@ -1,6 +1,6 @@
 [package]
 name = "eoka-agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "AI agent interaction layer for browser automation — MCP server, observe/act loop"
@@ -17,7 +17,7 @@ name = "eoka-agent"
 path = "src/main.rs"
 
 [dependencies]
-eoka = { path = "/home/cbass/Code/eoka" }
+eoka = "0.3.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

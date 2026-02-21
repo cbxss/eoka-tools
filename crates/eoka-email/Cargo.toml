@@ -5,6 +5,11 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/cbxss/eoka-tools"
 description = "IMAP helpers for email-based automation (OTP codes, verification links)"
+keywords = ["imap", "email", "automation", "otp", "browser"]
+categories = ["web-programming", "development-tools", "email"]
+documentation = "https://docs.rs/eoka-email"
+homepage = "https://github.com/cbxss/eoka-tools"
+authors = ["cbxss"]
 
 [dependencies]
 # NOTE: alpha — pin to exact version, API may change before 3.0 stable
