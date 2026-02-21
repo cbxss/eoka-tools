@@ -1,6 +1,6 @@
 [package]
 name = "eoka-runner"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Config-based browser automation — define actions in YAML, execute deterministically"
