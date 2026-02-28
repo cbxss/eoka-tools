@@ -5,14 +5,17 @@ use rmcp::model::ErrorCode;
 use serde_json::Value;
 use std::fmt;
 
-pub const ERR_NO_BROWSER: &str = "No browser open. Use navigate first.";
-pub const ERR_NO_TAB: &str = "No tab open. Use navigate first.";
-
 /// Typed error for MCP tool handlers.
 #[derive(Debug)]
 pub enum AgentError {
     Internal(String),
     InvalidInput(String),
+    NoBrowser,
+    NoTab,
+    Transport(String),
+    ElementNotFound(String),
+    Timeout(String),
+    NavigationFailed(String),
 }
 
 impl fmt::Display for AgentError {
@@ -20,6 +23,12 @@ impl fmt::Display for AgentError {
         match self {
             AgentError::Internal(msg) => write!(f, "{}", msg),
             AgentError::InvalidInput(msg) => write!(f, "{}", msg),
+            AgentError::NoBrowser => write!(f, "No browser open. Use navigate first."),
+            AgentError::NoTab => write!(f, "No tab open. Use navigate first."),
+            AgentError::Transport(msg) => write!(f, "{}", msg),
+            AgentError::ElementNotFound(msg) => write!(f, "{}", msg),
+            AgentError::Timeout(msg) => write!(f, "{}", msg),
+            AgentError::NavigationFailed(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -27,8 +36,14 @@ impl fmt::Display for AgentError {
 impl From<AgentError> for ErrorData {
     fn from(e: AgentError) -> Self {
         match e {
+            AgentError::NoBrowser | AgentError::NoTab | AgentError::InvalidInput(_) => {
+                ErrorData::invalid_params(e.to_string(), None::<Value>)
+            }
+            AgentError::ElementNotFound(msg) => ErrorData::invalid_params(msg, None::<Value>),
             AgentError::Internal(msg) => ErrorData::internal_error(msg, None::<Value>),
-            AgentError::InvalidInput(msg) => ErrorData::invalid_params(msg, None::<Value>),
+            AgentError::Transport(msg) => ErrorData::internal_error(msg, None::<Value>),
+            AgentError::Timeout(msg) => ErrorData::internal_error(msg, None::<Value>),
+            AgentError::NavigationFailed(msg) => ErrorData::internal_error(msg, None::<Value>),
         }
     }
 }
@@ -52,10 +67,11 @@ pub fn invalid(msg: impl Into<String>) -> ErrorData {
 pub fn is_transport_error_msg(msg: &str) -> bool {
     let m = msg.as_bytes();
     const NEEDLES: &[&str] = &[
-        "websocket",
-        "transport",
+        "websocket error",
+        "transport error",
         "timed out",
-        "connection",
+        "connection closed",
+        "connection reset",
         "broken pipe",
         "reset by peer",
     ];
@@ -71,13 +87,14 @@ mod tests {
 
     #[test]
     fn transport_error_positive() {
-        assert!(is_transport_error_msg("WebSocket error: connection reset"));
+        assert!(is_transport_error_msg("WebSocket Error: connection reset"));
         assert!(is_transport_error_msg("request timed out after 30s"));
         assert!(is_transport_error_msg("broken pipe"));
         assert!(is_transport_error_msg("BROKEN PIPE")); // case-insensitive
         assert!(is_transport_error_msg("reset by peer"));
         assert!(is_transport_error_msg("transport error occurred"));
-        assert!(is_transport_error_msg("connection refused"));
+        assert!(is_transport_error_msg("connection closed unexpectedly"));
+        assert!(is_transport_error_msg("connection reset by remote"));
     }
 
     #[test]
@@ -86,6 +103,10 @@ mod tests {
         assert!(!is_transport_error_msg("invalid selector"));
         assert!(!is_transport_error_msg(""));
         assert!(!is_transport_error_msg("No browser open"));
+        // These were false positives with the old broad needles:
+        assert!(!is_transport_error_msg("connection refused by target"));
+        assert!(!is_transport_error_msg("WebSocket connection to devtools"));
+        assert!(!is_transport_error_msg("transport layer initialized"));
     }
 
     #[test]
@@ -100,6 +121,48 @@ mod tests {
         let e: ErrorData = AgentError::InvalidInput("bad input".into()).into();
         assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(e.message.as_ref(), "bad input");
+    }
+
+    #[test]
+    fn agent_error_no_browser() {
+        let e: ErrorData = AgentError::NoBrowser.into();
+        assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
+        assert!(e.message.as_ref().contains("No browser"));
+    }
+
+    #[test]
+    fn agent_error_no_tab() {
+        let e: ErrorData = AgentError::NoTab.into();
+        assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
+        assert!(e.message.as_ref().contains("No tab"));
+    }
+
+    #[test]
+    fn agent_error_transport() {
+        let e: ErrorData = AgentError::Transport("conn lost".into()).into();
+        assert_eq!(e.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(e.message.as_ref(), "conn lost");
+    }
+
+    #[test]
+    fn agent_error_element_not_found() {
+        let e: ErrorData = AgentError::ElementNotFound("idx 5".into()).into();
+        assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(e.message.as_ref(), "idx 5");
+    }
+
+    #[test]
+    fn agent_error_timeout() {
+        let e: ErrorData = AgentError::Timeout("10s elapsed".into()).into();
+        assert_eq!(e.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(e.message.as_ref(), "10s elapsed");
+    }
+
+    #[test]
+    fn agent_error_navigation_failed() {
+        let e: ErrorData = AgentError::NavigationFailed("404".into()).into();
+        assert_eq!(e.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(e.message.as_ref(), "404");
     }
 
     #[test]

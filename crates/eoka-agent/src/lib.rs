@@ -5,8 +5,10 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
+//! #[allow(deprecated)]
 //! use eoka_agent::Session;
 //!
+//! # #[allow(deprecated)]
 //! # #[tokio::main]
 //! # async fn main() -> eoka::Result<()> {
 //! let mut session = Session::launch().await?;
@@ -85,8 +87,8 @@ impl InteractiveElement {
         role.hash(&mut hasher);
         input_type.hash(&mut hasher);
         placeholder.hash(&mut hasher);
-        // Include selector prefix (first 50 chars) for positional uniqueness
-        selector[..selector.len().min(50)].hash(&mut hasher);
+        // Include full selector for positional uniqueness
+        selector.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -702,6 +704,7 @@ impl<'a> AgentPage<'a> {
 
 /// A browser session that owns its browser and page.
 /// This is the primary API for most use cases.
+#[deprecated(note = "Use AgentPage or MCP server instead")]
 pub struct Session {
     browser: Browser,
     page: Page,
@@ -709,6 +712,7 @@ pub struct Session {
     config: ObserveConfig,
 }
 
+#[allow(deprecated)]
 impl Session {
     /// Launch a new browser and create an owned agent page.
     pub async fn launch() -> Result<Self> {
@@ -1263,5 +1267,21 @@ mod tests {
     fn test_observe_config_default() {
         let config = ObserveConfig::default();
         assert!(config.viewport_only);
+    }
+
+    #[test]
+    fn test_fingerprint_uses_full_selector() {
+        // Two selectors identical up to char 50 but different after
+        let base = "a".repeat(50);
+        let sel_a = format!("{}AAAA", base);
+        let sel_b = format!("{}BBBB", base);
+
+        let fp_a = InteractiveElement::compute_fingerprint("button", "X", None, None, None, &sel_a);
+        let fp_b = InteractiveElement::compute_fingerprint("button", "X", None, None, None, &sel_b);
+
+        assert_ne!(
+            fp_a, fp_b,
+            "selectors differing after char 50 should produce different fingerprints"
+        );
     }
 }
