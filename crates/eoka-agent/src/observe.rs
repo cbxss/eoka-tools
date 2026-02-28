@@ -22,180 +22,12 @@ struct RawElement {
 }
 
 /// JavaScript that enumerates all interactive elements on the page.
-const OBSERVE_JS: &str = r#"
-(() => {
-    const INTERACTIVE = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [onclick], [contenteditable="true"]';
-    const results = [];
-    const seen = new Set();
+const OBSERVE_JS: &str = include_str!("js/observe.js");
 
-    // Helper: find associated label for a form element
-    function getLabel(el) {
-        if (el.id) {
-            const label = document.querySelector('label[for=' + JSON.stringify(el.id) + ']');
-            if (label) return label.textContent.trim();
-        }
-        const parentLabel = el.closest('label');
-        if (parentLabel) {
-            const clone = parentLabel.cloneNode(true);
-            clone.querySelectorAll('input, select, textarea').forEach(c => c.remove());
-            const t = clone.textContent.trim();
-            if (t) return t;
-        }
-        const labelledBy = el.getAttribute('aria-labelledby');
-        if (labelledBy) {
-            const lbl = document.getElementById(labelledBy);
-            if (lbl) return lbl.textContent.trim();
-        }
-        const prev = el.previousElementSibling;
-        if (prev && prev.tagName === 'LABEL') return prev.textContent.trim();
-        return '';
-    }
-
-    // Collect elements from a root (document or shadowRoot)
-    function collect(root) {
-        const all = root.querySelectorAll('*');
-        for (const node of all) {
-            if (node.matches(INTERACTIVE)) processElement(node);
-            if (node.shadowRoot) collect(node.shadowRoot);
-        }
-    }
-
-    function processElement(el) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 2 || rect.height < 2) return;
-
-        const style = getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) return;
-
-        // Viewport filtering
-        if (typeof __eoka_viewport_only !== 'undefined' && __eoka_viewport_only) {
-            if (rect.bottom < 0 || rect.top > window.innerHeight) return;
-            if (rect.right < 0 || rect.left > window.innerWidth) return;
-        }
-
-        const tag = el.tagName.toLowerCase();
-        const isFormEl = tag === 'input' || tag === 'select' || tag === 'textarea';
-        const inputType = el.getAttribute('type') || '';
-
-        // Get meaningful text
-        let text = el.getAttribute('aria-label') || '';
-        if (!text) {
-            if (tag === 'a' || tag === 'button') {
-                text = (el.textContent || '').trim().replace(/\s+/g, ' ');
-                if (text.length > 80) text = '';
-            } else if (isFormEl) {
-                const label = getLabel(el);
-                if (label) {
-                    text = label;
-                } else if (tag === 'select') {
-                    // Show selected option text
-                    const opt = el.options && el.options[el.selectedIndex];
-                    text = opt ? opt.text : '';
-                }
-            } else {
-                text = (el.textContent || '').trim().replace(/\s+/g, ' ');
-            }
-        }
-        if (text.length > 60) text = text.substring(0, 57) + '...';
-
-        const placeholder = el.getAttribute('placeholder') || '';
-        const ariaLabel = el.getAttribute('aria-label') || '';
-        const title = el.getAttribute('title') || '';
-        if (!text && !placeholder && !ariaLabel && !title && !isFormEl) {
-            return;
-        }
-
-        // Skip redundant nested wrappers
-        if ((tag === 'a' || tag === 'button') && el.children.length === 1) {
-            const child = el.children[0];
-            const childTag = child.tagName.toLowerCase();
-            if (childTag === 'button' || childTag === 'input') return;
-        }
-
-        // Build unique selector
-        let selector;
-        if (el.id) {
-            selector = '#' + CSS.escape(el.id);
-        } else if (isFormEl && el.name) {
-            if ((inputType === 'radio' || inputType === 'checkbox') && el.value) {
-                selector = tag + '[name=' + JSON.stringify(el.name) + '][value=' + JSON.stringify(el.value) + ']';
-            } else {
-                selector = tag + '[name=' + JSON.stringify(el.name) + ']';
-            }
-        } else if (ariaLabel) {
-            selector = tag + '[aria-label=' + JSON.stringify(ariaLabel) + ']';
-        } else if (tag === 'input' && inputType && placeholder) {
-            selector = 'input[type=' + JSON.stringify(inputType) + '][placeholder=' + JSON.stringify(placeholder) + ']';
-        } else if (el.getAttribute('data-testid')) {
-            selector = '[data-testid=' + JSON.stringify(el.getAttribute('data-testid')) + ']';
-        } else {
-            const parts = [];
-            let node = el;
-            while (node && node !== document.body && parts.length < 4) {
-                let s = node.tagName.toLowerCase();
-                if (node.id) {
-                    parts.unshift('#' + CSS.escape(node.id));
-                    break;
-                }
-                const parent = node.parentElement;
-                if (parent) {
-                    const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName);
-                    if (siblings.length > 1) {
-                        s += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-                    }
-                }
-                parts.unshift(s);
-                node = parent;
-            }
-            selector = parts.join(' > ');
-        }
-
-        if (seen.has(selector)) return;
-        seen.add(selector);
-
-        // Get current value for form elements
-        let value = '';
-        if (isFormEl && inputType !== 'password') {
-            if (tag === 'select') {
-                const opt = el.options && el.options[el.selectedIndex];
-                value = opt ? opt.value : '';
-            } else {
-                value = (el.value || '').trim();
-            }
-            if (value.length > 40) value = value.substring(0, 37) + '...';
-        }
-
-        results.push({
-            tag,
-            role: el.getAttribute('role') || null,
-            text,
-            placeholder: placeholder || null,
-            input_type: tag === 'input' ? (inputType || 'text') : (tag === 'select' ? 'select' : null),
-            selector,
-            checked: !!el.checked,
-            value,
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-        });
-    }
-
-    collect(document);
-    return JSON.stringify(results);
-})()
-"#;
-
-/// Run the observe script and return parsed interactive elements.
-pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<InteractiveElement>> {
-    let js = format!(
-        "var __eoka_viewport_only = {}; {}",
-        viewport_only, OBSERVE_JS
-    );
-    let json_str: String = page.evaluate(&js).await?;
-
-    let raw: Vec<RawElement> = serde_json::from_str(&json_str)
-        .map_err(|e| eoka::Error::CdpSimple(format!("observe parse error: {}", e)))?;
+/// Parse raw JSON from observe script into InteractiveElement list.
+pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<InteractiveElement>, String> {
+    let raw: Vec<RawElement> =
+        serde_json::from_str(json_str).map_err(|e| format!("observe parse error: {}", e))?;
 
     Ok(raw
         .into_iter()
@@ -233,4 +65,115 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
             }
         })
         .collect())
+}
+
+/// Run the observe script and return parsed interactive elements.
+pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<InteractiveElement>> {
+    let js = format!(
+        "var __eoka_viewport_only = {}; {}",
+        viewport_only, OBSERVE_JS
+    );
+    let json_str: String = page.evaluate(&js).await?;
+
+    parse_raw_elements(&json_str).map_err(eoka::Error::CdpSimple)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_single_button() {
+        let json = r#"[{
+            "tag": "button",
+            "role": null,
+            "text": "Submit",
+            "placeholder": null,
+            "input_type": null,
+            "selector": "button.primary",
+            "checked": false,
+            "value": "",
+            "x": 100,
+            "y": 200,
+            "width": 80,
+            "height": 30
+        }]"#;
+        let elements = parse_raw_elements(json).unwrap();
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].index, 0);
+        assert_eq!(elements[0].tag, "button");
+        assert_eq!(elements[0].text, "Submit");
+        assert_eq!(elements[0].selector, "button.primary");
+        assert!(elements[0].value.is_none());
+    }
+
+    #[test]
+    fn parse_input_with_value() {
+        let json = r#"[{
+            "tag": "input",
+            "role": null,
+            "text": "Email",
+            "placeholder": "Enter email",
+            "input_type": "email",
+            "selector": "input[name=\"email\"]",
+            "checked": false,
+            "value": "user@test.com",
+            "x": 10,
+            "y": 20,
+            "width": 200,
+            "height": 40
+        }]"#;
+        let elements = parse_raw_elements(json).unwrap();
+        assert_eq!(elements[0].input_type.as_deref(), Some("email"));
+        assert_eq!(elements[0].placeholder.as_deref(), Some("Enter email"));
+        assert_eq!(elements[0].value.as_deref(), Some("user@test.com"));
+    }
+
+    #[test]
+    fn sequential_index_assignment() {
+        let json = r#"[
+            {"tag":"a","role":null,"text":"Link 1","placeholder":null,"input_type":null,"selector":"a:nth-of-type(1)","checked":false,"value":"","x":0,"y":0,"width":50,"height":20},
+            {"tag":"a","role":null,"text":"Link 2","placeholder":null,"input_type":null,"selector":"a:nth-of-type(2)","checked":false,"value":"","x":0,"y":30,"width":50,"height":20},
+            {"tag":"button","role":null,"text":"Click","placeholder":null,"input_type":null,"selector":"button","checked":false,"value":"","x":0,"y":60,"width":50,"height":20}
+        ]"#;
+        let elements = parse_raw_elements(json).unwrap();
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].index, 0);
+        assert_eq!(elements[1].index, 1);
+        assert_eq!(elements[2].index, 2);
+    }
+
+    #[test]
+    fn empty_array() {
+        let elements = parse_raw_elements("[]").unwrap();
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn invalid_json() {
+        assert!(parse_raw_elements("not json").is_err());
+        assert!(parse_raw_elements("{\"bad\": true}").is_err());
+    }
+
+    #[test]
+    fn fingerprint_consistency() {
+        let json = r#"[{
+            "tag": "button",
+            "role": null,
+            "text": "Submit",
+            "placeholder": null,
+            "input_type": null,
+            "selector": "button.primary",
+            "checked": false,
+            "value": "",
+            "x": 100,
+            "y": 200,
+            "width": 80,
+            "height": 30
+        }]"#;
+        let e1 = parse_raw_elements(json).unwrap();
+        let e2 = parse_raw_elements(json).unwrap();
+        assert_eq!(e1[0].fingerprint, e2[0].fingerprint);
+        assert_ne!(e1[0].fingerprint, 0);
+    }
 }

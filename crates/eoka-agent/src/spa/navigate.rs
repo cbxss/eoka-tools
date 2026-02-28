@@ -6,80 +6,10 @@ use super::RouterType;
 
 /// JavaScript template for SPA navigation.
 /// Takes router_type and path as parameters.
-const NAVIGATE_JS: &str = r#"
-((routerType, path) => {
-  const result = { success: false, error: null, newPath: null };
-
-  try {
-    switch (routerType) {
-      case 'nextjs':
-        // Next.js - use next/router
-        if (window.next?.router?.push) {
-          window.next.router.push(path);
-          result.success = true;
-          result.newPath = path;
-        } else {
-          // Fallback for App Router or when router not available
-          history.pushState({}, '', path);
-          window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-          result.success = true;
-          result.newPath = path;
-        }
-        break;
-
-      case 'vue-router':
-        // Vue Router
-        const vueApp = document.querySelector('[data-v-app]')?.__vue_app__;
-        const router = vueApp?.config?.globalProperties?.$router;
-        if (router) {
-          router.push(path);
-          result.success = true;
-          result.newPath = path;
-        } else {
-          // Vue 2 fallback
-          const vue2Router = document.querySelector('#app')?.__vue__?.$router;
-          if (vue2Router) {
-            vue2Router.push(path);
-            result.success = true;
-            result.newPath = path;
-          } else {
-            result.error = 'Vue router not found';
-          }
-        }
-        break;
-
-      case 'react-router':
-      case 'angular-router':
-      case 'history-api':
-      default:
-        // Use History API + popstate event (works for most SPAs)
-        history.pushState({}, '', path);
-        window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-        result.success = true;
-        result.newPath = location.pathname;
-        break;
-    }
-  } catch (e) {
-    result.error = e.message || String(e);
-  }
-
-  return JSON.stringify(result);
-})
-"#;
+const NAVIGATE_JS: &str = include_str!("../js/spa_navigate.js");
 
 /// JavaScript for history navigation.
-const HISTORY_GO_JS: &str = r#"
-((delta) => {
-  const result = { success: false, error: null };
-  try {
-    history.go(delta);
-    result.success = true;
-  } catch (e) {
-    result.error = e.message || String(e);
-  }
-  return JSON.stringify(result);
-})
-"#;
+const HISTORY_GO_JS: &str = include_str!("../js/spa_history.js");
 
 /// Result from navigation JavaScript.
 #[derive(Debug, serde::Deserialize)]
