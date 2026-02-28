@@ -360,8 +360,8 @@ impl BrowserState {
             (None, None, None)
         };
 
-        if proxy.is_some() {
-            eprintln!("[eoka-agent] using proxy: {}", proxy.as_ref().unwrap());
+        if let Some(ref p) = proxy {
+            eprintln!("[eoka-agent] using proxy: {}", p);
         }
 
         // When using a proxy, increase CDP timeout (proxies are slower)

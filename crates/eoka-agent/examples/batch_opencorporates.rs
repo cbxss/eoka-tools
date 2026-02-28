@@ -1,6 +1,6 @@
 /// Batch OpenCorporates shell company lookup with CAPTCHA solving
 /// Usage: cargo run --example batch_opencorporates --release
-use eoka::{Browser, StealthConfig};
+use eoka::Browser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
