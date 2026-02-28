@@ -1,6 +1,5 @@
 /// Batch OpenCorporates shell company lookup with CAPTCHA solving
 /// Usage: cargo run --example batch_opencorporates --release
-
 use eoka::{Browser, StealthConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -259,15 +258,16 @@ async fn search_entity(
                 println!("   ✓ CAPTCHA solved");
 
                 // Inject and submit
-                let _: serde_json::Value = page.evaluate(&format!(
-                    r#"
+                let _: serde_json::Value = page
+                    .evaluate(&format!(
+                        r#"
                     document.querySelector('[name="h-captcha-response"]').value = '{}';
                     document.querySelector('form').submit();
                     "#,
-                    token
-                ))
-                .await
-                .unwrap_or(serde_json::Value::Null);
+                        token
+                    ))
+                    .await
+                    .unwrap_or(serde_json::Value::Null);
 
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -290,4 +290,3 @@ async fn search_entity(
 
     Ok(result)
 }
-

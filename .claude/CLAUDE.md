@@ -96,8 +96,12 @@ The server maintains `BrowserState` with:
 - `spa_navigate` — navigate SPA without page reload
 - `history_go` — browser history navigation (delta: -1=back, 1=forward)
 
+**JavaScript Execution:**
+- `extract` — run JS, return result as JSON. `js=` inline or `file=` absolute path
+- `exec` — run JS for side effects, no return. `js=` inline or `file=` absolute path
+
 **Other:**
-`extract`, `exec`, `cookies`, `set_cookie`, `close`
+`cookies`, `set_cookie`, `close`
 
 ### Setup
 

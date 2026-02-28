@@ -143,10 +143,7 @@ impl AntiCaptcha {
     }
 
     /// Generic captcha solver
-    async fn solve_captcha(
-        &self,
-        task: CaptchaTask,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    async fn solve_captcha(&self, task: CaptchaTask) -> Result<String, Box<dyn std::error::Error>> {
         // Create task
         let create_req = CreateTaskRequest {
             client_key: self.api_key.clone(),
@@ -214,7 +211,11 @@ impl AntiCaptcha {
 
             // Log progress occasionally
             if attempt % 10 == 0 && attempt > 0 {
-                eprintln!("Captcha solving in progress... ({}/{}s)", attempt / 2, max_attempts / 2);
+                eprintln!(
+                    "Captcha solving in progress... ({}/{}s)",
+                    attempt / 2,
+                    max_attempts / 2
+                );
             }
         }
 
@@ -222,9 +223,7 @@ impl AntiCaptcha {
     }
 
     /// Detect captcha on page and return sitekey
-    pub async fn detect_captcha_on_page(
-        page: &eoka::Page,
-    ) -> Option<CaptchaInfo> {
+    pub async fn detect_captcha_on_page(page: &eoka::Page) -> Option<CaptchaInfo> {
         // Check for hCaptcha
         let hcaptcha_script = r#"
             (function() {

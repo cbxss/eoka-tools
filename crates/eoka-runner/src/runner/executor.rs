@@ -365,16 +365,14 @@ async fn wait_for_email(page: &Page, action: &WaitForEmailAction) -> Result<()> 
 
     match &action.action {
         Some(EmailAction::OpenLink(_)) => {
-            let link = link.ok_or_else(|| {
-                Error::ActionFailed("no link extracted from email".into())
-            })?;
+            let link =
+                link.ok_or_else(|| Error::ActionFailed("no link extracted from email".into()))?;
             info!("email link: {}", link);
             page.goto(&link).await?;
         }
         Some(EmailAction::Fill(fill)) => {
-            let code = code.ok_or_else(|| {
-                Error::ActionFailed("no code extracted from email".into())
-            })?;
+            let code =
+                code.ok_or_else(|| Error::ActionFailed("no code extracted from email".into()))?;
             info!("email code: {}", code);
             page.fill(&fill.selector, &code).await?;
         }

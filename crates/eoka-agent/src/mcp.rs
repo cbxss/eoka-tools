@@ -11,7 +11,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use eoka::{Browser, Page, StealthConfig, TabInfo};
-use eoka_agent::{annotate, captcha, observe, spa, target, InteractiveElement, ObserveConfig, Target};
+use eoka_agent::{
+    annotate, captcha, observe, spa, target, InteractiveElement, ObserveConfig, Target,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,6 +30,14 @@ const ERR_NO_TAB: &str = "No tab open. Use navigate first.";
 pub struct NavigateRequest {
     #[schemars(description = "URL to navigate to")]
     pub url: String,
+    #[schemars(
+        description = "Extra HTTP request headers (e.g. {\"x-middleware-subrequest\": \"middleware\"} for CVE-2025-29927)"
+    )]
+    pub headers: Option<HashMap<String, String>>,
+    #[schemars(description = "Override User-Agent string for this navigation")]
+    pub user_agent: Option<String>,
+    #[schemars(description = "Disable CSP enforcement before navigating (useful for XSS testing)")]
+    pub bypass_csp: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -78,8 +88,12 @@ pub struct FindTextRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct JsRequest {
-    #[schemars(description = "JavaScript code to execute")]
-    pub js: String,
+    #[schemars(description = "JavaScript code to execute (optional if 'file' is provided)")]
+    pub js: Option<String>,
+    #[schemars(
+        description = "Path to a .js file on disk to execute instead of inline code. Saves tokens on repeated/complex scripts."
+    )]
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -210,6 +224,54 @@ pub struct ClickInterceptNavRequest {
     pub allow_nav: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteCookieRequest {
+    #[schemars(description = "Cookie name to delete")]
+    pub name: String,
+    #[schemars(
+        description = "Cookie domain (e.g. '.example.com'). If omitted, uses current page domain."
+    )]
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptDialogRequest {
+    #[schemars(
+        description = "Text to type for prompt() dialogs (optional, ignored for alert/confirm)"
+    )]
+    pub prompt_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WaitForTextRequest {
+    #[schemars(description = "Text substring to wait for (case-insensitive)")]
+    pub text: String,
+    #[schemars(description = "Timeout in milliseconds (default: 10000)")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WaitNetworkIdleRequest {
+    #[schemars(description = "Milliseconds without requests to consider idle (default: 500)")]
+    pub idle_ms: Option<u64>,
+    #[schemars(description = "Maximum wait time in milliseconds (default: 10000)")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StorageKeyRequest {
+    #[schemars(description = "Storage key to read")]
+    pub key: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StorageSetRequest {
+    #[schemars(description = "Storage key")]
+    pub key: String,
+    #[schemars(description = "Value to store")]
+    pub value: String,
+}
+
 // ---------------------------------------------------------------------------
 // Tab State
 // ---------------------------------------------------------------------------
@@ -307,7 +369,9 @@ impl BrowserState {
 
         eprintln!(
             "[eoka-agent] launching browser (headless={}, cdp_timeout={}s, proxy={})",
-            headless, cdp_timeout, proxy.is_some()
+            headless,
+            cdp_timeout,
+            proxy.is_some()
         );
         let config = StealthConfig {
             headless,
@@ -453,6 +517,25 @@ fn is_transport_error(e: &impl std::fmt::Display) -> bool {
         || msg.contains("reset by peer")
 }
 
+/// Resolve JS code from a JsRequest: prefer `file` (read from disk), fall back to `js` inline.
+fn resolve_js(req: &JsRequest) -> Result<String, ErrorData> {
+    if let Some(path) = &req.file {
+        std::fs::read_to_string(path).map_err(|e| {
+            ErrorData::invalid_params(
+                format!("Failed to read JS file '{}': {}", path, e),
+                None::<Value>,
+            )
+        })
+    } else if let Some(js) = &req.js {
+        Ok(js.clone())
+    } else {
+        Err(ErrorData::invalid_params(
+            "Either 'js' or 'file' must be provided",
+            None::<Value>,
+        ))
+    }
+}
+
 fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::success(vec![Content::text(s.into())]))
 }
@@ -530,7 +613,10 @@ async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
     let max_wait = std::time::Duration::from_secs(10);
 
     loop {
-        eprintln!("[wait_for_stable] polling readyState (elapsed: {:?})...", start.elapsed());
+        eprintln!(
+            "[wait_for_stable] polling readyState (elapsed: {:?})...",
+            start.elapsed()
+        );
         let ready: String = page
             .evaluate_sync("document.readyState || 'loading'")
             .await
@@ -688,7 +774,10 @@ impl EokaServer {
     // Navigation
     // =========================================================================
 
-    #[tool(description = "Navigate to a URL. Launches browser on first call. Returns page title.")]
+    #[tool(
+        description = "Navigate to a URL. Launches browser on first call. Returns page title. \
+        Optional: headers (e.g. CVE-2025-29927 bypass), user_agent override, bypass_csp."
+    )]
     async fn navigate(
         &self,
         req: Parameters<NavigateRequest>,
@@ -708,8 +797,28 @@ impl EokaServer {
                 return Err(self.check_transport_err(e).await);
             }
         };
-        eprintln!("[navigate] goto done, waiting for stable...");
 
+        // Apply optional nav modifiers then navigate again with them active.
+        let has_extras = req.0.headers.is_some()
+            || req.0.user_agent.is_some()
+            || req.0.bypass_csp.unwrap_or(false);
+
+        if has_extras {
+            if let Some(ua) = &req.0.user_agent {
+                tab.page.set_user_agent(ua).await.map_err(err)?;
+            }
+            if req.0.bypass_csp.unwrap_or(false) {
+                tab.page.set_bypass_csp(true).await.map_err(err)?;
+            }
+            if let Some(h) = req.0.headers.clone() {
+                tab.page.set_extra_headers(h).await.map_err(err)?;
+            }
+            let nav_result = tab.page.goto(&req.0.url).await;
+            let _ = tab.page.clear_extra_headers().await;
+            nav_result.map_err(err)?;
+        }
+
+        eprintln!("[navigate] goto done, waiting for stable...");
         wait_for_stable(&tab.page).await.map_err(err)?;
         eprintln!("[navigate] stable, getting url...");
         let url = tab.page.url().await.map_err(err)?;
@@ -822,7 +931,10 @@ impl EokaServer {
         if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             match observe::observe(&tab.page, config_viewport_only).await {
                 Ok(e) => tab.elements = e,
-                Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                Err(e) => {
+                    drop(guard);
+                    return Err(self.check_transport_err(e).await);
+                }
             }
         }
 
@@ -836,7 +948,10 @@ impl EokaServer {
             {
                 match observe::observe(&tab.page, config_viewport_only).await {
                     Ok(e) => tab.elements = e,
-                    Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                    Err(e) => {
+                        drop(guard);
+                        return Err(self.check_transport_err(e).await);
+                    }
                 }
                 let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
                 if let Err(e) = tab.page.click(&resolved2.selector).await {
@@ -844,7 +959,10 @@ impl EokaServer {
                     return Err(self.check_transport_err(e).await);
                 }
             }
-            Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+            Err(e) => {
+                drop(guard);
+                return Err(self.check_transport_err(e).await);
+            }
         }
 
         let _ = wait_for_stable(&tab.page).await;
@@ -866,7 +984,10 @@ impl EokaServer {
         if matches!(target, Target::Index(_)) && tab.elements.is_empty() {
             match observe::observe(&tab.page, config_viewport_only).await {
                 Ok(e) => tab.elements = e,
-                Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                Err(e) => {
+                    drop(guard);
+                    return Err(self.check_transport_err(e).await);
+                }
             }
         }
 
@@ -880,7 +1001,10 @@ impl EokaServer {
             {
                 match observe::observe(&tab.page, config_viewport_only).await {
                     Ok(e) => tab.elements = e,
-                    Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+                    Err(e) => {
+                        drop(guard);
+                        return Err(self.check_transport_err(e).await);
+                    }
                 }
                 let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
                 if let Err(e) = tab.page.fill(&resolved2.selector, &req.0.text).await {
@@ -888,7 +1012,10 @@ impl EokaServer {
                     return Err(self.check_transport_err(e).await);
                 }
             }
-            Err(e) => { drop(guard); return Err(self.check_transport_err(e).await); }
+            Err(e) => {
+                drop(guard);
+                return Err(self.check_transport_err(e).await);
+            }
         }
 
         let _ = wait_for_stable(&tab.page).await;
@@ -1134,15 +1261,17 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "Run JavaScript and return result. Supports multi-statement code; the last expression's value is returned as JSON."
+        description = "Run JavaScript and return result. Supports multi-statement code; the last expression's value is returned as JSON. \
+        Pass js= for inline code, or file= with an absolute path to load from disk (saves tokens for repeated/complex scripts)."
     )]
     async fn extract(&self, req: Parameters<JsRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
         let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let code = resolve_js(&req.0)?;
         // Use eval() to handle multi-statement code - returns value of last expression
         // Safely escape the JS code as a JSON string to prevent injection
-        let escaped_js = serde_json::to_string(&req.0.js).map_err(err)?;
+        let escaped_js = serde_json::to_string(&code).map_err(err)?;
         let js = format!("JSON.stringify(eval({}))", escaped_js);
         // Use evaluate_sync (awaitPromise=false) so heavy React SPAs don't block
         // the JS thread waiting for microtask queue to drain (hydration, analytics, etc.)
@@ -1151,14 +1280,16 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "Execute JavaScript without expecting a return value. Use for side effects like clicking elements via JS."
+        description = "Execute JavaScript without expecting a return value. Use for side effects like clicking elements via JS. \
+        Pass js= for inline code, or file= with an absolute path to load from disk (saves tokens for repeated/complex scripts)."
     )]
     async fn exec(&self, req: Parameters<JsRequest>) -> Result<CallToolResult, ErrorData> {
         let guard = self.state.lock().await;
         let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let code = resolve_js(&req.0)?;
         // Use evaluate_sync to avoid blocking on heavy SPAs
-        let _: String = tab.page.evaluate_sync(&req.0.js).await.unwrap_or_default();
+        let _: String = tab.page.evaluate_sync(&code).await.unwrap_or_default();
         text_ok("Executed successfully")
     }
 
@@ -1173,7 +1304,8 @@ impl EokaServer {
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
 
         let method = serde_json::to_string(req.0.method.as_deref().unwrap_or("GET")).unwrap();
-        let redirect = serde_json::to_string(req.0.redirect.as_deref().unwrap_or("follow")).unwrap();
+        let redirect =
+            serde_json::to_string(req.0.redirect.as_deref().unwrap_or("follow")).unwrap();
         let max_body = req.0.max_body.unwrap_or(8192);
         let url = serde_json::to_string(&req.0.url).unwrap();
         let headers = match &req.0.headers {
@@ -1217,7 +1349,8 @@ impl EokaServer {
         let json_str: String = tab.page.evaluate(&js).await.map_err(err)?;
 
         // Parse and pretty-print for readability
-        let val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
+        let val: serde_json::Value =
+            serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
         let inner: serde_json::Value = if val.is_string() {
             serde_json::from_str(val.as_str().unwrap_or("{}")).unwrap_or(serde_json::Value::Null)
         } else {
@@ -1229,12 +1362,24 @@ impl EokaServer {
         }
 
         let status = inner.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-        let status_text = inner.get("statusText").and_then(|v| v.as_str()).unwrap_or("");
-        let final_url = inner.get("url").and_then(|v| v.as_str()).unwrap_or(&req.0.url);
-        let redirected = inner.get("redirected").and_then(|v| v.as_bool()).unwrap_or(false);
+        let status_text = inner
+            .get("statusText")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let final_url = inner
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&req.0.url);
+        let redirected = inner
+            .get("redirected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let resp_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let body_str = inner.get("body").and_then(|v| v.as_str()).unwrap_or("");
-        let truncated = inner.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+        let truncated = inner
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let mut out = format!("Status: {} {}\nURL: {}", status, status_text, final_url);
         if redirected {
@@ -1259,7 +1404,9 @@ impl EokaServer {
                 out.push_str(&format!("\n[truncated at {} bytes]", max_body));
             }
         } else if resp_type == "opaqueredirect" {
-            out.push_str("\nBody: (opaque redirect — server tried to redirect, body not accessible)");
+            out.push_str(
+                "\nBody: (opaque redirect — server tried to redirect, body not accessible)",
+            );
         }
 
         text_ok(out)
@@ -1275,7 +1422,10 @@ impl EokaServer {
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
         match tab.page.text().await {
             Ok(text) => text_ok(text),
-            Err(e) => { drop(guard); Err(self.check_transport_err(e).await) }
+            Err(e) => {
+                drop(guard);
+                Err(self.check_transport_err(e).await)
+            }
         }
     }
 
@@ -1290,7 +1440,10 @@ impl EokaServer {
                 let title = title_nonblocking(&tab.page).await;
                 text_ok(format!("URL: {}\nTitle: {}", url, title))
             }
-            Err(e) => { drop(guard); Err(self.check_transport_err(e).await) }
+            Err(e) => {
+                drop(guard);
+                Err(self.check_transport_err(e).await)
+            }
         }
     }
 
@@ -1410,7 +1563,9 @@ impl EokaServer {
         text_ok(format!("Cookie '{}' set", req.0.name))
     }
 
-    #[tool(description = "Detect and solve CAPTCHAs (hCaptcha, reCAPTCHA) using anti-captcha.com API")]
+    #[tool(
+        description = "Detect and solve CAPTCHAs (hCaptcha, reCAPTCHA) using anti-captcha.com API"
+    )]
     async fn solve_captcha(
         &self,
         req: Parameters<SolveCaptchaRequest>,
@@ -1418,12 +1573,16 @@ impl EokaServer {
         let solver = captcha::AntiCaptcha::new(req.0.api_key);
 
         let solution = match req.0.captcha_type.to_lowercase().as_str() {
-            "hcaptcha" => solver
-                .solve_hcaptcha(&req.0.website_url, &req.0.website_key)
-                .await,
-            "recaptcha_v2" => solver
-                .solve_recaptcha_v2(&req.0.website_url, &req.0.website_key)
-                .await,
+            "hcaptcha" => {
+                solver
+                    .solve_hcaptcha(&req.0.website_url, &req.0.website_key)
+                    .await
+            }
+            "recaptcha_v2" => {
+                solver
+                    .solve_recaptcha_v2(&req.0.website_url, &req.0.website_key)
+                    .await
+            }
             "recaptcha_v3" => {
                 let page_action = req.0.page_action.unwrap_or_else(|| "submit".to_string());
                 let min_score = req.0.min_score.unwrap_or(0.3);
@@ -1436,21 +1595,26 @@ impl EokaServer {
                     )
                     .await
             }
-            _ => return Err(err(&format!(
-                "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'",
-                req.0.captcha_type
-            ))),
+            _ => {
+                return Err(err(format!(
+                    "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'",
+                    req.0.captcha_type
+                )))
+            }
         };
 
         match solution {
-            Ok(token) => {
-                text_ok(format!("Captcha solved! Token: {}...", &token[..token.len().min(50)]))
-            }
-            Err(e) => Err(err(&format!("Failed to solve captcha: {}", e))),
+            Ok(token) => text_ok(format!(
+                "Captcha solved! Token: {}...",
+                &token[..token.len().min(50)]
+            )),
+            Err(e) => Err(err(format!("Failed to solve captcha: {}", e))),
         }
     }
 
-    #[tool(description = "Detect hCaptcha or reCAPTCHA on the current page. Returns captcha type and sitekey.")]
+    #[tool(
+        description = "Detect hCaptcha or reCAPTCHA on the current page. Returns captcha type and sitekey."
+    )]
     async fn detect_captcha(
         &self,
         req: Parameters<DetectCaptchaRequest>,
@@ -1482,11 +1646,9 @@ impl EokaServer {
         let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
         let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
 
+        let code = resolve_js(&req.0)?;
         // Execute the provided injection script
-        tab.page
-            .execute_sync(&req.0.js)
-            .await
-            .map_err(err)?;
+        tab.page.execute_sync(&code).await.map_err(err)?;
 
         text_ok("Captcha token injected")
     }
@@ -1581,10 +1743,7 @@ impl EokaServer {
             allow_nav = allow_nav_js
         );
 
-        tab.page
-            .execute_sync(&intercept_js)
-            .await
-            .map_err(err)?;
+        tab.page.execute_sync(&intercept_js).await.map_err(err)?;
 
         // Click the element
         match tab.page.click(&resolved.selector).await {
@@ -1599,8 +1758,7 @@ impl EokaServer {
                         return Err(self.check_transport_err(e).await);
                     }
                 }
-                let resolved2 =
-                    resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+                let resolved2 = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
                 if let Err(e) = tab.page.click(&resolved2.selector).await {
                     drop(guard);
                     return Err(self.check_transport_err(e).await);
@@ -1616,7 +1774,9 @@ impl EokaServer {
         tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
 
         // Read the intercepted navigation
-        let escaped = serde_json::to_string("window.__eoka_nav ? JSON.stringify(window.__eoka_nav) : null").unwrap();
+        let escaped =
+            serde_json::to_string("window.__eoka_nav ? JSON.stringify(window.__eoka_nav) : null")
+                .unwrap();
         let json_str: String = tab
             .page
             .evaluate_sync(&format!("JSON.stringify(eval({}))", escaped))
@@ -1631,8 +1791,8 @@ impl EokaServer {
             .execute_sync("delete window.__eoka_nav_installed; delete window.__eoka_nav;")
             .await;
 
-        let nav_info: serde_json::Value = serde_json::from_str(&json_str)
-            .unwrap_or(serde_json::Value::Null);
+        let nav_info: serde_json::Value =
+            serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
         let inner: serde_json::Value = if nav_info.is_string() {
             serde_json::from_str(nav_info.as_str().unwrap_or("null"))
                 .unwrap_or(serde_json::Value::Null)
@@ -1660,6 +1820,189 @@ impl EokaServer {
             ))
         }
     }
+
+    // =========================================================================
+    // Cookies (extended)
+    // =========================================================================
+
+    #[tool(description = "Delete a specific cookie by name.")]
+    async fn delete_cookie(
+        &self,
+        req: Parameters<DeleteCookieRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page
+            .delete_cookie(&req.0.name, req.0.domain.as_deref())
+            .await
+            .map_err(err)?;
+        text_ok(format!("Cookie '{}' deleted", req.0.name))
+    }
+
+    #[tool(description = "Clear all cookies for the current browser context.")]
+    async fn clear_cookies(&self) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page.clear_all_cookies().await.map_err(err)?;
+        text_ok("All cookies cleared")
+    }
+
+    // =========================================================================
+    // Dialogs
+    // =========================================================================
+
+    #[tool(
+        description = "Accept a JavaScript alert/confirm/prompt dialog. Optionally provide text for prompt() dialogs."
+    )]
+    async fn accept_dialog(
+        &self,
+        req: Parameters<AcceptDialogRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page
+            .accept_dialog(req.0.prompt_text.as_deref())
+            .await
+            .map_err(err)?;
+        text_ok("Dialog accepted")
+    }
+
+    #[tool(description = "Dismiss (cancel) a JavaScript alert/confirm/prompt dialog.")]
+    async fn dismiss_dialog(&self) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page.dismiss_dialog().await.map_err(err)?;
+        text_ok("Dialog dismissed")
+    }
+
+    // =========================================================================
+    // Waiting
+    // =========================================================================
+
+    #[tool(
+        description = "Wait for text to appear on the page (case-insensitive). Errors on timeout."
+    )]
+    async fn wait_for_text(
+        &self,
+        req: Parameters<WaitForTextRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let timeout_ms = req.0.timeout_ms.unwrap_or(10_000);
+        tab.page
+            .wait_for_text(&req.0.text, timeout_ms)
+            .await
+            .map_err(err)?;
+        text_ok(format!("Text \"{}\" found", req.0.text))
+    }
+
+    #[tool(
+        description = "Wait for network to go idle (no XHR/fetch for idle_ms). Useful after actions that trigger API calls before reading the result."
+    )]
+    async fn wait_for_network_idle(
+        &self,
+        req: Parameters<WaitNetworkIdleRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let idle_ms = req.0.idle_ms.unwrap_or(500);
+        let timeout_ms = req.0.timeout_ms.unwrap_or(10_000);
+        tab.page
+            .wait_for_network_idle(idle_ms, timeout_ms)
+            .await
+            .map_err(err)?;
+        text_ok("Network idle")
+    }
+
+    // =========================================================================
+    // Storage
+    // =========================================================================
+
+    #[tool(description = "Get a value from localStorage. Returns null message if key not found.")]
+    async fn local_storage_get(
+        &self,
+        req: Parameters<StorageKeyRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let value = tab.page.local_storage_get(&req.0.key).await.map_err(err)?;
+        match value {
+            Some(v) => text_ok(v),
+            None => text_ok(format!("(key '{}' not in localStorage)", req.0.key)),
+        }
+    }
+
+    #[tool(description = "Set a value in localStorage.")]
+    async fn local_storage_set(
+        &self,
+        req: Parameters<StorageSetRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page
+            .local_storage_set(&req.0.key, &req.0.value)
+            .await
+            .map_err(err)?;
+        text_ok(format!("localStorage['{}'] set", req.0.key))
+    }
+
+    #[tool(description = "Get a value from sessionStorage. Returns null message if key not found.")]
+    async fn session_storage_get(
+        &self,
+        req: Parameters<StorageKeyRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let value = tab
+            .page
+            .session_storage_get(&req.0.key)
+            .await
+            .map_err(err)?;
+        match value {
+            Some(v) => text_ok(v),
+            None => text_ok(format!("(key '{}' not in sessionStorage)", req.0.key)),
+        }
+    }
+
+    #[tool(description = "Set a value in sessionStorage.")]
+    async fn session_storage_set(
+        &self,
+        req: Parameters<StorageSetRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        tab.page
+            .session_storage_set(&req.0.key, &req.0.value)
+            .await
+            .map_err(err)?;
+        text_ok(format!("sessionStorage['{}'] set", req.0.key))
+    }
+
+    #[tool(
+        description = "Dump all client-side storage as JSON: localStorage, sessionStorage, and cookies. Use to capture session state for later restore or analysis."
+    )]
+    async fn dump_storage(&self) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard.as_ref().ok_or_else(|| err(ERR_NO_BROWSER))?;
+        let tab = state.current_tab().ok_or_else(|| err(ERR_NO_TAB))?;
+        let storage = tab.page.dump_storage().await.map_err(err)?;
+        let json = serde_json::to_string_pretty(&storage).map_err(err)?;
+        text_ok(json)
+    }
+
+    // =========================================================================
+    // Headers, UA, CSP
+    // =========================================================================
 
     #[tool(description = "Close the browser. Call when done to free resources.")]
     async fn close(&self) -> Result<CallToolResult, ErrorData> {
@@ -1705,10 +2048,24 @@ impl ServerHandler for EokaServer {
                  Tabs: list_tabs, new_tab, switch_tab (auto-attaches to popups), close_tab\n\
                  TIMING: wait_ms(ms) — pause between actions\n\
                  NAV INTERCEPT: click_intercept_nav — capture location.assign/replace/href/pushState without navigating away\n\
-                 FETCH: fetch(url, method?, headers?, body?, redirect?, max_body?) — HTTP request from browser session, bypasses Cloudflare/bot detection"
+                 FETCH: fetch(url, method?, headers?, body?, redirect?, max_body?) — HTTP request from browser session, bypasses Cloudflare/bot detection\n\
+                 COOKIES: cookies, set_cookie, delete_cookie, clear_cookies\n\
+                 DIALOGS: accept_dialog, dismiss_dialog\n\
+                 STORAGE: local_storage_get/set, session_storage_get/set, dump_storage\n\
+                 NAVIGATE EXTRAS: navigate(url, headers?, user_agent?, bypass_csp?) — headers/UA/CSP override per navigation\n\
+                 WAIT: wait_ms, wait_for_text, wait_for_network_idle"
                     .into(),
             ),
         }
+    }
+}
+
+async fn cleanup_browser(state: &Arc<Mutex<Option<BrowserState>>>) {
+    let mut guard = state.lock().await;
+    if let Some(bs) = guard.take() {
+        eprintln!("[eoka-agent] closing browser...");
+        let _ = bs.close().await;
+        eprintln!("[eoka-agent] browser closed.");
     }
 }
 
@@ -1716,7 +2073,28 @@ pub async fn run_server() -> anyhow::Result<()> {
     use rmcp::ServiceExt;
 
     let server = EokaServer::new();
+    let state_handle = Arc::clone(&server.state);
+
+    // Spawn signal handler — close browser on SIGTERM/SIGINT (e.g. MCP client killed)
+    let sig_state = Arc::clone(&state_handle);
+    tokio::spawn(async move {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to register SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => eprintln!("[eoka-agent] received SIGTERM"),
+            _ = sigint.recv() => eprintln!("[eoka-agent] received SIGINT"),
+        }
+        cleanup_browser(&sig_state).await;
+        std::process::exit(0);
+    });
+
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
+
+    // MCP connection closed (stdin EOF or client disconnected) — clean up browser
+    eprintln!("[eoka-agent] MCP connection closed, cleaning up.");
+    cleanup_browser(&state_handle).await;
     Ok(())
 }

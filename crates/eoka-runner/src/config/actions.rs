@@ -314,9 +314,15 @@ pub struct ImapConfigAction {
 }
 
 impl ImapConfigAction {
-    fn default_port() -> u16 { 993 }
-    fn default_tls() -> bool { true }
-    fn default_mailbox() -> String { "INBOX".into() }
+    fn default_port() -> u16 {
+        993
+    }
+    fn default_tls() -> bool {
+        true
+    }
+    fn default_mailbox() -> String {
+        "INBOX".into()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -331,7 +337,9 @@ pub struct EmailFilterAction {
 }
 
 impl EmailFilterAction {
-    fn default_unseen_only() -> bool { true }
+    fn default_unseen_only() -> bool {
+        true
+    }
 }
 
 impl Default for EmailFilterAction {
@@ -362,8 +370,12 @@ pub struct WaitForEmailAction {
 }
 
 impl WaitForEmailAction {
-    fn default_timeout_ms() -> u64 { 120_000 }
-    fn default_poll_interval_ms() -> u64 { 2_000 }
+    fn default_timeout_ms() -> u64 {
+        120_000
+    }
+    fn default_poll_interval_ms() -> u64 {
+        2_000
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -402,7 +414,9 @@ impl<'de> Deserialize<'de> for EmailOpenLinkAction {
         let v = serde_yaml::Value::deserialize(deserializer)?;
         match v {
             serde_yaml::Value::Null | serde_yaml::Value::Mapping(_) => Ok(Self),
-            _ => Err(serde::de::Error::custom("expected null or empty map for open_link")),
+            _ => Err(serde::de::Error::custom(
+                "expected null or empty map for open_link",
+            )),
         }
     }
 }

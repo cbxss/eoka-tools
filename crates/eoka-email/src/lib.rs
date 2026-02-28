@@ -282,10 +282,7 @@ pub struct LinkFilter {
 }
 
 pub fn extract_first_link(msg: &EmailMessage, filter: &LinkFilter) -> Option<String> {
-    let hay = msg
-        .body_html
-        .as_deref()
-        .or(msg.body_text.as_deref())?;
+    let hay = msg.body_html.as_deref().or(msg.body_text.as_deref())?;
 
     let re = Regex::new(r#"https?://[^\s"'<>)]+"#).ok()?;
     for m in re.find_iter(hay) {
@@ -313,10 +310,7 @@ fn link_allowed(link: &str, filter: &LinkFilter) -> bool {
 }
 
 pub fn extract_code(msg: &EmailMessage, regex: &Regex) -> Option<String> {
-    let hay = msg
-        .body_text
-        .as_deref()
-        .or(msg.body_html.as_deref())?;
+    let hay = msg.body_text.as_deref().or(msg.body_html.as_deref())?;
 
     regex
         .captures(hay)
@@ -362,10 +356,7 @@ pub mod async_client {
                     return Ok(msg);
                 }
 
-                let sleep_ms = options
-                    .poll_interval
-                    .num_milliseconds()
-                    .max(100) as u64;
+                let sleep_ms = options.poll_interval.num_milliseconds().max(100) as u64;
                 tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
             }
         }
@@ -409,7 +400,10 @@ mod tests {
 
     #[test]
     fn extract_link_from_html() {
-        let msg = make_msg(None, Some(r#"<a href="https://example.com/verify?t=abc">Click</a>"#));
+        let msg = make_msg(
+            None,
+            Some(r#"<a href="https://example.com/verify?t=abc">Click</a>"#),
+        );
         let link = extract_first_link(&msg, &LinkFilter::default()).unwrap();
         assert_eq!(link, "https://example.com/verify?t=abc");
     }
