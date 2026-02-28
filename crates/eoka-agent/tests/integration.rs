@@ -3,7 +3,7 @@
 //! These tests require Chrome to be installed and available.
 //! Run with: cargo test --test integration -- --ignored
 
-use eoka_agent::{AgentPage, Browser, ObserveConfig};
+use eoka_agent::{ObserveConfig, Session};
 
 /// Check if Chrome is available
 fn chrome_available() -> bool {
@@ -18,19 +18,15 @@ async fn test_observe_empty_page() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent.goto("about:blank").await.expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     let elements = agent.observe().await.expect("Failed to observe");
 
     // Empty page should have no interactive elements
     assert!(elements.is_empty());
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -41,25 +37,20 @@ async fn test_observe_populated_page() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r##"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r##"data:text/html,
         <style>body { margin: 0; padding: 20px; }</style>
         <button id="btn1">Click Me</button>
         <input type="text" placeholder="Enter name">
         <a href="https://example.com">Link</a>
         <select><option>Option 1</option></select>
     "##,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     let elements = agent.observe().await.expect("Failed to observe");
 
     // Should find button, input, link, select (at least 4 elements)
@@ -83,7 +74,7 @@ async fn test_observe_populated_page() {
         list
     );
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -94,21 +85,16 @@ async fn test_click() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r#"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <button id="btn" onclick="this.textContent = 'Clicked!'">Click Me</button>
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
 
     // Click the button by index
@@ -120,7 +106,7 @@ async fn test_click() {
     let list = agent.element_list();
     assert!(list.contains("Clicked!"));
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -131,21 +117,16 @@ async fn test_fill() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r#"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <input type="text" id="input" value="">
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
 
     // Fill the input
@@ -156,7 +137,7 @@ async fn test_fill() {
     let el = agent.get(0).expect("Element not found");
     assert_eq!(el.value.as_deref(), Some("Hello World"));
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -167,29 +148,24 @@ async fn test_screenshot() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r#"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <button>Button 1</button>
         <button>Button 2</button>
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     let png = agent.screenshot().await.expect("Failed to take screenshot");
 
     // Check PNG magic bytes
     assert!(png.len() > 100);
     assert_eq!(&png[0..4], &[0x89, 0x50, 0x4E, 0x47]); // PNG signature
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -200,32 +176,29 @@ async fn test_observe_diff() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
+    let mut agent = Session::launch().await.expect("Failed to launch");
 
     // Initial page with one button
-    page.goto(r#"data:text/html,<button id="btn1">Button 1</button>"#)
+    agent
+        .goto(r#"data:text/html,<button id="btn1">Button 1</button>"#)
         .await
         .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
     assert_eq!(agent.len(), 1);
 
     // Add another button via JS
-    page.execute(
-        r#"
+    agent
+        .exec(
+            r#"
         const btn = document.createElement('button');
         btn.id = 'btn2';
         btn.textContent = 'Button 2';
         document.body.appendChild(btn);
     "#,
-    )
-    .await
-    .expect("Failed to execute JS");
+        )
+        .await
+        .expect("Failed to execute JS");
 
     // Observe diff
     let diff = agent.observe_diff().await.expect("Failed to observe_diff");
@@ -239,7 +212,7 @@ async fn test_observe_diff() {
     assert!(display.contains("+1 added"));
     assert!(display.contains("(2 total)"));
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -250,23 +223,18 @@ async fn test_find_by_text() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r#"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <button>Submit</button>
         <button>Cancel</button>
         <button>Submit Form</button>
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
 
     // Find first element containing "Submit"
@@ -278,7 +246,7 @@ async fn test_find_by_text() {
     assert_eq!(indices.len(), 2);
     assert_eq!(indices, vec![0, 2]);
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -289,38 +257,31 @@ async fn test_viewport_only_config() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    // Create a page with elements below the fold
-    page.goto(
-        r#"data:text/html,
+    // With viewport_only = true (default)
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <style>body { margin: 0; }</style>
         <button style="position:absolute;top:100px">Visible</button>
         <button style="position:absolute;top:5000px">Below Fold</button>
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    // With viewport_only = true (default)
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
     assert_eq!(agent.len(), 1);
     assert!(agent.element_list().contains("Visible"));
 
     // With viewport_only = false
-    let config = ObserveConfig {
+    agent.set_observe_config(ObserveConfig {
         viewport_only: false,
-    };
-    let mut agent_all = AgentPage::with_config(&page, config);
-    agent_all.observe().await.expect("Failed to observe");
-    assert_eq!(agent_all.len(), 2);
+    });
+    agent.observe().await.expect("Failed to observe");
+    assert_eq!(agent.len(), 2);
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
@@ -331,25 +292,20 @@ async fn test_select_dropdown() {
         return;
     }
 
-    let browser = Browser::launch().await.expect("Failed to launch browser");
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .expect("Failed to create page");
-
-    page.goto(
-        r#"data:text/html,
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
         <select id="color">
             <option value="r">Red</option>
             <option value="g">Green</option>
             <option value="b">Blue</option>
         </select>
     "#,
-    )
-    .await
-    .expect("Failed to navigate");
+        )
+        .await
+        .expect("Failed to navigate");
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.expect("Failed to observe");
 
     // Get options
@@ -361,28 +317,27 @@ async fn test_select_dropdown() {
     agent.select(0, "g").await.expect("Failed to select");
 
     // Verify selection via JS
-    let selected: String = page
-        .evaluate("document.getElementById('color').value")
+    let selected: String = agent
+        .eval("document.getElementById('color').value")
         .await
         .expect("Failed to evaluate");
     assert_eq!(selected, "g");
 
     // Select by text
+    agent.observe().await.expect("re-observe after select");
     agent.select(0, "Blue").await.expect("Failed to select");
-    let selected: String = page
-        .evaluate("document.getElementById('color').value")
+    let selected: String = agent
+        .eval("document.getElementById('color').value")
         .await
         .expect("Failed to evaluate");
     assert_eq!(selected, "b");
 
-    browser.close().await.expect("Failed to close browser");
+    agent.close().await.expect("Failed to close");
 }
 
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_stale_element_detection() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         eprintln!("Chrome not found, skipping test");
         return;
@@ -426,8 +381,6 @@ async fn test_stale_element_detection() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_basic() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         eprintln!("Chrome not found, skipping test");
         return;
@@ -470,7 +423,7 @@ async fn test_live_resolve_text() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>Submit Form</button><button>Cancel</button>"#)
         .await
@@ -502,7 +455,7 @@ async fn test_live_resolve_placeholder() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<input placeholder="Enter your email"><input placeholder="Password">"#)
         .await
@@ -531,7 +484,7 @@ async fn test_live_resolve_css() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button class="primary">OK</button><button class="secondary">Cancel</button>"#)
         .await
@@ -561,7 +514,7 @@ async fn test_live_resolve_id() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button id="submit-btn">Submit</button>"#)
         .await
@@ -586,7 +539,7 @@ async fn test_live_resolve_role() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<div role="button" tabindex="0">Custom Button</div>"#)
         .await
@@ -610,7 +563,7 @@ async fn test_live_resolve_not_found() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>OK</button>"#)
         .await
@@ -634,7 +587,7 @@ async fn test_live_resolve_bbox() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
+    let browser = eoka_agent::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<style>body{margin:0}</style><button style="width:100px;height:50px">Click</button>"#)
         .await
@@ -657,8 +610,6 @@ async fn test_live_resolve_bbox() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_spa_info_history_api() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -679,8 +630,6 @@ async fn test_spa_info_history_api() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_history_go() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -719,8 +668,6 @@ async fn test_history_go() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_hover() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -756,9 +703,12 @@ async fn test_session_scroll_to() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
-    let page = browser
-        .new_page(
+    let mut agent = Session::launch().await.unwrap();
+    agent.set_observe_config(ObserveConfig {
+        viewport_only: false,
+    });
+    agent
+        .goto(
             r#"data:text/html,
             <style>body{height:3000px;margin:0}</style>
             <button style="position:absolute;top:2000px">Far Button</button>
@@ -767,11 +717,6 @@ async fn test_session_scroll_to() {
         .await
         .unwrap();
 
-    // Use AgentPage with viewport_only=false
-    let config = ObserveConfig {
-        viewport_only: false,
-    };
-    let mut agent = AgentPage::with_config(&page, config);
     agent.observe().await.unwrap();
 
     // Scroll to button
@@ -782,14 +727,12 @@ async fn test_session_scroll_to() {
     let scroll_y: f64 = agent.eval("window.scrollY").await.unwrap();
     assert!(scroll_y > 500.0, "Expected scroll > 500, got {}", scroll_y);
 
-    browser.close().await.unwrap();
+    agent.close().await.unwrap();
 }
 
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_back_forward() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -817,8 +760,6 @@ async fn test_session_back_forward() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_scroll_directions() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -853,8 +794,6 @@ async fn test_session_scroll_directions() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_press_key() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -902,8 +841,6 @@ async fn test_session_press_key() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_eval_exec() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -942,9 +879,9 @@ async fn test_agent_extract() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
-    let page = browser
-        .new_page(
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(
             r#"data:text/html,
             <ul>
                 <li data-price="10">Apple</li>
@@ -955,21 +892,18 @@ async fn test_agent_extract() {
         .await
         .unwrap();
 
-    let agent = AgentPage::new(&page);
     let prices: Vec<String> = agent
         .extract("[...document.querySelectorAll('li')].map(e => e.dataset.price)")
         .await
         .unwrap();
     assert_eq!(prices, vec!["10", "20"]);
 
-    browser.close().await.unwrap();
+    agent.close().await.unwrap();
 }
 
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_session_url_title() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -996,9 +930,9 @@ async fn test_agent_options() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
-    let page = browser
-        .new_page(
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(
             r#"data:text/html,
             <select id="sel">
                 <option value="a">Alpha</option>
@@ -1010,7 +944,6 @@ async fn test_agent_options() {
         .await
         .unwrap();
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.unwrap();
     let opts = agent.options(0).await.unwrap();
 
@@ -1019,7 +952,7 @@ async fn test_agent_options() {
     assert_eq!(opts[1], ("b".to_string(), "Beta".to_string()));
     assert_eq!(opts[2], ("c".to_string(), "Gamma".to_string()));
 
-    browser.close().await.unwrap();
+    agent.close().await.unwrap();
 }
 
 // =============================================================================
@@ -1029,8 +962,6 @@ async fn test_agent_options() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_click_out_of_bounds() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -1051,8 +982,6 @@ async fn test_click_out_of_bounds() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_fill_clears_existing() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }
@@ -1080,9 +1009,9 @@ async fn test_multiple_elements_same_text() {
         return;
     }
 
-    let browser = Browser::launch().await.unwrap();
-    let page = browser
-        .new_page(
+    let mut agent = Session::launch().await.unwrap();
+    agent
+        .goto(
             r#"data:text/html,
             <button id="b1">Submit</button>
             <button id="b2">Submit</button>
@@ -1092,7 +1021,6 @@ async fn test_multiple_elements_same_text() {
         .await
         .unwrap();
 
-    let mut agent = AgentPage::new(&page);
     agent.observe().await.unwrap();
 
     let all = agent.find_all_by_text("Submit");
@@ -1101,14 +1029,12 @@ async fn test_multiple_elements_same_text() {
     let first = agent.find_by_text("Submit");
     assert_eq!(first, Some(0));
 
-    browser.close().await.unwrap();
+    agent.close().await.unwrap();
 }
 
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_hidden_elements_filtered() {
-    use eoka_agent::Session;
-
     if !chrome_available() {
         return;
     }

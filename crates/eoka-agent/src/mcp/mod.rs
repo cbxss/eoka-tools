@@ -1361,11 +1361,11 @@ impl EokaServer {
         let tab = state
             .current_tab()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        let value = tab
-            .page
-            .local_storage_get(&req.0.key)
-            .await
-            .map_err(internal)?;
+        let js = format!(
+            "localStorage.getItem({})",
+            serde_json::to_string(&req.0.key).map_err(internal)?
+        );
+        let value: Option<String> = tab.page.evaluate(&js).await.map_err(internal)?;
         match value {
             Some(v) => text_ok(v),
             None => text_ok(format!("(key '{}' not in localStorage)", req.0.key)),
@@ -1384,10 +1384,12 @@ impl EokaServer {
         let tab = state
             .current_tab()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        tab.page
-            .local_storage_set(&req.0.key, &req.0.value)
-            .await
-            .map_err(internal)?;
+        let js = format!(
+            "localStorage.setItem({}, {})",
+            serde_json::to_string(&req.0.key).map_err(internal)?,
+            serde_json::to_string(&req.0.value).map_err(internal)?
+        );
+        tab.page.execute(&js).await.map_err(internal)?;
         text_ok(format!("localStorage['{}'] set", req.0.key))
     }
 
@@ -1403,11 +1405,11 @@ impl EokaServer {
         let tab = state
             .current_tab()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        let value = tab
-            .page
-            .session_storage_get(&req.0.key)
-            .await
-            .map_err(internal)?;
+        let js = format!(
+            "sessionStorage.getItem({})",
+            serde_json::to_string(&req.0.key).map_err(internal)?
+        );
+        let value: Option<String> = tab.page.evaluate(&js).await.map_err(internal)?;
         match value {
             Some(v) => text_ok(v),
             None => text_ok(format!("(key '{}' not in sessionStorage)", req.0.key)),
@@ -1426,10 +1428,12 @@ impl EokaServer {
         let tab = state
             .current_tab()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        tab.page
-            .session_storage_set(&req.0.key, &req.0.value)
-            .await
-            .map_err(internal)?;
+        let js = format!(
+            "sessionStorage.setItem({}, {})",
+            serde_json::to_string(&req.0.key).map_err(internal)?,
+            serde_json::to_string(&req.0.value).map_err(internal)?
+        );
+        tab.page.execute(&js).await.map_err(internal)?;
         text_ok(format!("sessionStorage['{}'] set", req.0.key))
     }
 
@@ -1444,8 +1448,12 @@ impl EokaServer {
         let tab = state
             .current_tab()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        let storage = tab.page.dump_storage().await.map_err(internal)?;
-        let json = serde_json::to_string_pretty(&storage).map_err(internal)?;
+        let js = r#"JSON.stringify({
+            localStorage: Object.fromEntries(Object.entries(localStorage)),
+            sessionStorage: Object.fromEntries(Object.entries(sessionStorage)),
+            cookies: document.cookie
+        })"#;
+        let json: String = tab.page.evaluate(js).await.map_err(internal)?;
         text_ok(json)
     }
 

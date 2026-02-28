@@ -4,13 +4,13 @@ AI agent interaction layer for eoka browser automation. Rust crate in eoka-tools
 
 ## Structure
 
-- `src/lib.rs` — `AgentPage`, `Session`, `InteractiveElement`, all public API (click, fill, select, scroll, navigate, extract, etc.)
+- `src/lib.rs` — `Session`, `InteractiveElement`, all public API (click, fill, select, scroll, navigate, extract, etc.)
 - `src/observe.rs` — JS injection that enumerates interactive DOM elements, returns them as JSON
 - `src/annotate.rs` — Injects numbered red overlay labels, takes screenshot, cleans up
 - `src/target.rs` — Smart targeting with live resolution (text:, placeholder:, css:, id:, role:)
 - `src/spa/` — SPA router detection and navigation (React Router, Next.js, Vue Router, etc.)
 - `src/main.rs` — MCP server binary entry point
-- `src/mcp.rs` — MCP server implementation (multi-tab state management, tools, stdio transport)
+- `src/mcp/` — MCP server implementation (mod.rs, types.rs, state.rs, error.rs, helpers.rs)
 - `examples/demo.rs` — End-to-end demo (form fill, screenshot, extraction)
 
 ## Dependencies
@@ -21,9 +21,8 @@ AI agent interaction layer for eoka browser automation. Rust crate in eoka-tools
 
 ## Key patterns
 
-- `AgentPage` wraps an `eoka::Page` reference with a lifetime (for library use)
-- `Session` owns Browser + Page for simpler single-tab usage
-- MCP server manages multiple tabs with `BrowserState` (HashMap of tab ID → TabState)
+- `Session` owns Browser + Page — primary API for library usage
+- MCP server manages multiple tabs with `BrowserState` (HashMap of tab ID → TabState), uses raw `Page` directly
 - `observe()` runs JS in the page to find all interactive elements, parses the JSON result into `Vec<InteractiveElement>`
 - Annotated screenshots inject a temporary DOM overlay, screenshot, then remove it
 - Viewport-only filtering is on by default to reduce token count
