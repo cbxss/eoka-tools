@@ -25,6 +25,7 @@
 pub mod annotate;
 pub mod captcha;
 pub mod observe;
+pub mod snapshot;
 pub mod spa;
 pub mod target;
 
@@ -228,6 +229,14 @@ impl Session {
     // =========================================================================
     // Observation
     // =========================================================================
+
+    /// Get an accessibility tree snapshot of the page.
+    pub async fn ax_snapshot(
+        &self,
+        include_all: bool,
+    ) -> anyhow::Result<snapshot::SnapshotResult> {
+        snapshot::snapshot(&self.page, include_all).await
+    }
 
     /// Snapshot the page: enumerate all interactive elements.
     pub async fn observe(&mut self) -> Result<&[InteractiveElement]> {

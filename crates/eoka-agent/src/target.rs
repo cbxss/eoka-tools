@@ -3,11 +3,13 @@
 use eoka::{Page, Result};
 use serde::Deserialize;
 
-/// Target selector - either an index or a live pattern.
+/// Target selector - either an index, a snapshot ref, or a live pattern.
 #[derive(Debug, Clone)]
 pub enum Target {
     /// Element index from cached observe list
     Index(usize),
+    /// Snapshot ref (e.g. `@e1`) from accessibility tree snapshot
+    Ref(String),
     /// Live pattern resolved via JS at action time
     Live(LivePattern),
 }
@@ -28,13 +30,18 @@ pub enum LivePattern {
 }
 
 impl Target {
-    /// Parse target string. Numbers become Index, everything else is Live.
+    /// Parse target string. Numbers become Index, @eN becomes Ref, everything else is Live.
     pub fn parse(s: &str) -> Self {
         let s = s.trim();
 
         // Numbers are indices
         if let Ok(idx) = s.parse::<usize>() {
             return Target::Index(idx);
+        }
+
+        // Snapshot refs: @e1, @e42, etc.
+        if s.starts_with('@') {
+            return Target::Ref(s.to_string());
         }
 
         // Everything else is a live pattern
@@ -120,6 +127,15 @@ mod tests {
         assert!(matches!(Target::parse("0"), Target::Index(0)));
         assert!(matches!(Target::parse("15"), Target::Index(15)));
         assert!(matches!(Target::parse("  42  "), Target::Index(42)));
+    }
+
+    #[test]
+    fn parse_ref() {
+        assert!(matches!(Target::parse("@e1"), Target::Ref(ref s) if s == "@e1"));
+        assert!(matches!(Target::parse("@e42"), Target::Ref(ref s) if s == "@e42"));
+        assert!(matches!(Target::parse("  @e5  "), Target::Ref(ref s) if s == "@e5"));
+        // @ without e is still a ref (generic)
+        assert!(matches!(Target::parse("@foo"), Target::Ref(ref s) if s == "@foo"));
     }
 
     #[test]

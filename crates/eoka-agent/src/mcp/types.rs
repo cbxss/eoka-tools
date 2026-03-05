@@ -130,6 +130,14 @@ pub struct HistoryGoRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SnapshotRequest {
+    #[schemars(
+        description = "Include all nodes (generic, presentation, StaticText). Default false for cleaner output."
+    )]
+    pub include_all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ObserveRequest {
     #[schemars(
         description = "Filter: 'inputs' (form elements), 'buttons' (buttons/links), 'all' (default)"
@@ -245,4 +253,36 @@ pub struct StorageSetRequest {
     pub key: String,
     #[schemars(description = "Value to store")]
     pub value: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConsoleRequest {
+    #[schemars(description = "Clear the console buffer after reading (default: false)")]
+    pub clear: Option<bool>,
+    #[schemars(
+        description = "Filter by level: 'log', 'warn', 'error', 'info', 'debug' (default: all)"
+    )]
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ErrorsRequest {
+    #[schemars(description = "Clear the errors buffer after reading (default: false)")]
+    pub clear: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SaveStateRequest {
+    #[schemars(description = "File path to save state to (JSON). Absolute path required.")]
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LoadStateRequest {
+    #[schemars(description = "File path to load state from (JSON). Absolute path required.")]
+    pub path: String,
+    #[schemars(
+        description = "Navigate to the saved URL after loading state (default: true). Set false to restore state then navigate somewhere else."
+    )]
+    pub navigate: Option<bool>,
 }

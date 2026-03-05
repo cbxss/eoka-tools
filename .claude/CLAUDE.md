@@ -99,6 +99,14 @@ The server maintains `BrowserState` with:
 - `extract` — run JS, return result as JSON. `js=` inline or `file=` absolute path
 - `exec` — run JS for side effects, no return. `js=` inline or `file=` absolute path
 
+**Console/Errors:**
+- `console` — read captured console output (log/warn/error/info/debug). Auto-injects capture on first call. `clear?`, `level?`
+- `errors` — read captured JS errors and unhandled rejections. Auto-injects on first call. `clear?`
+
+**State Persistence:**
+- `save_state(path)` — save cookies + localStorage + sessionStorage to JSON file (captures httpOnly via CDP)
+- `load_state(path, navigate?)` — restore saved state, optionally navigate to saved URL first
+
 **Other:**
 `cookies`, `set_cookie`, `close`
 

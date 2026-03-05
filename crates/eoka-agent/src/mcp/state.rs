@@ -7,6 +7,10 @@ use eoka_agent::{InteractiveElement, ObserveConfig};
 pub(crate) struct TabState {
     pub page: Page,
     pub elements: Vec<InteractiveElement>,
+    /// Snapshot ref label → backend_node_id (from accessibility tree snapshot)
+    pub snapshot_refs: HashMap<String, i64>,
+    /// Whether console capture JS has been injected via addScriptToEvaluateOnNewDocument.
+    pub console_injected: bool,
 }
 
 impl TabState {
@@ -14,7 +18,15 @@ impl TabState {
         Self {
             page,
             elements: Vec::new(),
+            snapshot_refs: HashMap::new(),
+            console_injected: false,
         }
+    }
+
+    /// Clear all cached state (elements + snapshot refs). Call on navigation.
+    pub fn invalidate(&mut self) {
+        self.elements.clear();
+        self.snapshot_refs.clear();
     }
 }
 
@@ -124,7 +136,7 @@ impl BrowserState {
         let tab_id = if let Some(existing_id) = &self.current_tab_id {
             // Navigate current tab
             if let Some(tab) = self.tabs.get_mut(existing_id) {
-                tab.elements.clear();
+                tab.invalidate();
                 tab.page.goto(url).await?;
             }
             existing_id.clone()

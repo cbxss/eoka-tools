@@ -14,12 +14,13 @@ use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use eoka_agent::{annotate, captcha, observe, spa, InteractiveElement};
+use eoka_agent::{annotate, captcha, observe, snapshot, spa, InteractiveElement};
 
 use error::{internal, invalid, is_transport_error_msg, AgentError};
 use helpers::{
-    auto_observe_if_needed, click_with_retry, element_list, fill_with_retry, resolve_js,
-    resolve_target, text_ok, title_nonblocking, wait_for_stable, VALID_OBSERVE_FILTERS,
+    auto_observe_if_needed, click_with_retry, element_list, ensure_console_capture,
+    fill_with_retry, resolve_js, resolve_target, text_ok, title_nonblocking, wait_for_stable,
+    VALID_OBSERVE_FILTERS,
 };
 use state::{BrowserState, TabState};
 use types::*;
@@ -220,7 +221,7 @@ impl EokaServer {
                     .await
                     .map_err(internal)?;
             }
-            tab.elements.clear();
+            tab.invalidate();
             let nav_result = tab.page.goto(&req.0.url).await;
             if req.0.headers.is_some() {
                 let _ = tab.page.clear_extra_headers().await;
@@ -342,7 +343,40 @@ impl EokaServer {
     }
 
     #[tool(
-        description = "Click an element. Target: index (0), text:Submit, placeholder:Search, role:button, css:selector, id:my-btn, or plain text. Auto-retries once on stale element."
+        description = "Get accessibility tree snapshot with refs. Returns structured tree with @e1, @e2... refs you can use as targets in click/fill/etc. \
+        Shows hierarchy, ARIA roles, states (disabled, checked, expanded). Refs are stable until next navigation. \
+        Use instead of observe when you need page structure/hierarchy."
+    )]
+    async fn snapshot(
+        &self,
+        req: Parameters<SnapshotRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_browser().await?;
+        let mut guard = self.state.lock().await;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| ErrorData::from(AgentError::NoBrowser))?;
+        let tab = state
+            .current_tab_mut()
+            .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
+
+        let include_all = req.0.include_all.unwrap_or(false);
+        let result = snapshot::snapshot(&tab.page, include_all)
+            .await
+            .map_err(internal)?;
+
+        // Store refs for later resolution
+        tab.snapshot_refs.clear();
+        for r in &result.refs {
+            tab.snapshot_refs
+                .insert(r.ref_label.clone(), r.backend_node_id);
+        }
+
+        text_ok(result.tree_text)
+    }
+
+    #[tool(
+        description = "Click an element. Target: index (0), @e1 (snapshot ref), text:Submit, placeholder:Search, role:button, css:selector, id:my-btn, or plain text. Auto-retries once on stale element."
     )]
     async fn click(&self, req: Parameters<TargetRequest>) -> Result<CallToolResult, ErrorData> {
         self.ensure_browser().await?;
@@ -397,7 +431,7 @@ impl EokaServer {
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
         auto_observe_if_needed(tab, &req.0.target, vp).await?;
 
-        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+        let resolved = resolve_target(tab, &req.0.target).await?;
         let arg = serde_json::json!({ "sel": resolved.selector, "val": req.0.value });
         let js = format!(
             r#"(() => {{
@@ -440,7 +474,7 @@ impl EokaServer {
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
         auto_observe_if_needed(tab, &req.0.target, vp).await?;
 
-        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+        let resolved = resolve_target(tab, &req.0.target).await?;
         let cx = resolved.bbox.x + resolved.bbox.width / 2.0;
         let cy = resolved.bbox.y + resolved.bbox.height / 2.0;
         tab.page
@@ -491,7 +525,7 @@ impl EokaServer {
                         let target = action.target.as_ref().ok_or_else(|| {
                             invalid(format!("Action {} (click): missing target", i))
                         })?;
-                        let resolved = resolve_target(&tab.page, &tab.elements, target).await?;
+                        let resolved = resolve_target(tab, target).await?;
                         tab.page.click(&resolved.selector).await.map_err(internal)?;
                         format!("click {}", resolved.desc)
                     }
@@ -503,7 +537,7 @@ impl EokaServer {
                             .text
                             .as_ref()
                             .ok_or_else(|| invalid(format!("Action {} (fill): missing text", i)))?;
-                        let resolved = resolve_target(&tab.page, &tab.elements, target).await?;
+                        let resolved = resolve_target(tab, target).await?;
                         tab.page
                             .fill(&resolved.selector, text)
                             .await
@@ -574,7 +608,7 @@ impl EokaServer {
                 .map_err(internal)?,
             target_str => {
                 auto_observe_if_needed(tab, target_str, vp).await?;
-                let resolved = resolve_target(&tab.page, &tab.elements, target_str).await?;
+                let resolved = resolve_target(tab, target_str).await?;
                 let js = format!(
                     "document.querySelector({})?.scrollIntoView({{behavior:'smooth',block:'center'}})",
                     serde_json::to_string(&resolved.selector).unwrap()
@@ -837,7 +871,7 @@ impl EokaServer {
         let tab = state
             .current_tab_mut()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        tab.elements.clear();
+        tab.invalidate();
         tab.page.back().await.map_err(internal)?;
         if let Err(e) = wait_for_stable(&tab.page).await {
             eprintln!("[eoka-agent] wait_for_stable after back: {}", e);
@@ -855,7 +889,7 @@ impl EokaServer {
         let tab = state
             .current_tab_mut()
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
-        tab.elements.clear();
+        tab.invalidate();
         tab.page.forward().await.map_err(internal)?;
         if let Err(e) = wait_for_stable(&tab.page).await {
             eprintln!("[eoka-agent] wait_for_stable after forward: {}", e);
@@ -904,7 +938,7 @@ impl EokaServer {
             .await
             .map_err(internal)?;
 
-        tab.elements.clear(); // DOM will change
+        tab.invalidate();
         text_ok(format!(
             "Navigated to {} via {} (no page reload)",
             new_path, info.router_type
@@ -929,7 +963,7 @@ impl EokaServer {
         spa::history_go(&tab.page, req.0.delta)
             .await
             .map_err(internal)?;
-        tab.elements.clear(); // DOM will change
+        tab.invalidate();
 
         let url = tab.page.url().await.map_err(internal)?;
         let direction = if req.0.delta < 0 { "back" } else { "forward" };
@@ -1116,7 +1150,7 @@ impl EokaServer {
         let wait_ms = req.0.wait_ms.unwrap_or(3000).min(15_000);
 
         auto_observe_if_needed(tab, &req.0.target, vp).await?;
-        let resolved = resolve_target(&tab.page, &tab.elements, &req.0.target).await?;
+        let resolved = resolve_target(tab, &req.0.target).await?;
 
         // Inject navigation interceptor before clicking
         let allow_nav_js = if allow_nav { "true" } else { "false" };
@@ -1458,6 +1492,195 @@ impl EokaServer {
     }
 
     // =========================================================================
+    // Console / Errors
+    // =========================================================================
+
+    #[tool(
+        description = "Read captured console output (log/warn/error/info/debug). Auto-injects capture on first call."
+    )]
+    async fn console(
+        &self,
+        req: Parameters<ConsoleRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = req.0;
+        self.ensure_browser().await?;
+        let mut guard = self.state.lock().await;
+        let state = guard.as_mut().ok_or(AgentError::NoBrowser)?;
+        let tab = state.current_tab_mut().ok_or(AgentError::NoTab)?;
+        ensure_console_capture(tab).await?;
+
+        let clear = req.clear.unwrap_or(false);
+        let level_filter = req.level.as_deref();
+
+        let js = if clear {
+            "(() => { var c = window.__eoka_console || []; window.__eoka_console = []; return c; })()"
+        } else {
+            "(window.__eoka_console || [])"
+        };
+        let result: Value = tab.page.evaluate_sync(js).await.map_err(internal)?;
+
+        let entries = result.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        if entries.is_empty() {
+            return text_ok("No console output captured.");
+        }
+
+        let mut out = String::with_capacity(entries.len() * 60);
+        for entry in entries {
+            let level = entry.get("level").and_then(|v| v.as_str()).unwrap_or("log");
+            if let Some(filter) = level_filter {
+                if level != filter {
+                    continue;
+                }
+            }
+            let text = entry.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let ts = entry.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+            let _ = writeln!(out, "[{}] {}: {}", ts, level.to_uppercase(), text);
+        }
+        if out.is_empty() {
+            return text_ok(format!(
+                "No console output matching level '{}'.",
+                level_filter.unwrap_or("all")
+            ));
+        }
+        text_ok(out)
+    }
+
+    #[tool(
+        description = "Read captured JavaScript errors (uncaught exceptions and unhandled promise rejections). Auto-injects capture on first call."
+    )]
+    async fn errors(
+        &self,
+        req: Parameters<ErrorsRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = req.0;
+        self.ensure_browser().await?;
+        let mut guard = self.state.lock().await;
+        let state = guard.as_mut().ok_or(AgentError::NoBrowser)?;
+        let tab = state.current_tab_mut().ok_or(AgentError::NoTab)?;
+        ensure_console_capture(tab).await?;
+
+        let clear = req.clear.unwrap_or(false);
+        let js = if clear {
+            "(() => { var e = window.__eoka_errors || []; window.__eoka_errors = []; return e; })()"
+        } else {
+            "(window.__eoka_errors || [])"
+        };
+        let result: Value = tab.page.evaluate_sync(js).await.map_err(internal)?;
+
+        let entries = result.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        if entries.is_empty() {
+            return text_ok("No JavaScript errors captured.");
+        }
+
+        let mut out = String::with_capacity(entries.len() * 120);
+        for entry in entries {
+            let msg = entry
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            let source = entry.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let line = entry.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+            let col = entry.get("col").and_then(|v| v.as_u64()).unwrap_or(0);
+            let stack = entry.get("stack").and_then(|v| v.as_str()).unwrap_or("");
+            let ts = entry.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            let _ = write!(out, "[{}] {}", ts, msg);
+            if !source.is_empty() {
+                let _ = write!(out, " ({}:{}:{})", source, line, col);
+            }
+            out.push('\n');
+            if !stack.is_empty() {
+                let _ = writeln!(out, "  {}", stack.replace('\n', "\n  "));
+            }
+        }
+        text_ok(out)
+    }
+
+    // =========================================================================
+    // State save/load
+    // =========================================================================
+
+    #[tool(
+        description = "Save browser auth state (cookies + localStorage + sessionStorage) to a JSON file. Use after login to persist sessions across restarts. Captures httpOnly cookies via CDP for full fidelity."
+    )]
+    async fn save_state(
+        &self,
+        req: Parameters<SaveStateRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let guard = self.state.lock().await;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::from(AgentError::NoBrowser))?;
+        let tab = state
+            .current_tab()
+            .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
+
+        let saved = helpers::capture_state(&tab.page).await?;
+        let json = serde_json::to_string_pretty(&saved).map_err(internal)?;
+        std::fs::write(&req.0.path, &json)
+            .map_err(|e| invalid(format!("Failed to write '{}': {}", req.0.path, e)))?;
+
+        text_ok(format!(
+            "Saved {} cookies, {} localStorage keys, {} sessionStorage keys to {}",
+            saved.cookies.len(),
+            saved.local_storage.len(),
+            saved.session_storage.len(),
+            req.0.path
+        ))
+    }
+
+    #[tool(
+        description = "Load browser auth state (cookies + localStorage + sessionStorage) from a JSON file. Restores a previously saved session — avoids re-login, 2FA, etc. By default navigates to the saved URL first."
+    )]
+    async fn load_state(
+        &self,
+        req: Parameters<LoadStateRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let contents = std::fs::read_to_string(&req.0.path)
+            .map_err(|e| invalid(format!("Failed to read '{}': {}", req.0.path, e)))?;
+        let saved: helpers::SavedState =
+            serde_json::from_str(&contents).map_err(|e| invalid(format!("Invalid state JSON: {}", e)))?;
+
+        self.ensure_browser().await?;
+        let mut guard = self.state.lock().await;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| ErrorData::from(AgentError::NoBrowser))?;
+
+        let navigate = req.0.navigate.unwrap_or(true);
+
+        if navigate {
+            // Navigate to saved URL first so storage calls have a valid origin
+            let tab = state.ensure_tab(&saved.url).await.map_err(internal)?;
+            helpers::wait_for_stable(&tab.page).await.map_err(internal)?;
+        }
+
+        let tab = state
+            .current_tab()
+            .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
+
+        helpers::restore_state(&tab.page, &saved).await?;
+
+        // Reload to pick up restored cookies/storage
+        if navigate {
+            let _: String = tab
+                .page
+                .evaluate_sync("location.reload()")
+                .await
+                .unwrap_or_default();
+            helpers::wait_for_stable(&tab.page).await.map_err(internal)?;
+        }
+
+        text_ok(format!(
+            "Loaded {} cookies, {} localStorage keys, {} sessionStorage keys from {}",
+            saved.cookies.len(),
+            saved.local_storage.len(),
+            saved.session_storage.len(),
+            req.0.path
+        ))
+    }
+
+    // =========================================================================
     // Close
     // =========================================================================
 
@@ -1498,7 +1721,10 @@ impl ServerHandler for EokaServer {
                  FETCH: fetch(url, method?, headers?, body?, redirect?, max_body?) — HTTP request from browser session, bypasses Cloudflare/bot detection\n\
                  COOKIES: cookies, set_cookie, delete_cookie, clear_cookies\n\
                  DIALOGS: accept_dialog, dismiss_dialog\n\
+                 STATE: save_state(path) — persist auth state (cookies+storage) to JSON, load_state(path, navigate?) — restore it\n\
                  STORAGE: local_storage_get/set, session_storage_get/set, dump_storage\n\
+                 CONSOLE: console(clear?, level?) — read captured console output (auto-injects on first call)\n\
+                 ERRORS: errors(clear?) — read captured JS errors and unhandled rejections\n\
                  NAVIGATE EXTRAS: navigate(url, headers?, user_agent?, bypass_csp?) — headers/UA/CSP override per navigation\n\
                  WAIT: wait_ms, wait_for_text, wait_for_network_idle"
                     .into(),

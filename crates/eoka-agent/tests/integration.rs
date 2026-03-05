@@ -3,6 +3,8 @@
 //! These tests require Chrome to be installed and available.
 //! Run with: cargo test --test integration -- --ignored
 
+use std::collections::HashMap;
+
 use eoka_agent::{ObserveConfig, Session};
 
 /// Check if Chrome is available
@@ -1056,6 +1058,361 @@ async fn test_hidden_elements_filtered() {
     // Should only find the visible button
     assert_eq!(agent.len(), 1);
     assert!(agent.element_list().contains("Visible"));
+
+    agent.close().await.unwrap();
+}
+
+// =============================================================================
+// State save/load
+// =============================================================================
+
+/// Helper: capture state from a page (mirrors the MCP helper logic which is pub(crate)).
+async fn capture_state(
+    page: &eoka::Page,
+) -> (
+    Vec<eoka::cdp::types::Cookie>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+) {
+    let cookies = page.cookies().await.unwrap();
+    let local_storage: HashMap<String, String> = page
+        .evaluate(
+            "(() => { try { return Object.fromEntries(Object.entries(localStorage)) } catch(e) { return {} } })()",
+        )
+        .await
+        .unwrap_or_default();
+    let session_storage: HashMap<String, String> = page
+        .evaluate(
+            "(() => { try { return Object.fromEntries(Object.entries(sessionStorage)) } catch(e) { return {} } })()",
+        )
+        .await
+        .unwrap_or_default();
+    (cookies, local_storage, session_storage)
+}
+
+/// Helper: restore storage from HashMaps (mirrors the MCP helper logic).
+async fn restore_storage(
+    page: &eoka::Page,
+    local_storage: &HashMap<String, String>,
+    session_storage: &HashMap<String, String>,
+) {
+    if !local_storage.is_empty() {
+        let json = serde_json::to_string(local_storage).unwrap();
+        let js = format!(
+            "(() => {{ localStorage.clear(); const d = {}; for (const [k,v] of Object.entries(d)) localStorage.setItem(k,v); }})()",
+            json
+        );
+        let _: Result<String, _> = page.evaluate(&js).await;
+    }
+    if !session_storage.is_empty() {
+        let json = serde_json::to_string(session_storage).unwrap();
+        let js = format!(
+            "(() => {{ sessionStorage.clear(); const d = {}; for (const [k,v] of Object.entries(d)) sessionStorage.setItem(k,v); }})()",
+            json
+        );
+        let _: Result<String, _> = page.evaluate(&js).await;
+    }
+}
+
+/// Helper: convert CDP Cookie → NetworkSetCookie (same as SavedCookie conversion).
+fn cookie_to_set_cookie(c: &eoka::cdp::types::Cookie) -> eoka::cdp::types::NetworkSetCookie {
+    eoka::cdp::types::NetworkSetCookie {
+        name: c.name.clone(),
+        value: c.value.clone(),
+        domain: Some(c.domain.clone()),
+        path: Some(c.path.clone()),
+        secure: Some(c.secure),
+        http_only: Some(c.http_only),
+        same_site: c.same_site.clone(),
+        expires: if c.expires > 0.0 {
+            Some(c.expires)
+        } else {
+            None
+        },
+        url: None,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_capture_cookies() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+    page.set_cookie("test_session", "abc123", Some(".example.com"), Some("/"))
+        .await
+        .unwrap();
+    page.set_cookie("test_pref", "dark", Some(".example.com"), Some("/"))
+        .await
+        .unwrap();
+
+    let (cookies, _, _) = capture_state(page).await;
+
+    let our_cookies: Vec<_> = cookies
+        .iter()
+        .filter(|c| c.name.starts_with("test_"))
+        .collect();
+    assert!(
+        our_cookies.len() >= 2,
+        "Expected at least 2 test cookies, got {}: {:?}",
+        our_cookies.len(),
+        our_cookies.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+
+    let session_cookie = cookies.iter().find(|c| c.name == "test_session").unwrap();
+    assert_eq!(session_cookie.value, "abc123");
+    assert_eq!(session_cookie.domain, ".example.com");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_capture_local_storage() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+    page.execute("localStorage.setItem('auth_token', 'jwt.abc.def')")
+        .await
+        .unwrap();
+    page.execute("localStorage.setItem('theme', 'dark')")
+        .await
+        .unwrap();
+
+    let (_, local_storage, _) = capture_state(page).await;
+
+    assert_eq!(local_storage.get("auth_token").unwrap(), "jwt.abc.def");
+    assert_eq!(local_storage.get("theme").unwrap(), "dark");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_capture_session_storage() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+    page.execute("sessionStorage.setItem('tab_id', 'tab_42')")
+        .await
+        .unwrap();
+
+    let (_, _, session_storage) = capture_state(page).await;
+
+    assert_eq!(session_storage.get("tab_id").unwrap(), "tab_42");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_restore_cookies() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+
+    // Set a cookie, then clear + restore different ones
+    page.set_cookie("original", "yes", Some(".example.com"), Some("/"))
+        .await
+        .unwrap();
+
+    page.clear_all_cookies().await.unwrap();
+    let restored_cookies = vec![
+        eoka::cdp::types::NetworkSetCookie {
+            name: "restored_1".into(),
+            value: "val1".into(),
+            domain: Some(".example.com".into()),
+            path: Some("/".into()),
+            secure: Some(false),
+            http_only: Some(true),
+            same_site: Some("Lax".into()),
+            expires: None,
+            url: None,
+        },
+        eoka::cdp::types::NetworkSetCookie {
+            name: "restored_2".into(),
+            value: "val2".into(),
+            domain: Some(".example.com".into()),
+            path: Some("/".into()),
+            secure: Some(false),
+            http_only: Some(false),
+            same_site: None,
+            expires: None,
+            url: None,
+        },
+    ];
+    page.set_cookies_bulk(restored_cookies).await.unwrap();
+
+    let cookies = page.cookies().await.unwrap();
+    let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
+
+    assert!(
+        !names.contains(&"original"),
+        "original cookie should be cleared"
+    );
+    assert!(
+        names.contains(&"restored_1"),
+        "restored_1 missing from {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"restored_2"),
+        "restored_2 missing from {:?}",
+        names
+    );
+
+    // Verify httpOnly flag was preserved
+    let r1 = cookies.iter().find(|c| c.name == "restored_1").unwrap();
+    assert!(r1.http_only, "httpOnly should be true for restored_1");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_restore_local_storage() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+    page.execute("localStorage.setItem('old_key', 'old_val')")
+        .await
+        .unwrap();
+
+    // Restore: clear and set new values
+    let data: HashMap<String, String> = [
+        ("token".into(), "new_jwt".into()),
+        ("pref".into(), "light".into()),
+    ]
+    .into();
+    restore_storage(page, &data, &HashMap::new()).await;
+
+    let (_, local_storage, _) = capture_state(page).await;
+
+    assert!(
+        !local_storage.contains_key("old_key"),
+        "old_key should be cleared"
+    );
+    assert_eq!(local_storage.get("token").unwrap(), "new_jwt");
+    assert_eq!(local_storage.get("pref").unwrap(), "light");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_full_roundtrip() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+
+    // Set up state: cookies + localStorage + sessionStorage
+    page.set_cookie("sid", "session123", Some(".example.com"), Some("/"))
+        .await
+        .unwrap();
+    page.execute("localStorage.setItem('app_token', 'tok_xyz')")
+        .await
+        .unwrap();
+    page.execute("sessionStorage.setItem('view', 'dashboard')")
+        .await
+        .unwrap();
+
+    // Capture
+    let (cookies, ls, ss) = capture_state(page).await;
+    assert!(cookies.iter().any(|c| c.name == "sid" && c.value == "session123"));
+    assert_eq!(ls.get("app_token").unwrap(), "tok_xyz");
+    assert_eq!(ss.get("view").unwrap(), "dashboard");
+
+    // Wipe everything
+    page.clear_all_cookies().await.unwrap();
+    page.execute("localStorage.clear(); sessionStorage.clear()")
+        .await
+        .unwrap();
+
+    // Verify wiped
+    let (c2, ls2, ss2) = capture_state(page).await;
+    assert!(
+        !c2.iter().any(|c| c.name == "sid"),
+        "cookies should be wiped"
+    );
+    assert!(!ls2.contains_key("app_token"), "localStorage should be wiped");
+    assert!(!ss2.contains_key("view"), "sessionStorage should be wiped");
+
+    // Restore cookies
+    let set_cookies: Vec<_> = cookies.iter().map(cookie_to_set_cookie).collect();
+    page.set_cookies_bulk(set_cookies).await.unwrap();
+
+    // Restore storage
+    restore_storage(page, &ls, &ss).await;
+
+    // Verify restored
+    let (c3, ls3, ss3) = capture_state(page).await;
+    assert!(
+        c3.iter()
+            .any(|c| c.name == "sid" && c.value == "session123"),
+        "sid cookie should be restored, got: {:?}",
+        c3.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert_eq!(ls3.get("app_token").unwrap(), "tok_xyz");
+    assert_eq!(ss3.get("view").unwrap(), "dashboard");
+
+    agent.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_state_empty_storage_capture() {
+    if !chrome_available() {
+        return;
+    }
+
+    let mut agent = Session::launch().await.unwrap();
+    agent.goto("https://example.com").await.unwrap();
+
+    let page = agent.page();
+    // Clear everything first
+    page.clear_all_cookies().await.unwrap();
+    page.execute("localStorage.clear(); sessionStorage.clear()")
+        .await
+        .unwrap();
+
+    let (cookies, ls, ss) = capture_state(page).await;
+
+    // Cookies might have some from example.com, but storage should be empty
+    assert!(ls.is_empty(), "localStorage should be empty");
+    assert!(ss.is_empty(), "sessionStorage should be empty");
+    // Cookies: we cleared them, but the site might set some on load.
+    // Just verify capture doesn't error on empty state.
+    let _ = cookies;
 
     agent.close().await.unwrap();
 }
