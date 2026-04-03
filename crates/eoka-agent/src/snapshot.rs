@@ -33,6 +33,7 @@ struct AXNode {
     #[serde(default)]
     properties: Vec<AXProperty>,
     parent_id: Option<String>,
+    #[serde(alias = "backendDOMNodeId")]
     backend_dom_node_id: Option<i64>,
 }
 
@@ -229,6 +230,17 @@ impl<'a> Walker<'a> {
 ///
 /// `include_all` — if true, include noise roles (generic, none, StaticText, etc.)
 pub async fn snapshot(page: &Page, include_all: bool) -> Result<SnapshotResult> {
+    // Enable DOM domain and fetch document so CDP populates backendDOMNodeId in AX nodes.
+    // Without this, getFullAXTree returns nodes with backendDOMNodeId = null.
+    let _ = page
+        .session()
+        .send::<_, serde_json::Value>("DOM.enable", &serde_json::json!({}))
+        .await;
+    let _ = page
+        .session()
+        .send::<_, serde_json::Value>("DOM.getDocument", &serde_json::json!({"depth": -1, "pierce": true}))
+        .await;
+
     let result: AXTreeResult = page
         .session()
         .send("Accessibility.getFullAXTree", &GetFullAXTreeParams {})

@@ -1,0 +1,442 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "eoka", about = "Browser automation CLI", version)]
+pub struct Cli {
+    /// Session name for isolated browser instances
+    #[arg(long, default_value = "default", global = true)]
+    pub session: String,
+
+    /// JSON output mode (for agents)
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Run browser in headed mode (visible window)
+    #[arg(long, global = true)]
+    pub headed: bool,
+
+    /// Internal: run as daemon (hidden)
+    #[arg(long, hide = true)]
+    pub daemon: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    // ── Navigation ──────────────────────────────────────────────────
+    /// Navigate to URL
+    #[command(alias = "goto", alias = "navigate")]
+    Open {
+        url: String,
+        /// Extra HTTP headers as JSON (e.g. '{"Authorization": "Bearer ..."}')
+        #[arg(long)]
+        headers: Option<String>,
+        /// Override User-Agent string
+        #[arg(long)]
+        user_agent: Option<String>,
+        /// Disable CSP enforcement (useful for XSS testing)
+        #[arg(long)]
+        bypass_csp: bool,
+        /// Inject JS file via addScriptToEvaluateOnNewDocument (runs before any page script)
+        #[arg(long, value_name = "FILE")]
+        inject_js: Option<String>,
+    },
+
+    /// Go back in history
+    Back,
+
+    /// Go forward in history
+    Forward,
+
+    /// Reload current page
+    Reload,
+
+    // ── Observation ─────────────────────────────────────────────────
+    /// Accessibility tree with @eN refs (best for AI)
+    Snapshot {
+        /// Interactive elements only
+        #[arg(short, long)]
+        interactive: bool,
+        /// Include all nodes (generic, presentation, etc.)
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// List interactive elements with indices
+    Observe {
+        /// Filter: "inputs", "buttons", or "all"
+        #[arg(long)]
+        filter: Option<String>,
+        /// Max elements to return
+        #[arg(long)]
+        max: Option<usize>,
+    },
+
+    /// Take screenshot
+    Screenshot {
+        /// Output file path (default: temp file)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Annotate with numbered element labels
+        #[arg(long)]
+        annotate: bool,
+    },
+
+    /// Get page URL and title
+    Info,
+
+    /// Get all visible text on page
+    Text,
+
+    /// Find elements by text substring
+    Find {
+        /// Text to search for (case-insensitive)
+        text: String,
+    },
+
+    // ── Actions ─────────────────────────────────────────────────────
+    /// Click element
+    Click {
+        /// Target: @e1, index, text:Submit, css:#btn, id:login, role:button
+        target: String,
+    },
+
+    /// Double-click element
+    #[command(alias = "dblclick")]
+    DoubleClick {
+        target: String,
+    },
+
+    /// Clear and fill input
+    Fill {
+        /// Target input element
+        target: String,
+        /// Text to type
+        text: String,
+    },
+
+    /// Select dropdown option
+    Select {
+        /// Target select element
+        target: String,
+        /// Option value or text
+        value: String,
+    },
+
+    /// Hover over element
+    Hover {
+        target: String,
+    },
+
+    /// Press keyboard key (Enter, Tab, Escape, ArrowDown, etc.)
+    #[command(alias = "press")]
+    Key {
+        key: String,
+    },
+
+    /// Scroll page or element into view
+    Scroll {
+        /// Direction (up/down/top/bottom) or element target
+        target: String,
+    },
+
+    // ── JavaScript ──────────────────────────────────────────────────
+    /// Execute JavaScript and return result
+    Eval {
+        /// JS code (or --file path)
+        code: Option<String>,
+        /// Read JS from file
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        /// Don't return the result (avoids CDP crashes on large values)
+        #[arg(long)]
+        no_return: bool,
+        /// Truncate result to N chars (default: unlimited)
+        #[arg(long)]
+        max_size: Option<usize>,
+    },
+
+    /// Execute JavaScript (no return value)
+    Exec {
+        code: Option<String>,
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+
+    // ── Network ─────────────────────────────────────────────────────
+    /// Fetch URL from browser context (with cookies/TLS)
+    Fetch {
+        url: String,
+        /// HTTP method (default: GET)
+        #[arg(short, long)]
+        method: Option<String>,
+        /// Request headers as JSON
+        #[arg(long)]
+        headers: Option<String>,
+        /// Request body
+        #[arg(short, long)]
+        body: Option<String>,
+        /// Redirect handling: follow, manual, error
+        #[arg(long)]
+        redirect: Option<String>,
+        /// Max response body bytes (default: 8192, 0 for headers-only)
+        #[arg(long)]
+        max_body: Option<usize>,
+    },
+
+    // ── Cookies ─────────────────────────────────────────────────────
+    /// Get all cookies
+    Cookies,
+
+    /// Set a cookie
+    SetCookie {
+        name: String,
+        value: String,
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+    },
+
+    /// Delete a cookie by name
+    DeleteCookie {
+        name: String,
+        #[arg(long)]
+        domain: Option<String>,
+    },
+
+    /// Clear all cookies
+    ClearCookies,
+
+    // ── Storage ─────────────────────────────────────────────────────
+    /// Get localStorage (all or by key)
+    Storage {
+        /// Key to get (omit for all)
+        key: Option<String>,
+        /// Use sessionStorage instead
+        #[arg(long)]
+        session_storage: bool,
+    },
+
+    /// Set storage value
+    SetStorage {
+        key: String,
+        value: String,
+        /// Use sessionStorage instead
+        #[arg(long)]
+        session_storage: bool,
+    },
+
+    /// Dump all localStorage and sessionStorage
+    DumpStorage,
+
+    // ── State persistence ───────────────────────────────────────────
+    /// Save cookies + storage to JSON file
+    SaveState {
+        path: PathBuf,
+    },
+
+    /// Load cookies + storage from JSON file
+    LoadState {
+        path: PathBuf,
+        /// Skip navigating to saved URL after loading
+        #[arg(long)]
+        no_navigate: bool,
+    },
+
+    // ── Headers ─────────────────────────────────────────────────────
+    /// Set persistent extra HTTP headers
+    Headers {
+        /// JSON object of headers (e.g. '{"Authorization": "Bearer ..."}')
+        headers_json: String,
+    },
+
+    // ── Console / Errors ────────────────────────────────────────────
+    /// Read browser console output
+    Console {
+        /// Clear buffer after reading
+        #[arg(long)]
+        clear: bool,
+        /// Filter by level: log, warn, error, info, debug
+        #[arg(long)]
+        level: Option<String>,
+    },
+
+    /// Read JavaScript errors
+    Errors {
+        /// Clear buffer after reading
+        #[arg(long)]
+        clear: bool,
+    },
+
+    // ── Tabs ────────────────────────────────────────────────────────
+    /// Tab management
+    Tab {
+        #[command(subcommand)]
+        action: TabAction,
+    },
+
+    // ── Wait ────────────────────────────────────────────────────────
+    /// Wait for time, text, or URL pattern
+    Wait {
+        /// Milliseconds to wait
+        ms: Option<u64>,
+        /// Wait for text to appear
+        #[arg(long)]
+        text: Option<String>,
+        /// Wait for URL pattern
+        #[arg(long)]
+        url: Option<String>,
+        /// Wait for network idle
+        #[arg(long)]
+        load: Option<String>,
+        /// Timeout in ms (default: 10000)
+        #[arg(short, long)]
+        timeout: Option<u64>,
+    },
+
+    /// Execute multiple commands in sequence
+    Batch {
+        /// Read commands as JSON from stdin
+        #[arg(long)]
+        json: bool,
+        /// Stop on first error
+        #[arg(long)]
+        bail: bool,
+    },
+
+    // ── Fake Camera ───────────────────────────────────────────────
+    /// Inject fake camera (getUserMedia override) from video file
+    FakeCamera {
+        /// Path to video file (mp4/webm)
+        file: PathBuf,
+        /// Loop the video
+        #[arg(long, alias = "loop")]
+        loop_video: bool,
+    },
+
+    // ── WASM Memory ─────────────────────────────────────────────────
+    /// WASM linear memory operations
+    Wasm {
+        #[command(subcommand)]
+        action: WasmAction,
+    },
+
+    // ── Network Interception ────────────────────────────────────────
+    /// Intercept and modify network requests (CDP Fetch domain)
+    Intercept {
+        #[command(subcommand)]
+        action: InterceptAction,
+    },
+
+    // ── SPA ─────────────────────────────────────────────────────────
+    /// Detect SPA router type
+    SpaInfo,
+
+    /// Navigate SPA without page reload
+    SpaNavigate {
+        path: String,
+    },
+
+    // ── Session management ──────────────────────────────────────────
+    /// Show daemon status
+    Status,
+
+    /// Force-kill daemon
+    Kill,
+
+    /// Close browser and daemon
+    Close,
+}
+
+#[derive(Subcommand)]
+pub enum WasmAction {
+    /// Read bytes from WASM linear memory
+    Read {
+        /// Memory address (hex with 0x prefix or decimal)
+        addr: String,
+        /// Number of bytes to read
+        len: usize,
+        /// JS path to WASM memory (e.g. "window.__ft.mem"). Auto-detects if omitted.
+        #[arg(long)]
+        memory: Option<String>,
+    },
+    /// Write bytes to WASM linear memory
+    Write {
+        /// Memory address (hex with 0x prefix or decimal)
+        addr: String,
+        /// Hex bytes to write (e.g. "deadbeef" or "ff d8 ff e0")
+        hex: String,
+        #[arg(long)]
+        memory: Option<String>,
+    },
+    /// Search WASM memory for byte pattern
+    Find {
+        /// Hex pattern to search for (e.g. "ff d8 ff e0")
+        pattern: String,
+        /// Start address
+        #[arg(long)]
+        start: Option<String>,
+        /// End address
+        #[arg(long)]
+        end: Option<String>,
+        /// Max results (default: 20)
+        #[arg(long, default_value = "20")]
+        max: usize,
+        #[arg(long)]
+        memory: Option<String>,
+    },
+    /// List detected WASM memory instances
+    Info,
+}
+
+#[derive(Subcommand)]
+pub enum InterceptAction {
+    /// Add an intercept rule for URL pattern
+    Add {
+        /// URL pattern to match (glob, e.g. "*/api/data*")
+        url_pattern: String,
+        /// Save request body to file
+        #[arg(long)]
+        capture: Option<PathBuf>,
+        /// Respond with file contents instead of forwarding
+        #[arg(long)]
+        respond: Option<PathBuf>,
+        /// Response status code (default: 200, used with --respond)
+        #[arg(long, default_value = "200")]
+        status: u16,
+    },
+    /// List active intercept rules
+    List,
+    /// Remove intercept rule by ID or "all"
+    Remove {
+        /// Rule ID number or "all"
+        id: String,
+    },
+    /// Show intercepted request log
+    Log {
+        #[arg(long)]
+        clear: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TabAction {
+    /// List all tabs
+    List,
+    /// Open new tab
+    New {
+        url: Option<String>,
+    },
+    /// Switch to tab by ID
+    Switch {
+        tab_id: String,
+    },
+    /// Close tab by ID
+    Close {
+        tab_id: String,
+    },
+}

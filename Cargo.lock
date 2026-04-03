@@ -327,6 +327,21 @@ dependencies = [
 [[package]]
 name = "eoka"
 version = "0.3.13"
+dependencies = [
+ "aho-corasick",
+ "base64",
+ "fastrand",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "eoka"
+version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "763018605c897fbcf14c0d224d3cd584365eb6fcf1c905f07a43d7bf446bf1ea"
 dependencies = [
@@ -348,7 +363,7 @@ dependencies = [
  "anyhow",
  "base64",
  "dirs",
- "eoka",
+ "eoka 0.3.13",
  "regex",
  "reqwest",
  "rmcp",
@@ -357,6 +372,20 @@ dependencies = [
  "serde_json",
  "tokio",
  "urlencoding",
+]
+
+[[package]]
+name = "eoka-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "eoka 0.3.13",
+ "eoka-agent",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -379,7 +408,7 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "clap",
- "eoka",
+ "eoka 0.3.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "eoka-email",
  "regex",
  "serde",
