@@ -133,52 +133,55 @@ pub async fn auto_observe_if_needed(
     Ok(())
 }
 
-/// Click with auto-retry on stale element.
+enum Action<'a> {
+    Click,
+    Fill(&'a str),
+}
+
+impl<'a> Action<'a> {
+    async fn perform(&self, page: &Page, selector: &str) -> Result<(), String> {
+        match self {
+            Action::Click => page.click(selector).await.map_err(|e| e.to_string()),
+            Action::Fill(text) => page.fill(selector, text).await.map_err(|e| e.to_string()),
+        }
+    }
+}
+
+async fn act_with_retry(
+    tab: &mut TabState,
+    target_str: &str,
+    viewport_only: bool,
+    action: Action<'_>,
+) -> Result<String, String> {
+    let resolved = resolve_target(tab, target_str).await?;
+    match action.perform(&tab.page, &resolved.selector).await {
+        Ok(_) => return Ok(resolved.desc),
+        Err(e) if is_stale_element_error(&e) => {}
+        Err(e) => return Err(e),
+    }
+    tab.elements = observe::observe(&tab.page, viewport_only)
+        .await
+        .map_err(|e| e.to_string())?;
+    let resolved = resolve_target(tab, target_str).await?;
+    action.perform(&tab.page, &resolved.selector).await?;
+    Ok(resolved.desc)
+}
+
 pub async fn click_with_retry(
     tab: &mut TabState,
     target_str: &str,
     viewport_only: bool,
 ) -> Result<String, String> {
-    let resolved = resolve_target(tab, target_str).await?;
-    match tab.page.click(&resolved.selector).await {
-        Ok(_) => return Ok(resolved.desc),
-        Err(e) if is_stale_element_error(&e.to_string()) => {}
-        Err(e) => return Err(e.to_string()),
-    }
-    // Retry once after re-observing
-    tab.elements = observe::observe(&tab.page, viewport_only)
-        .await
-        .map_err(|e| e.to_string())?;
-    let resolved = resolve_target(tab, target_str).await?;
-    tab.page
-        .click(&resolved.selector)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(resolved.desc)
+    act_with_retry(tab, target_str, viewport_only, Action::Click).await
 }
 
-/// Fill with auto-retry on stale element.
 pub async fn fill_with_retry(
     tab: &mut TabState,
     target_str: &str,
     text: &str,
     viewport_only: bool,
 ) -> Result<String, String> {
-    let resolved = resolve_target(tab, target_str).await?;
-    match tab.page.fill(&resolved.selector, text).await {
-        Ok(_) => return Ok(resolved.desc),
-        Err(e) if is_stale_element_error(&e.to_string()) => {}
-        Err(e) => return Err(e.to_string()),
-    }
-    tab.elements = observe::observe(&tab.page, viewport_only)
-        .await
-        .map_err(|e| e.to_string())?;
-    let resolved = resolve_target(tab, target_str).await?;
-    tab.page
-        .fill(&resolved.selector, text)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(resolved.desc)
+    act_with_retry(tab, target_str, viewport_only, Action::Fill(text)).await
 }
 
 /// Wait for document.readyState to reach "interactive" or "complete".

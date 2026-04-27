@@ -1,3 +1,8 @@
+---
+name: eoka
+description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, scraping protected/Cloudflare-gated endpoints with real cookies and TLS fingerprint, headless screenshots (plain or annotated with numbered element labels), CDP fetch interception, WASM memory dumps, fake-camera injection for getUserMedia, and SPA navigation. Triggers on: eoka, browser cli, headless screenshot, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
+---
+
 # eoka — Browser Automation CLI
 
 Fast browser automation CLI built on the eoka CDP engine. Client-daemon architecture: the first command auto-launches a background daemon that keeps Chrome alive, making subsequent commands instant (~10ms).

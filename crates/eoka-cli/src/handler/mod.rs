@@ -187,9 +187,9 @@ impl Handler {
                 tab.page.set_extra_headers(h.clone()).await.map_err(|e| e.to_string())?;
             }
             if let Some(js) = inject_js {
-                // Load from file if it looks like a path, otherwise treat as inline JS
-                let source = if js.ends_with(".js") && std::path::Path::new(js).exists() {
-                    std::fs::read_to_string(js).map_err(|e| format!("inject_js read error: {}", e))?
+                let source = if js.ends_with(".js") {
+                    std::fs::read_to_string(js)
+                        .map_err(|e| format!("inject_js read error: {}", e))?
                 } else {
                     js.to_string()
                 };
@@ -673,17 +673,17 @@ impl Handler {
 
     async fn cmd_dump_storage(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        let local_str: String = tab.page
-            .evaluate_sync("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))")
+        let combined: String = tab.page
+            .evaluate_sync(
+                "JSON.stringify({\
+                    localStorage: Object.fromEntries(Object.entries(localStorage)),\
+                    sessionStorage: Object.fromEntries(Object.entries(sessionStorage))\
+                })",
+            )
             .await
             .unwrap_or_else(|_| "{}".to_string());
-        let local: Value = serde_json::from_str(&local_str).unwrap_or(Value::Object(Default::default()));
-        let session_str: String = tab.page
-            .evaluate_sync("JSON.stringify(Object.fromEntries(Object.entries(sessionStorage)))")
-            .await
-            .unwrap_or_else(|_| "{}".to_string());
-        let session: Value = serde_json::from_str(&session_str).unwrap_or(Value::Object(Default::default()));
-        Ok(Response::ok(json!({ "localStorage": local, "sessionStorage": session })))
+        let parsed: Value = serde_json::from_str(&combined).unwrap_or_else(|_| json!({}));
+        Ok(Response::ok(parsed))
     }
 
     // ── State save/load ─────────────────────────────────────────────────
@@ -1211,23 +1211,12 @@ impl Handler {
                 Some(id) => id.to_string(),
                 None => continue,
             };
-            let url = params
-                .get("request")
-                .and_then(|r| r.get("url"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let method = params
-                .get("request")
-                .and_then(|r| r.get("method"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("GET")
-                .to_string();
-            let post_data = params
-                .get("request")
-                .and_then(|r| r.get("postData"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let req_field = |name: &str| -> Option<String> {
+                params.get("request")?.get(name)?.as_str().map(String::from)
+            };
+            let url = req_field("url").unwrap_or_default();
+            let method = req_field("method").unwrap_or_else(|| "GET".to_string());
+            let post_data = req_field("postData");
 
             // Match rule and extract what we need before borrowing session
             let matched = self.intercept.match_url(&url).map(|r| {
