@@ -12,7 +12,7 @@ name = "eoka"
 path = "src/main.rs"
 
 [dependencies]
-eoka-agent = { path = "../eoka-agent" }
+eoka-agent = "0.1.4"
 eoka = "0.3.14"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
