@@ -17,7 +17,7 @@ name = "eoka-agent"
 path = "src/main.rs"
 
 [dependencies]
-eoka = { path = "/Volumes/External/eoka" }
+eoka = "0.3.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
