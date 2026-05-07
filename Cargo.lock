@@ -327,6 +327,8 @@ dependencies = [
 [[package]]
 name = "eoka"
 version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "887f9895c9e61b9ce3fb916dce3ad28f2d13be54072c3a57c0e451f6046081db"
 dependencies = [
  "aho-corasick",
  "base64",
