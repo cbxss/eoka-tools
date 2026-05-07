@@ -159,6 +159,34 @@ async fn restore_storage(page: &Page, storage_name: &str, data: &HashMap<String,
     }
 }
 
+/// Connect to a running Chrome (port number or ws:// URL), capture its
+/// front-tab state via CDP, and disconnect. The `Browser::disconnect()` call
+/// leaves the user's Chrome running.
+pub async fn clone_state_from_source(source: &str) -> Result<SavedState, String> {
+    use crate::launch_spec::resolve_cdp_spec;
+
+    let ws_url = resolve_cdp_spec(source)?;
+    let browser = eoka::Browser::connect(&ws_url)
+        .await
+        .map_err(|e| format!("connect: {}", e))?;
+
+    let tabs = browser.tabs().await.map_err(|e| e.to_string())?;
+    // Skip DevTools/extension targets — we want a real user page.
+    let target = tabs
+        .iter()
+        .find(|t| !t.url.starts_with("devtools://") && !t.url.starts_with("chrome-extension://"))
+        .ok_or_else(|| "No user-page tab found in the running Chrome".to_string())?;
+
+    let page = browser
+        .attach_page(&target.id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let state = capture_state(&page).await?;
+    let _ = browser.disconnect().await;
+    Ok(state)
+}
+
 // ---------------------------------------------------------------------------
 // Console capture
 // ---------------------------------------------------------------------------

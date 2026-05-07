@@ -2,6 +2,7 @@
 
 pub mod intercept;
 mod persist;
+pub mod profile;
 pub mod state;
 mod target;
 
@@ -12,6 +13,7 @@ use base64::Engine;
 use eoka_agent::{annotate, observe, snapshot};
 use serde_json::{json, Value};
 
+use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
 use intercept::{InterceptLogEntry, InterceptState};
 use persist::{capture_state, ensure_console_capture, restore_state, SavedState};
@@ -27,27 +29,66 @@ use target::{
 
 pub struct Handler {
     state: Option<BrowserState>,
-    headless: bool,
+    spec: LaunchSpec,
     intercept: InterceptState,
 }
 
 impl Handler {
-    pub fn new(headless: bool) -> Self {
+    pub fn new(spec: LaunchSpec) -> Self {
         Self {
             state: None,
-            headless,
+            spec,
             intercept: InterceptState::new(),
         }
     }
 
     async fn ensure_browser(&mut self) -> Result<(), String> {
-        if self.state.is_none() {
-            self.state = Some(
-                BrowserState::new(self.headless)
-                    .await
-                    .map_err(|e| e.to_string())?,
-            );
+        if self.state.is_some() {
+            return Ok(());
         }
+        let mut state = match &self.spec {
+            LaunchSpec::Connect { ws_url } => BrowserState::connected(ws_url)
+                .await
+                .map_err(|e| e.to_string())?,
+            LaunchSpec::Launch {
+                headless,
+                from_profile,
+                clone_state_from,
+            } => {
+                let mut s = BrowserState::launched(*headless, from_profile.as_deref())
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                // If --clone-state-from was set, capture from the live Chrome,
+                // open a blank tab, restore. The state is loaded into the launched
+                // browser before any user command runs.
+                if let Some(source) = clone_state_from {
+                    let saved = persist::clone_state_from_source(source).await?;
+                    let url = saved.url.clone();
+                    let tab = if !url.is_empty() {
+                        s.ensure_tab(&url).await.map_err(|e| e.to_string())?
+                    } else {
+                        s.ensure_blank_tab().await.map_err(|e| e.to_string())?
+                    };
+                    restore_state(&tab.page, &saved).await?;
+                    tab.invalidate();
+                }
+                s
+            }
+        };
+
+        // In live mode, auto-attach to the most recent user tab so the first
+        // command (snapshot, click, etc.) operates on what the user is looking
+        // at rather than refusing with "no tab open".
+        if state.is_live && state.current_tab_id.is_none() {
+            if let Ok(tabs) = state.browser.tabs().await {
+                if let Some(t) = tabs.into_iter().find(|t| !t.url.starts_with("devtools://")) {
+                    let _ = state.attach_existing_tab(&t.id).await;
+                }
+            }
+        }
+
+        self.state = Some(state);
         Ok(())
     }
 
@@ -118,6 +159,8 @@ impl Handler {
             "tab_new" => self.cmd_tab_new(args).await,
             "tab_switch" => self.cmd_tab_switch(args).await,
             "tab_close" => self.cmd_tab_close(args).await,
+            "tab_attach" => self.cmd_tab_attach(args).await,
+            "clone_from" => self.cmd_clone_from(args).await,
             "wait" => self.cmd_wait(args).await,
             "spa_info" => self.cmd_spa_info().await,
             "spa_navigate" => self.cmd_spa_navigate(args).await,
@@ -170,6 +213,12 @@ impl Handler {
         let has_extras = headers.is_some() || user_agent.is_some() || bypass_csp || inject_js.is_some();
 
         let state = self.require_state_mut()?;
+
+        // In live mode, never navigate the user's currently-attached tab.
+        // Always pop a fresh tab in their browser.
+        if state.is_live {
+            state.new_tab(None).await.map_err(|e| e.to_string())?;
+        }
 
         if has_extras {
             let tab = if state.current_tab_id.is_some() {
@@ -812,6 +861,62 @@ impl Handler {
         let url = tab.page.url().await.map_err(|e| e.to_string())?;
         let title = title_nonblocking(&tab.page).await;
         Ok(Response::ok_text(format!("Switched to tab [{}]\nURL: {}\nTitle: {}", tab_id, url, title)))
+    }
+
+    async fn cmd_tab_attach(&mut self, args: &Value) -> Result<Response, String> {
+        let tab_id = self.arg_str(args, "tab_id")?.to_string();
+        self.ensure_browser().await?;
+        let state = self.require_state_mut()?;
+        state
+            .attach_existing_tab(&tab_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let tab = state.current_tab().ok_or("Attach failed")?;
+        let url = tab.page.url().await.map_err(|e| e.to_string())?;
+        let title = title_nonblocking(&tab.page).await;
+        Ok(Response::ok_text(format!(
+            "Attached to tab [{}]\nURL: {}\nTitle: {}",
+            tab_id, url, title
+        )))
+    }
+
+    async fn cmd_clone_from(&mut self, args: &Value) -> Result<Response, String> {
+        let source = self.arg_str(args, "source")?.to_string();
+        let to = args["to"].as_str().map(std::path::PathBuf::from);
+
+        let saved = persist::clone_state_from_source(&source).await?;
+
+        if let Some(path) = to {
+            let json = serde_json::to_string_pretty(&saved).map_err(|e| e.to_string())?;
+            std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+            return Ok(Response::ok_text(format!(
+                "Saved state from {} to {} ({} cookies, {} localStorage, {} sessionStorage)",
+                source,
+                path.display(),
+                saved.cookies.len(),
+                saved.local_storage.len(),
+                saved.session_storage.len()
+            )));
+        }
+
+        // No --to: load directly into the active session.
+        self.ensure_browser().await?;
+        let state = self.require_state_mut()?;
+        let url = saved.url.clone();
+        let tab = if !url.is_empty() {
+            state.ensure_tab(&url).await.map_err(|e| e.to_string())?
+        } else {
+            state.ensure_blank_tab().await.map_err(|e| e.to_string())?
+        };
+        restore_state(&tab.page, &saved).await?;
+        tab.invalidate();
+        Ok(Response::ok_text(format!(
+            "Hydrated session from {} ({} cookies, {} localStorage, {} sessionStorage)",
+            source,
+            saved.cookies.len(),
+            saved.local_storage.len(),
+            saved.session_storage.len()
+        )))
     }
 
     async fn cmd_tab_close(&mut self, args: &Value) -> Result<Response, String> {

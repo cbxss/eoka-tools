@@ -16,6 +16,26 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub headed: bool,
 
+    /// Connect to a Chrome already running with --remote-debugging-port=N.
+    /// Accepts a port (e.g. `--cdp 9222`) or a full ws:// URL.
+    /// Implies no stealth injection on attached tabs.
+    #[arg(long, value_name = "PORT|URL", global = true, env = "EOKA_CDP")]
+    pub cdp: Option<String>,
+
+    /// Auto-discover a running Chrome on ports 9222-9229. Implies --cdp.
+    #[arg(long, global = true, env = "EOKA_AUTO_CONNECT")]
+    pub auto_connect: bool,
+
+    /// Launch a fresh Chrome and pre-load cookies/storage from a running
+    /// Chrome (port or ws:// URL) before running commands.
+    #[arg(long, value_name = "PORT|URL", global = true)]
+    pub clone_state_from: Option<String>,
+
+    /// Launch with a copy of an existing Chrome profile directory.
+    /// Pass `auto` to autodetect the default profile, or an absolute path.
+    #[arg(long, value_name = "auto|PATH", global = true, env = "EOKA_FROM_PROFILE")]
+    pub from_profile: Option<String>,
+
     /// Internal: run as daemon (hidden)
     #[arg(long, hide = true)]
     pub daemon: bool,
@@ -348,8 +368,28 @@ pub enum Command {
     /// Force-kill daemon
     Kill,
 
-    /// Close browser and daemon
+    /// Close browser and daemon. In connect mode, only disconnects.
     Close,
+
+    /// Print the discovered DevTools WebSocket URL for a running Chrome.
+    /// Defaults to the port from --cdp / --auto-connect, else 9222.
+    #[command(name = "cdp-url")]
+    CdpUrl {
+        /// Port to query (overrides --cdp)
+        #[arg(long)]
+        port: Option<u16>,
+    },
+
+    /// Snapshot cookies + storage from a running Chrome (without binding the
+    /// daemon to it). Pass `--cdp PORT|URL` to choose the source.
+    #[command(name = "clone-from")]
+    CloneFrom {
+        /// Port or ws:// URL of the running Chrome
+        source: String,
+        /// Write the snapshot to a JSON file (otherwise loaded into the daemon's session)
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -437,6 +477,11 @@ pub enum TabAction {
     },
     /// Close tab by ID
     Close {
+        tab_id: String,
+    },
+    /// Attach to an existing tab by ID without injecting any scripts.
+    /// Useful in --cdp mode to drive a tab the user already has open.
+    Attach {
         tab_id: String,
     },
 }

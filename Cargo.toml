@@ -9,3 +9,8 @@ license = "MIT"
 repository = "https://github.com/cbxss/eoka-tools"
 homepage = "https://github.com/cbxss/eoka-tools"
 authors = ["cbxss"]
+
+# Use the local eoka clone while 0.3.15 is unreleased on this branch.
+# Remove after publishing eoka 0.3.15 to crates.io.
+[patch.crates-io]
+eoka = { path = "../eoka" }
