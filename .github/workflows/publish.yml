@@ -1,53 +1,66 @@
 name: Publish
 
-# Tag-triggered publish for any crate in the workspace.
-# Push a tag like `eoka-cli-v0.1.1` to publish that crate at that version.
-# Cargo.toml's version must match the tag's version, else the job fails fast.
+# Auto-publishes any workspace crate whose Cargo.toml version is ahead of
+# crates.io. Runs on every push to main; safe to run repeatedly because
+# already-published versions are skipped.
 
 on:
   push:
-    tags:
-      - "eoka-cli-v*"
-      - "eoka-agent-v*"
-      - "eoka-runner-v*"
-      - "eoka-email-v*"
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   publish:
-    name: Publish to crates.io
+    name: Publish missing crate versions
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Parse tag
-        id: parse
+      - name: Configure git
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          # eoka-cli-v0.1.1 -> crate=eoka-cli, version=0.1.1
-          CRATE="${TAG%-v*}"
-          VERSION="${TAG##*-v}"
-          echo "crate=$CRATE" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Publishing $CRATE @ $VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Verify Cargo.toml version matches tag
+      - name: Publish each crate whose version is not on crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          MANIFEST="crates/${{ steps.parse.outputs.crate }}/Cargo.toml"
-          ACTUAL=$(grep '^version' "$MANIFEST" | head -1 | sed 's/.*"\(.*\)"/\1/')
-          if [ "$ACTUAL" != "${{ steps.parse.outputs.version }}" ]; then
-            echo "Cargo.toml version '$ACTUAL' does not match tag '${{ steps.parse.outputs.version }}'" >&2
-            exit 1
-          fi
+          set -e
+          UA="eoka-tools-publish (${{ github.repository }})"
 
-      - name: Publish
-        run: |
-          cargo publish \
-            -p "${{ steps.parse.outputs.crate }}" \
-            --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+          # Stable publish order: leaf deps first so dependents resolve.
+          for crate in eoka-runner eoka-email eoka-agent eoka-cli; do
+            manifest="crates/${crate}/Cargo.toml"
+            [ -f "$manifest" ] || continue
+
+            version=$(grep '^version' "$manifest" | head -1 | sed 's/.*"\(.*\)"/\1/')
+            tag="${crate}-v${version}"
+            echo "::group::${crate} @ ${version}"
+
+            api_url="https://crates.io/api/v1/crates/${crate}/${version}"
+            http_status=$(curl -sS -o /dev/null -w "%{http_code}" -A "$UA" "$api_url" || echo 000)
+            if [ "$http_status" = "200" ]; then
+              echo "${crate} ${version} already on crates.io — skip"
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "Publishing ${crate} ${version}"
+            cargo publish -p "$crate" --token "$CARGO_REGISTRY_TOKEN"
+
+            if git rev-parse "$tag" >/dev/null 2>&1; then
+              echo "Tag ${tag} already exists — skip tag push"
+            else
+              git tag -a "$tag" -m "Release ${crate} v${version}"
+              git push origin "$tag"
+            fi
+            echo "::endgroup::"
+          done
