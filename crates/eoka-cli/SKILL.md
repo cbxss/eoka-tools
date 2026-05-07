@@ -223,6 +223,62 @@ eoka --session pentest2 open https://target-b.com
 eoka --session pentest1 snapshot        # Interacts with first browser
 ```
 
+## Driving Your Real Chrome
+
+Three ways to use eoka against an existing Chrome instead of a fresh headless one:
+
+### 1. Attach via CDP (live control)
+
+Start Chrome with remote debugging, then point eoka at it:
+
+```bash
+google-chrome --remote-debugging-port=9222 &
+eoka --cdp 9222 snapshot                # snapshots the front tab
+eoka --cdp 9222 click @e3
+eoka --cdp 9222 open https://gmail.com  # opens a NEW tab — your tabs stay
+eoka --cdp 9222 close                   # disconnects, leaves Chrome running
+eoka --auto-connect snapshot            # find any Chrome on 9222-9229
+eoka cdp-url --port 9222                # print ws:// URL (for piping)
+```
+
+In CDP mode, eoka:
+- skips evasion-script injection (your tabs stay clean),
+- disables the stealth CDP filter (full DevTools-equivalent control),
+- auto-attaches to the most recent user tab on first command,
+- never sends `Browser.close` to a Chrome it doesn't own.
+
+### 2. Clone state from a running Chrome
+
+Snapshot cookies + storage from your real Chrome, then drive a fresh headless
+session with that auth:
+
+```bash
+# Either save to a file...
+eoka clone-from 9222 --to state.json
+eoka --state state.json open https://protected-app.com
+
+# ...or hydrate directly into a launched headless session:
+eoka --clone-state-from 9222 open https://protected-app.com
+```
+
+Captures HttpOnly cookies via CDP (which JS can't reach), localStorage,
+sessionStorage, and the User-Agent.
+
+### 3. Clone the profile directory
+
+Copy your Chrome profile to a tempdir and launch headless against the copy.
+Picks up encrypted cookies via the OS keyring as the same user:
+
+```bash
+eoka --from-profile auto open https://protected-app.com
+eoka --from-profile ~/.config/google-chrome/Default open https://x.com
+```
+
+Caveats:
+- Chrome refuses two instances on one user-data-dir, hence the copy.
+- Chrome 127+ on Windows uses App-Bound Encryption keyed to the binary path —
+  cookies may silently fail to decrypt if eoka's Chrome isn't the same install.
+
 ## Options
 
 | Flag | Description |
@@ -230,6 +286,10 @@ eoka --session pentest1 snapshot        # Interacts with first browser
 | `--session <name>` | Isolated browser session (default: "default") |
 | `--json` | JSON output mode (for agent integration) |
 | `--headed` | Show browser window (default: headless) |
+| `--cdp <PORT\|URL>` | Connect to a running Chrome (`9222` or `ws://...`) instead of launching |
+| `--auto-connect` | Discover a Chrome on ports 9222–9229 |
+| `--clone-state-from <PORT\|URL>` | After launch, hydrate cookies/storage from a running Chrome |
+| `--from-profile <auto\|PATH>` | Clone an existing Chrome profile and launch against the copy |
 
 ## Environment Variables
 
@@ -241,6 +301,9 @@ eoka --session pentest1 snapshot        # Interacts with first browser
 | `EOKA_PATCH_BINARY` | `true` to apply stealth binary patches |
 | `EOKA_CHROME_ARGS` | Extra Chrome flags, colon-separated (e.g. `--use-fake-ui-for-media-stream:--allow-insecure-localhost`) |
 | `EOKA_IDLE_TIMEOUT` | Daemon idle timeout in ms (default: 1800000 = 30min) |
+| `EOKA_CDP` | Default `--cdp` value (port or ws:// URL) |
+| `EOKA_AUTO_CONNECT` | `1` to default to `--auto-connect` |
+| `EOKA_FROM_PROFILE` | Default `--from-profile` value (`auto` or path) |
 
 ## Daemon Management
 

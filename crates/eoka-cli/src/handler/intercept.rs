@@ -69,14 +69,6 @@ impl InterceptState {
         self.rules.clear();
     }
 
-    pub fn rules(&self) -> &[InterceptRule] {
-        &self.rules
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
-    }
-
     /// Find the first matching rule for a URL.
     pub fn match_url(&self, url: &str) -> Option<&InterceptRule> {
         self.rules.iter().find(|r| url_matches(&r.url_pattern, url))
@@ -87,10 +79,6 @@ impl InterceptState {
             self.log.drain(0..500);
         }
         self.log.push(entry);
-    }
-
-    pub fn log(&self) -> &[InterceptLogEntry] {
-        &self.log
     }
 
     pub fn clear_log(&mut self) {
@@ -163,8 +151,14 @@ mod tests {
 
     #[test]
     fn glob_matching() {
-        assert!(url_matches("*/api/data*", "https://example.com/api/data?foo=1"));
-        assert!(url_matches("*/biometrics/*", "https://api.facetec.com/biometrics/process-request"));
+        assert!(url_matches(
+            "*/api/data*",
+            "https://example.com/api/data?foo=1"
+        ));
+        assert!(url_matches(
+            "*/biometrics/*",
+            "https://api.facetec.com/biometrics/process-request"
+        ));
         assert!(!url_matches("*/api/data*", "https://example.com/other"));
         assert!(url_matches("example.com", "https://example.com/foo"));
     }

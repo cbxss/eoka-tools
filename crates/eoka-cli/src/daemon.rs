@@ -5,6 +5,7 @@ use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
 use crate::handler::Handler;
+use crate::launch_spec::LaunchSpec;
 use crate::protocol::{read_msg, write_msg, Request, Response};
 use crate::session;
 
@@ -17,7 +18,7 @@ fn idle_timeout() -> Duration {
     Duration::from_millis(ms)
 }
 
-pub async fn run(session_name: &str, headless: bool) -> anyhow::Result<()> {
+pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
     session::ensure_runtime_dir()?;
 
     let sock_path = session::socket_path(session_name);
@@ -32,13 +33,14 @@ pub async fn run(session_name: &str, headless: bool) -> anyhow::Result<()> {
     std::fs::write(&pid_path, std::process::id().to_string())?;
 
     eprintln!(
-        "[eoka] daemon started (session={}, pid={})",
+        "[eoka] daemon started (session={}, pid={}, mode={})",
         session_name,
-        std::process::id()
+        std::process::id(),
+        if spec.is_live() { "connect" } else { "launch" }
     );
     eprintln!("[eoka] socket: {}", sock_path.display());
 
-    let mut handler = Handler::new(headless);
+    let mut handler = Handler::new(spec);
     let mut last_activity = Instant::now();
     let timeout = idle_timeout();
 

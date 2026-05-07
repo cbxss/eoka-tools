@@ -29,9 +29,7 @@ async fn resolve_ref(
 ) -> Result<String, ErrorData> {
     let stale = |detail: &str| invalid(format!("Ref {} {}. Take a new snapshot.", label, detail));
 
-    let backend_id = snapshot_refs
-        .get(label)
-        .ok_or_else(|| stale("not found"))?;
+    let backend_id = snapshot_refs.get(label).ok_or_else(|| stale("not found"))?;
 
     let resolve_result: serde_json::Value = page
         .session()

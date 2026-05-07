@@ -1348,7 +1348,9 @@ async fn test_state_full_roundtrip() {
 
     // Capture
     let (cookies, ls, ss) = capture_state(page).await;
-    assert!(cookies.iter().any(|c| c.name == "sid" && c.value == "session123"));
+    assert!(cookies
+        .iter()
+        .any(|c| c.name == "sid" && c.value == "session123"));
     assert_eq!(ls.get("app_token").unwrap(), "tok_xyz");
     assert_eq!(ss.get("view").unwrap(), "dashboard");
 
@@ -1364,7 +1366,10 @@ async fn test_state_full_roundtrip() {
         !c2.iter().any(|c| c.name == "sid"),
         "cookies should be wiped"
     );
-    assert!(!ls2.contains_key("app_token"), "localStorage should be wiped");
+    assert!(
+        !ls2.contains_key("app_token"),
+        "localStorage should be wiped"
+    );
     assert!(!ss2.contains_key("view"), "sessionStorage should be wiped");
 
     // Restore cookies

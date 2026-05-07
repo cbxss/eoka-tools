@@ -1498,10 +1498,7 @@ impl EokaServer {
     #[tool(
         description = "Read captured console output (log/warn/error/info/debug). Auto-injects capture on first call."
     )]
-    async fn console(
-        &self,
-        req: Parameters<ConsoleRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
+    async fn console(&self, req: Parameters<ConsoleRequest>) -> Result<CallToolResult, ErrorData> {
         let req = req.0;
         self.ensure_browser().await?;
         let mut guard = self.state.lock().await;
@@ -1548,10 +1545,7 @@ impl EokaServer {
     #[tool(
         description = "Read captured JavaScript errors (uncaught exceptions and unhandled promise rejections). Auto-injects capture on first call."
     )]
-    async fn errors(
-        &self,
-        req: Parameters<ErrorsRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
+    async fn errors(&self, req: Parameters<ErrorsRequest>) -> Result<CallToolResult, ErrorData> {
         let req = req.0;
         self.ensure_browser().await?;
         let mut guard = self.state.lock().await;
@@ -1638,8 +1632,8 @@ impl EokaServer {
     ) -> Result<CallToolResult, ErrorData> {
         let contents = std::fs::read_to_string(&req.0.path)
             .map_err(|e| invalid(format!("Failed to read '{}': {}", req.0.path, e)))?;
-        let saved: helpers::SavedState =
-            serde_json::from_str(&contents).map_err(|e| invalid(format!("Invalid state JSON: {}", e)))?;
+        let saved: helpers::SavedState = serde_json::from_str(&contents)
+            .map_err(|e| invalid(format!("Invalid state JSON: {}", e)))?;
 
         self.ensure_browser().await?;
         let mut guard = self.state.lock().await;
@@ -1652,7 +1646,9 @@ impl EokaServer {
         if navigate {
             // Navigate to saved URL first so storage calls have a valid origin
             let tab = state.ensure_tab(&saved.url).await.map_err(internal)?;
-            helpers::wait_for_stable(&tab.page).await.map_err(internal)?;
+            helpers::wait_for_stable(&tab.page)
+                .await
+                .map_err(internal)?;
         }
 
         let tab = state
@@ -1668,7 +1664,9 @@ impl EokaServer {
                 .evaluate_sync("location.reload()")
                 .await
                 .unwrap_or_default();
-            helpers::wait_for_stable(&tab.page).await.map_err(internal)?;
+            helpers::wait_for_stable(&tab.page)
+                .await
+                .map_err(internal)?;
         }
 
         text_ok(format!(

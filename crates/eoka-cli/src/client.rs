@@ -4,6 +4,7 @@ use std::process::Command as StdCommand;
 use std::time::Duration;
 use tokio::net::UnixStream;
 
+use crate::launch_spec::LaunchSpec;
 use crate::protocol::{read_msg, write_msg, Request, Response};
 use crate::session;
 
@@ -11,14 +12,14 @@ use crate::session;
 pub async fn send_command(
     session_name: &str,
     request: Request,
-    headless: bool,
+    spec: LaunchSpec,
 ) -> anyhow::Result<Response> {
     let sock = session::socket_path(session_name);
 
     let stream = match UnixStream::connect(&sock).await {
         Ok(s) => s,
         Err(_) => {
-            launch_daemon(session_name, headless)?;
+            launch_daemon(session_name, &spec)?;
             wait_for_socket(session_name).await?
         }
     };
@@ -48,15 +49,32 @@ async fn wait_for_socket(session_name: &str) -> anyhow::Result<UnixStream> {
 }
 
 /// Spawn daemon as a background process.
-fn launch_daemon(session_name: &str, headless: bool) -> anyhow::Result<()> {
+fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
     session::ensure_runtime_dir()?;
 
     let exe = std::env::current_exe()?;
     let mut cmd = StdCommand::new(exe);
     cmd.arg("--daemon").arg("--session").arg(session_name);
 
-    if !headless {
-        cmd.arg("--headed");
+    match spec {
+        LaunchSpec::Launch {
+            headless,
+            from_profile,
+            clone_state_from,
+        } => {
+            if !*headless {
+                cmd.arg("--headed");
+            }
+            if let Some(p) = from_profile {
+                cmd.arg("--from-profile").arg(p);
+            }
+            if let Some(s) = clone_state_from {
+                cmd.arg("--clone-state-from").arg(s);
+            }
+        }
+        LaunchSpec::Connect { ws_url } => {
+            cmd.arg("--cdp").arg(ws_url);
+        }
     }
 
     let log_path = session::socket_path(session_name).with_extension("log");

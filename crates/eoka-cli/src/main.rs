@@ -2,12 +2,14 @@ mod cli;
 mod client;
 mod daemon;
 mod handler;
+mod launch_spec;
 mod output;
 mod protocol;
 mod session;
 
 use clap::Parser;
 use cli::{Cli, Command, InterceptAction, TabAction, WasmAction};
+use launch_spec::LaunchSpec;
 use protocol::Request;
 use serde_json::json;
 
@@ -15,19 +17,36 @@ use serde_json::json;
 async fn main() {
     let cli = Cli::parse();
 
-    // Daemon mode (internal — launched by client)
+    // Daemon mode (internal — launched by client). The daemon process re-parses
+    // the same global flags, so --cdp / --from-profile / --headed are visible here.
     if cli.daemon {
-        if let Err(e) = daemon::run(&cli.session, !cli.headed).await {
+        let spec = match resolve_launch_spec(&cli) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[eoka] {}", e);
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = daemon::run(&effective_session(&cli, &spec), spec).await {
             eprintln!("[eoka] daemon error: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
+    // Resolve LaunchSpec eagerly — invalid --cdp args fail before we touch the daemon.
+    let spec = match resolve_launch_spec(&cli) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let effective_session = effective_session(&cli, &spec);
+
     let command = match cli.command {
         Some(cmd) => cmd,
         None => {
-            // No command — print help
             use clap::CommandFactory;
             Cli::command().print_help().unwrap();
             println!();
@@ -35,21 +54,40 @@ async fn main() {
         }
     };
 
-    // Handle local commands (no daemon needed)
+    // Handle commands that don't need the daemon at all.
     match &command {
         Command::Status => {
-            if client::is_daemon_running(&cli.session) {
-                println!("Daemon running (session={})", cli.session);
-                println!("Socket: {}", session::socket_path(&cli.session).display());
+            if client::is_daemon_running(&effective_session) {
+                println!("Daemon running (session={})", effective_session);
+                println!(
+                    "Socket: {}",
+                    session::socket_path(&effective_session).display()
+                );
             } else {
-                println!("No daemon running (session={})", cli.session);
+                println!("No daemon running (session={})", effective_session);
             }
             return;
         }
         Command::Kill => {
-            match client::kill_daemon(&cli.session) {
-                Ok(true) => println!("Daemon killed (session={})", cli.session),
-                Ok(false) => println!("No daemon running (session={})", cli.session),
+            match client::kill_daemon(&effective_session) {
+                Ok(true) => println!("Daemon killed (session={})", effective_session),
+                Ok(false) => println!("No daemon running (session={})", effective_session),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        Command::CdpUrl { port } => {
+            let p = port
+                .or_else(|| match &spec {
+                    LaunchSpec::Connect { ws_url } => parse_port_from_ws(ws_url),
+                    _ => None,
+                })
+                .unwrap_or(9222);
+            match eoka::cdp::discover::discover_browser_ws("127.0.0.1", p) {
+                Ok(url) => println!("{}", url),
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
@@ -60,12 +98,11 @@ async fn main() {
         _ => {}
     }
 
-    // Build request from command
+    // Build request from command (clone-from is handled inside the daemon so
+    // it can hydrate the active session).
     let request = command_to_request(&command);
 
-    // Send to daemon (auto-launches if needed)
-    let headless = !cli.headed;
-    let response = match client::send_command(&cli.session, request, headless).await {
+    let response = match client::send_command(&effective_session, request, spec.clone()).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -79,10 +116,56 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // If close command succeeded, also kill daemon
+    // `close` shuts down the daemon too (whether it owns Chrome or not).
     if matches!(command, Command::Close) {
-        let _ = client::kill_daemon(&cli.session);
+        let _ = client::kill_daemon(&effective_session);
     }
+}
+
+/// Map CLI flags to a `LaunchSpec`. Resolves --cdp ports to ws:// URLs eagerly.
+fn resolve_launch_spec(cli: &Cli) -> Result<LaunchSpec, String> {
+    if let Some(spec) = &cli.cdp {
+        let ws_url = launch_spec::resolve_cdp_spec(spec)?;
+        return Ok(LaunchSpec::Connect { ws_url });
+    }
+    if cli.auto_connect {
+        let (_port, ws_url) = launch_spec::auto_connect()?;
+        return Ok(LaunchSpec::Connect { ws_url });
+    }
+    Ok(LaunchSpec::Launch {
+        headless: !cli.headed,
+        from_profile: cli
+            .from_profile
+            .as_deref()
+            .map(resolve_profile_spec)
+            .transpose()?,
+        clone_state_from: cli.clone_state_from.clone(),
+    })
+}
+
+fn resolve_profile_spec(spec: &str) -> Result<std::path::PathBuf, String> {
+    if spec == "auto" {
+        return handler::profile::default_profile_dir()
+            .ok_or_else(|| "Could not autodetect Chrome profile dir".to_string());
+    }
+    let p = std::path::PathBuf::from(spec);
+    if !p.exists() {
+        return Err(format!("Profile path does not exist: {}", p.display()));
+    }
+    Ok(p)
+}
+
+fn effective_session(cli: &Cli, spec: &LaunchSpec) -> String {
+    format!("{}{}", cli.session, launch_spec::session_suffix(spec))
+}
+
+fn parse_port_from_ws(ws_url: &str) -> Option<u16> {
+    // ws://127.0.0.1:9222/devtools/...
+    let after_scheme = ws_url
+        .trim_start_matches("ws://")
+        .trim_start_matches("wss://");
+    let host_port = after_scheme.split('/').next()?;
+    host_port.rsplit(':').next()?.parse().ok()
 }
 
 fn command_to_request(cmd: &Command) -> Request {
@@ -188,7 +271,12 @@ fn command_to_request(cmd: &Command) -> Request {
         },
 
         // JavaScript
-        Command::Eval { code, file, no_return, max_size } => Request {
+        Command::Eval {
+            code,
+            file,
+            no_return,
+            max_size,
+        } => Request {
             cmd: if *no_return { "exec" } else { "eval" }.into(),
             args: json!({
                 "code": code,
@@ -330,6 +418,10 @@ fn command_to_request(cmd: &Command) -> Request {
                 cmd: "tab_close".into(),
                 args: json!({ "tab_id": tab_id }),
             },
+            TabAction::Attach { tab_id } => Request {
+                cmd: "tab_attach".into(),
+                args: json!({ "tab_id": tab_id }),
+            },
         },
 
         // Wait
@@ -447,7 +539,16 @@ fn command_to_request(cmd: &Command) -> Request {
             args: json!({}),
         },
 
-        // Status/Kill handled above
-        Command::Status | Command::Kill => unreachable!(),
+        // Clone-from (live snapshot import)
+        Command::CloneFrom { source, to } => Request {
+            cmd: "clone_from".into(),
+            args: json!({
+                "source": source,
+                "to": to.as_ref().map(|p| p.to_string_lossy().to_string()),
+            }),
+        },
+
+        // Status/Kill/CdpUrl handled above
+        Command::Status | Command::Kill | Command::CdpUrl { .. } => unreachable!(),
     }
 }

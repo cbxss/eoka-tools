@@ -126,9 +126,7 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
 
 /// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String> {
-    page.clear_all_cookies()
-        .await
-        .map_err(|e| e.to_string())?;
+    page.clear_all_cookies().await.map_err(|e| e.to_string())?;
     let set_cookies: Vec<eoka::cdp::types::NetworkSetCookie> = state
         .cookies
         .iter()
@@ -159,11 +157,39 @@ async fn restore_storage(page: &Page, storage_name: &str, data: &HashMap<String,
     }
 }
 
+/// Connect to a running Chrome (port number or ws:// URL), capture its
+/// front-tab state via CDP, and disconnect. The `Browser::disconnect()` call
+/// leaves the user's Chrome running.
+pub async fn clone_state_from_source(source: &str) -> Result<SavedState, String> {
+    use crate::launch_spec::resolve_cdp_spec;
+
+    let ws_url = resolve_cdp_spec(source)?;
+    let browser = eoka::Browser::connect(&ws_url)
+        .await
+        .map_err(|e| format!("connect: {}", e))?;
+
+    let tabs = browser.tabs().await.map_err(|e| e.to_string())?;
+    // Skip DevTools/extension targets — we want a real user page.
+    let target = tabs
+        .iter()
+        .find(|t| !t.url.starts_with("devtools://") && !t.url.starts_with("chrome-extension://"))
+        .ok_or_else(|| "No user-page tab found in the running Chrome".to_string())?;
+
+    let page = browser
+        .attach_page(&target.id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let state = capture_state(&page).await?;
+    let _ = browser.disconnect().await;
+    Ok(state)
+}
+
 // ---------------------------------------------------------------------------
 // Console capture
 // ---------------------------------------------------------------------------
 
-const CONSOLE_CAPTURE_JS: &str = include_str!("../../../eoka-agent/src/js/console_capture.js");
+const CONSOLE_CAPTURE_JS: &str = include_str!("../js/console_capture.js");
 
 /// Inject console capture into the current page and register for future navigations.
 pub async fn ensure_console_capture(tab: &mut TabState) -> Result<(), String> {

@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use eoka::{Browser, Page, StealthConfig};
 use eoka_agent::{InteractiveElement, ObserveConfig};
 
+use super::profile::clone_profile_dir;
+
 /// State for a single tab.
 pub struct TabState {
     pub page: Page,
@@ -37,10 +39,17 @@ pub struct BrowserState {
     pub tabs: HashMap<String, TabState>,
     pub current_tab_id: Option<String>,
     pub config: ObserveConfig,
+    /// True when attached to a Chrome we don't own. Affects `open` semantics
+    /// (don't navigate user's current tab) and `close` (disconnect, don't kill).
+    pub is_live: bool,
 }
 
 impl BrowserState {
-    pub async fn new(headless: bool) -> eoka::Result<Self> {
+    /// Launch a fresh Chrome.
+    pub async fn launched(
+        headless: bool,
+        copy_profile_from: Option<&std::path::Path>,
+    ) -> eoka::Result<Self> {
         let patch_binary = std::env::var("EOKA_PATCH_BINARY")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
@@ -54,18 +63,34 @@ impl BrowserState {
 
         let cdp_timeout = if proxy.is_some() { 90 } else { 30 };
 
-        eprintln!(
-            "[eoka] launching browser (headless={}, cdp_timeout={}s, proxy={})",
-            headless, cdp_timeout, proxy.is_some()
-        );
         // EOKA_CHROME_ARGS: colon-separated extra Chrome flags
         // e.g. EOKA_CHROME_ARGS="--use-fake-ui-for-media-stream:--allow-insecure-localhost"
-        let extra_args: Vec<String> = std::env::var("EOKA_CHROME_ARGS")
+        let mut extra_args: Vec<String> = std::env::var("EOKA_CHROME_ARGS")
             .unwrap_or_default()
             .split(':')
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
+
+        // --from-profile: clone the user's profile to a tempdir, point Chrome at it.
+        // Chrome refuses two instances on the same dir, so we always copy.
+        if let Some(src) = copy_profile_from {
+            let dst = clone_profile_dir(src).map_err(eoka::Error::Io)?;
+            extra_args.push(format!("--user-data-dir={}", dst.display()));
+            eprintln!(
+                "[eoka] cloned profile {} → {}",
+                src.display(),
+                dst.display()
+            );
+        }
+
+        eprintln!(
+            "[eoka] launching browser (headless={}, cdp_timeout={}s, proxy={}, profile_clone={})",
+            headless,
+            cdp_timeout,
+            proxy.is_some(),
+            copy_profile_from.is_some()
+        );
 
         let config = StealthConfig {
             headless,
@@ -83,6 +108,20 @@ impl BrowserState {
             tabs: HashMap::new(),
             current_tab_id: None,
             config: ObserveConfig::default(),
+            is_live: false,
+        })
+    }
+
+    /// Connect to an already-running Chrome at `ws_url`.
+    pub async fn connected(ws_url: &str) -> eoka::Result<Self> {
+        eprintln!("[eoka] connecting to {}", ws_url);
+        let browser = Browser::connect(ws_url).await?;
+        Ok(Self {
+            browser,
+            tabs: HashMap::new(),
+            current_tab_id: None,
+            config: ObserveConfig::default(),
+            is_live: true,
         })
     }
 
@@ -93,9 +132,10 @@ impl BrowserState {
                 tab.invalidate();
                 tab.page.goto(url).await?;
             }
-            return self.tabs.get_mut(&existing_id).ok_or_else(|| {
-                eoka::Error::CdpSimple("Current tab disappeared".into())
-            });
+            return self
+                .tabs
+                .get_mut(&existing_id)
+                .ok_or_else(|| eoka::Error::CdpSimple("Current tab disappeared".into()));
         }
 
         let page = self.browser.new_page(url).await?;
@@ -146,6 +186,17 @@ impl BrowserState {
             self.tabs.insert(tab_id.to_string(), TabState::new(page));
         }
         self.browser.activate_tab(tab_id).await?;
+        self.current_tab_id = Some(tab_id.to_string());
+        Ok(())
+    }
+
+    /// Attach to a tab that already exists in the browser, without injecting
+    /// any scripts. Used in live mode so the user's tabs aren't polluted.
+    pub async fn attach_existing_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
+        if !self.tabs.contains_key(tab_id) {
+            let page = self.browser.attach_page(tab_id).await?;
+            self.tabs.insert(tab_id.to_string(), TabState::new(page));
+        }
         self.current_tab_id = Some(tab_id.to_string());
         Ok(())
     }
