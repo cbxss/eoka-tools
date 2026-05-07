@@ -22,16 +22,22 @@ impl LaunchSpec {
     }
 }
 
-/// Resolve a `--cdp <spec>` argument (port or ws:// URL) into a WebSocket URL,
-/// using HTTP discovery when given a port.
+/// Resolve a `--cdp <spec>` argument (port, `ws://` URL, or `auto`) into a
+/// WebSocket URL. `auto` scans 9222-9229 for a responsive Chrome.
 pub fn resolve_cdp_spec(spec: &str) -> Result<String, String> {
     let trimmed = spec.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        return auto_connect().map(|(_, url)| url);
+    }
     if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
         return Ok(trimmed.to_string());
     }
-    let port: u16 = trimmed
-        .parse()
-        .map_err(|_| format!("Invalid --cdp spec '{}': expected port or ws:// URL", spec))?;
+    let port: u16 = trimmed.parse().map_err(|_| {
+        format!(
+            "Invalid --cdp spec '{}': expected port, ws:// URL, or 'auto'",
+            spec
+        )
+    })?;
     eoka::cdp::discover::discover_browser_ws("127.0.0.1", port)
         .map_err(|e| format!("Failed to discover Chrome on 127.0.0.1:{}: {}", port, e))
 }
