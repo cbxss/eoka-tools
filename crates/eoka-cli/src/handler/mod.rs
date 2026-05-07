@@ -54,8 +54,9 @@ impl Handler {
                 headless,
                 from_profile,
                 clone_state_from,
+                no_stealth,
             } => {
-                let mut s = BrowserState::launched(*headless, from_profile.as_deref())
+                let mut s = BrowserState::launched(*headless, from_profile.as_deref(), *no_stealth)
                     .await
                     .map_err(|e| e.to_string())?;
 

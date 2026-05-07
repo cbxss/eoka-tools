@@ -41,6 +41,12 @@ pub struct Cli {
     )]
     pub from_profile: Option<String>,
 
+    /// Disable the stealth CDP-command filter and skip evasion-script injection.
+    /// Useful for debugging or when targeting cooperative pages. Default in
+    /// connect/CDP mode; opt-in for launch mode.
+    #[arg(long, global = true, env = "EOKA_NO_STEALTH")]
+    pub no_stealth: bool,
+
     /// Internal: run as daemon (hidden)
     #[arg(long, hide = true)]
     pub daemon: bool,

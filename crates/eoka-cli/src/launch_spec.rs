@@ -11,6 +11,8 @@ pub enum LaunchSpec {
         from_profile: Option<PathBuf>,
         /// Optional: after launch, hydrate from a running Chrome (port or ws:// URL).
         clone_state_from: Option<String>,
+        /// Disable stealth (filter_cdp + evasion script).
+        no_stealth: bool,
     },
     /// Attach to a Chrome already running, via `Browser::connect_with_config`.
     Connect { ws_url: String },
@@ -48,11 +50,15 @@ pub fn auto_connect() -> Result<(u16, String), String> {
         .ok_or_else(|| "No running Chrome found on ports 9222-9229".to_string())
 }
 
-/// Internal session-name suffix so connect-mode daemons don't collide with
-/// launch-mode daemons.
+/// Internal session-name suffix so daemons in different modes don't collide.
+/// Headed and headless launches are kept separate so `--headed` always
+/// produces a visible window even if a headless daemon was running.
 pub fn session_suffix(spec: &LaunchSpec) -> &'static str {
     match spec {
-        LaunchSpec::Launch { .. } => "",
+        LaunchSpec::Launch { headless: true, .. } => "",
+        LaunchSpec::Launch {
+            headless: false, ..
+        } => "-headed",
         LaunchSpec::Connect { .. } => "-live",
     }
 }

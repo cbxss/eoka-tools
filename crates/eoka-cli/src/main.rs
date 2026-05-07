@@ -140,6 +140,7 @@ fn resolve_launch_spec(cli: &Cli) -> Result<LaunchSpec, String> {
             .map(resolve_profile_spec)
             .transpose()?,
         clone_state_from: cli.clone_state_from.clone(),
+        no_stealth: cli.no_stealth,
     })
 }
 

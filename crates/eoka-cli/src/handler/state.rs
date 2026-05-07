@@ -49,6 +49,7 @@ impl BrowserState {
     pub async fn launched(
         headless: bool,
         copy_profile_from: Option<&std::path::Path>,
+        no_stealth: bool,
     ) -> eoka::Result<Self> {
         let patch_binary = std::env::var("EOKA_PATCH_BINARY")
             .map(|v| v == "true" || v == "1")
@@ -85,8 +86,9 @@ impl BrowserState {
         }
 
         eprintln!(
-            "[eoka] launching browser (headless={}, cdp_timeout={}s, proxy={}, profile_clone={})",
+            "[eoka] launching browser (headless={}, stealth={}, cdp_timeout={}s, proxy={}, profile_clone={})",
             headless,
+            !no_stealth,
             cdp_timeout,
             proxy.is_some(),
             copy_profile_from.is_some()
@@ -94,12 +96,14 @@ impl BrowserState {
 
         let config = StealthConfig {
             headless,
-            patch_binary,
+            patch_binary: patch_binary && !no_stealth,
             proxy,
             proxy_username,
             proxy_password,
             cdp_timeout,
             extra_args,
+            live_session: no_stealth,
+            filter_cdp: !no_stealth,
             ..Default::default()
         };
         let browser = Browser::launch_with_config(config).await?;

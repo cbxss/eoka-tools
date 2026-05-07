@@ -61,6 +61,7 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             headless,
             from_profile,
             clone_state_from,
+            no_stealth,
         } => {
             if !*headless {
                 cmd.arg("--headed");
@@ -70,6 +71,9 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             }
             if let Some(s) = clone_state_from {
                 cmd.arg("--clone-state-from").arg(s);
+            }
+            if *no_stealth {
+                cmd.arg("--no-stealth");
             }
         }
         LaunchSpec::Connect { ws_url } => {
