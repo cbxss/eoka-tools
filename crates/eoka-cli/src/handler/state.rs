@@ -77,7 +77,11 @@ impl BrowserState {
         if let Some(src) = copy_profile_from {
             let dst = clone_profile_dir(src).map_err(eoka::Error::Io)?;
             extra_args.push(format!("--user-data-dir={}", dst.display()));
-            eprintln!("[eoka] cloned profile {} → {}", src.display(), dst.display());
+            eprintln!(
+                "[eoka] cloned profile {} → {}",
+                src.display(),
+                dst.display()
+            );
         }
 
         eprintln!(
@@ -121,7 +125,6 @@ impl BrowserState {
         })
     }
 
-
     /// Get or create the current tab, navigating to URL.
     pub async fn ensure_tab(&mut self, url: &str) -> eoka::Result<&mut TabState> {
         if let Some(existing_id) = self.current_tab_id.clone() {
@@ -129,9 +132,10 @@ impl BrowserState {
                 tab.invalidate();
                 tab.page.goto(url).await?;
             }
-            return self.tabs.get_mut(&existing_id).ok_or_else(|| {
-                eoka::Error::CdpSimple("Current tab disappeared".into())
-            });
+            return self
+                .tabs
+                .get_mut(&existing_id)
+                .ok_or_else(|| eoka::Error::CdpSimple("Current tab disappeared".into()));
         }
 
         let page = self.browser.new_page(url).await?;

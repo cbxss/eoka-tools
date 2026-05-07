@@ -48,7 +48,10 @@ pub fn default_profile_dir() -> Option<PathBuf> {
         None
     } else if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA").map(|d| {
-            PathBuf::from(d).join("Google").join("Chrome").join("User Data")
+            PathBuf::from(d)
+                .join("Google")
+                .join("Chrome")
+                .join("User Data")
         })
     } else {
         None
@@ -61,11 +64,7 @@ pub fn default_profile_dir() -> Option<PathBuf> {
 pub fn clone_profile_dir(src: &Path) -> io::Result<PathBuf> {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dst = std::env::temp_dir().join(format!(
-        "eoka-profile-clone-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dst = std::env::temp_dir().join(format!("eoka-profile-clone-{}-{}", std::process::id(), n));
     fs::create_dir_all(&dst)?;
     copy_recursive(src, &dst)?;
     Ok(dst)

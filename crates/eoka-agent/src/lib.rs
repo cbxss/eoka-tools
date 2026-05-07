@@ -231,10 +231,7 @@ impl Session {
     // =========================================================================
 
     /// Get an accessibility tree snapshot of the page.
-    pub async fn ax_snapshot(
-        &self,
-        include_all: bool,
-    ) -> anyhow::Result<snapshot::SnapshotResult> {
+    pub async fn ax_snapshot(&self, include_all: bool) -> anyhow::Result<snapshot::SnapshotResult> {
         snapshot::snapshot(&self.page, include_all).await
     }
 

@@ -33,7 +33,12 @@ pub struct Cli {
 
     /// Launch with a copy of an existing Chrome profile directory.
     /// Pass `auto` to autodetect the default profile, or an absolute path.
-    #[arg(long, value_name = "auto|PATH", global = true, env = "EOKA_FROM_PROFILE")]
+    #[arg(
+        long,
+        value_name = "auto|PATH",
+        global = true,
+        env = "EOKA_FROM_PROFILE"
+    )]
     pub from_profile: Option<String>,
 
     /// Internal: run as daemon (hidden)
@@ -126,9 +131,7 @@ pub enum Command {
 
     /// Double-click element
     #[command(alias = "dblclick")]
-    DoubleClick {
-        target: String,
-    },
+    DoubleClick { target: String },
 
     /// Clear and fill input
     Fill {
@@ -147,15 +150,11 @@ pub enum Command {
     },
 
     /// Hover over element
-    Hover {
-        target: String,
-    },
+    Hover { target: String },
 
     /// Press keyboard key (Enter, Tab, Escape, ArrowDown, etc.)
     #[command(alias = "press")]
-    Key {
-        key: String,
-    },
+    Key { key: String },
 
     /// Scroll page or element into view
     Scroll {
@@ -255,9 +254,7 @@ pub enum Command {
 
     // ── State persistence ───────────────────────────────────────────
     /// Save cookies + storage to JSON file
-    SaveState {
-        path: PathBuf,
-    },
+    SaveState { path: PathBuf },
 
     /// Load cookies + storage from JSON file
     LoadState {
@@ -357,9 +354,7 @@ pub enum Command {
     SpaInfo,
 
     /// Navigate SPA without page reload
-    SpaNavigate {
-        path: String,
-    },
+    SpaNavigate { path: String },
 
     // ── Session management ──────────────────────────────────────────
     /// Show daemon status
@@ -468,20 +463,12 @@ pub enum TabAction {
     /// List all tabs
     List,
     /// Open new tab
-    New {
-        url: Option<String>,
-    },
+    New { url: Option<String> },
     /// Switch to tab by ID
-    Switch {
-        tab_id: String,
-    },
+    Switch { tab_id: String },
     /// Close tab by ID
-    Close {
-        tab_id: String,
-    },
+    Close { tab_id: String },
     /// Attach to an existing tab by ID without injecting any scripts.
     /// Useful in --cdp mode to drive a tab the user already has open.
-    Attach {
-        tab_id: String,
-    },
+    Attach { tab_id: String },
 }

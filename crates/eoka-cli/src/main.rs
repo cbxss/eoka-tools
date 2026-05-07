@@ -59,7 +59,10 @@ async fn main() {
         Command::Status => {
             if client::is_daemon_running(&effective_session) {
                 println!("Daemon running (session={})", effective_session);
-                println!("Socket: {}", session::socket_path(&effective_session).display());
+                println!(
+                    "Socket: {}",
+                    session::socket_path(&effective_session).display()
+                );
             } else {
                 println!("No daemon running (session={})", effective_session);
             }
@@ -131,7 +134,11 @@ fn resolve_launch_spec(cli: &Cli) -> Result<LaunchSpec, String> {
     }
     Ok(LaunchSpec::Launch {
         headless: !cli.headed,
-        from_profile: cli.from_profile.as_deref().map(resolve_profile_spec).transpose()?,
+        from_profile: cli
+            .from_profile
+            .as_deref()
+            .map(resolve_profile_spec)
+            .transpose()?,
         clone_state_from: cli.clone_state_from.clone(),
     })
 }
@@ -154,7 +161,9 @@ fn effective_session(cli: &Cli, spec: &LaunchSpec) -> String {
 
 fn parse_port_from_ws(ws_url: &str) -> Option<u16> {
     // ws://127.0.0.1:9222/devtools/...
-    let after_scheme = ws_url.trim_start_matches("ws://").trim_start_matches("wss://");
+    let after_scheme = ws_url
+        .trim_start_matches("ws://")
+        .trim_start_matches("wss://");
     let host_port = after_scheme.split('/').next()?;
     host_port.rsplit(':').next()?.parse().ok()
 }
@@ -262,7 +271,12 @@ fn command_to_request(cmd: &Command) -> Request {
         },
 
         // JavaScript
-        Command::Eval { code, file, no_return, max_size } => Request {
+        Command::Eval {
+            code,
+            file,
+            no_return,
+            max_size,
+        } => Request {
             cmd: if *no_return { "exec" } else { "eval" }.into(),
             args: json!({
                 "code": code,

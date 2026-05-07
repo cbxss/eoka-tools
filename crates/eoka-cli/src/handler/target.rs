@@ -15,7 +15,7 @@ pub struct ResolvedTarget {
 }
 
 /// Shared selector-generation JS (used by ref resolution).
-const SELECTOR_JS: &str = include_str!("../../../eoka-agent/src/js/selector.js");
+const SELECTOR_JS: &str = include_str!("../js/selector.js");
 
 /// Resolve a snapshot ref (@eN) to a CSS selector via CDP.
 async fn resolve_ref(
@@ -25,9 +25,7 @@ async fn resolve_ref(
 ) -> Result<String, String> {
     let stale = |detail: &str| format!("Ref {} {}. Take a new snapshot.", label, detail);
 
-    let backend_id = snapshot_refs
-        .get(label)
-        .ok_or_else(|| stale("not found"))?;
+    let backend_id = snapshot_refs.get(label).ok_or_else(|| stale("not found"))?;
 
     let resolve_result: serde_json::Value = page
         .session()
@@ -67,10 +65,9 @@ async fn resolve_ref(
 pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<ResolvedTarget, String> {
     match Target::parse(target_str) {
         Target::Index(idx) => {
-            let el = tab
-                .elements
-                .get(idx)
-                .ok_or_else(|| format!("Index {} out of range (have {})", idx, tab.elements.len()))?;
+            let el = tab.elements.get(idx).ok_or_else(|| {
+                format!("Index {} out of range (have {})", idx, tab.elements.len())
+            })?;
             Ok(ResolvedTarget {
                 selector: el.selector.clone(),
                 desc: el.to_string(),

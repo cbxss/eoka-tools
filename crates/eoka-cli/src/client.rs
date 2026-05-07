@@ -57,7 +57,11 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
     cmd.arg("--daemon").arg("--session").arg(session_name);
 
     match spec {
-        LaunchSpec::Launch { headless, from_profile, clone_state_from } => {
+        LaunchSpec::Launch {
+            headless,
+            from_profile,
+            clone_state_from,
+        } => {
             if !*headless {
                 cmd.arg("--headed");
             }

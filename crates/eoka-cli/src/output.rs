@@ -4,7 +4,10 @@ use crate::protocol::Response;
 
 pub fn print_response(response: &Response, json_mode: bool) {
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(response).unwrap_or_default()
+        );
         return;
     }
 
@@ -18,7 +21,10 @@ pub fn print_response(response: &Response, json_mode: bool) {
     if let Some(ref data) = response.data {
         match data {
             serde_json::Value::String(s) => println!("{}", s),
-            other => println!("{}", serde_json::to_string_pretty(other).unwrap_or_default()),
+            other => println!(
+                "{}",
+                serde_json::to_string_pretty(other).unwrap_or_default()
+            ),
         }
     }
 }

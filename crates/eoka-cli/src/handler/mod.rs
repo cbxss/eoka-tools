@@ -124,8 +124,14 @@ impl Handler {
     async fn dispatch(&mut self, cmd: &str, args: &Value) -> Result<Response, String> {
         match cmd {
             "open" => self.cmd_open(args).await,
-            "back" => self.cmd_nav(|p| Box::pin(async { p.back().await }), "Back").await,
-            "forward" => self.cmd_nav(|p| Box::pin(async { p.forward().await }), "Forward").await,
+            "back" => {
+                self.cmd_nav(|p| Box::pin(async { p.back().await }), "Back")
+                    .await
+            }
+            "forward" => {
+                self.cmd_nav(|p| Box::pin(async { p.forward().await }), "Forward")
+                    .await
+            }
             "reload" => self.cmd_reload().await,
             "snapshot" => self.cmd_snapshot(args).await,
             "observe" => self.cmd_observe(args).await,
@@ -210,7 +216,8 @@ impl Handler {
         let bypass_csp = args["bypass_csp"].as_bool().unwrap_or(false);
         // --inject-js: inject a script via addScriptToEvaluateOnNewDocument before navigation
         let inject_js = args["inject_js"].as_str();
-        let has_extras = headers.is_some() || user_agent.is_some() || bypass_csp || inject_js.is_some();
+        let has_extras =
+            headers.is_some() || user_agent.is_some() || bypass_csp || inject_js.is_some();
 
         let state = self.require_state_mut()?;
 
@@ -227,13 +234,22 @@ impl Handler {
                 state.ensure_blank_tab().await.map_err(|e| e.to_string())?
             };
             if let Some(ua) = user_agent {
-                tab.page.set_user_agent(ua).await.map_err(|e| e.to_string())?;
+                tab.page
+                    .set_user_agent(ua)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             if bypass_csp {
-                tab.page.set_bypass_csp(true).await.map_err(|e| e.to_string())?;
+                tab.page
+                    .set_bypass_csp(true)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             if let Some(ref h) = headers {
-                tab.page.set_extra_headers(h.clone()).await.map_err(|e| e.to_string())?;
+                tab.page
+                    .set_extra_headers(h.clone())
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             if let Some(js) = inject_js {
                 let source = if js.ends_with(".js") {
@@ -242,7 +258,8 @@ impl Handler {
                 } else {
                     js.to_string()
                 };
-                tab.page.session()
+                tab.page
+                    .session()
                     .send::<_, serde_json::Value>(
                         "Page.addScriptToEvaluateOnNewDocument",
                         &serde_json::json!({ "source": source }),
@@ -265,12 +282,18 @@ impl Handler {
         let _ = wait_for_stable(&tab.page).await;
         let url = tab.page.url().await.map_err(|e| e.to_string())?;
         let title = title_nonblocking(&tab.page).await;
-        Ok(Response::ok_text(format!("Navigated to: {}\nTitle: {}", url, title)))
+        Ok(Response::ok_text(format!(
+            "Navigated to: {}\nTitle: {}",
+            url, title
+        )))
     }
 
     async fn cmd_nav<F>(&mut self, f: F, label: &str) -> Result<Response, String>
     where
-        F: FnOnce(&eoka::Page) -> std::pin::Pin<Box<dyn std::future::Future<Output = eoka::Result<()>> + '_>>,
+        F: FnOnce(
+            &eoka::Page,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = eoka::Result<()>> + '_>>,
     {
         let tab = self.require_tab()?;
         f(&tab.page).await.map_err(|e| e.to_string())?;
@@ -310,11 +333,17 @@ impl Handler {
 
     async fn cmd_observe(&mut self, args: &Value) -> Result<Response, String> {
         let filter = args["filter"].as_str();
-        let max = args["max"].as_u64().map(|v| v as usize).unwrap_or(usize::MAX);
+        let max = args["max"]
+            .as_u64()
+            .map(|v| v as usize)
+            .unwrap_or(usize::MAX);
 
         if let Some(f) = filter {
             if !matches!(f, "inputs" | "buttons" | "all") {
-                return Err(format!("Unknown filter '{}'. Valid: inputs, buttons, all", f));
+                return Err(format!(
+                    "Unknown filter '{}'. Valid: inputs, buttons, all",
+                    f
+                ));
             }
         }
 
@@ -325,7 +354,10 @@ impl Handler {
 
         let filter_fn: fn(&&eoka_agent::InteractiveElement) -> bool = match filter {
             Some("inputs") => |e| {
-                matches!(e.tag.as_str(), "input" | "select" | "textarea" | "contenteditable")
+                matches!(
+                    e.tag.as_str(),
+                    "input" | "select" | "textarea" | "contenteditable"
+                )
             },
             Some("buttons") => {
                 |e| matches!(e.tag.as_str(), "button" | "a") || e.role.as_deref() == Some("button")
@@ -422,7 +454,10 @@ impl Handler {
             .collect();
 
         if matches.is_empty() {
-            Ok(Response::ok_text(format!("No elements found matching \"{}\"", text)))
+            Ok(Response::ok_text(format!(
+                "No elements found matching \"{}\"",
+                text
+            )))
         } else {
             let out: String = matches.iter().map(|e| format!("{}\n", e)).collect();
             Ok(Response::ok_text(out))
@@ -453,9 +488,15 @@ impl Handler {
             "document.querySelector({})?.dispatchEvent(new MouseEvent('dblclick', {{bubbles:true}}))",
             json_str(&resolved.selector)
         );
-        tab.page.execute_sync(&js).await.map_err(|e| e.to_string())?;
+        tab.page
+            .execute_sync(&js)
+            .await
+            .map_err(|e| e.to_string())?;
         tab.elements.clear();
-        Ok(Response::ok_text(format!("Double-clicked {}", resolved.desc)))
+        Ok(Response::ok_text(format!(
+            "Double-clicked {}",
+            resolved.desc
+        )))
     }
 
     async fn cmd_fill(&mut self, args: &Value) -> Result<Response, String> {
@@ -467,7 +508,10 @@ impl Handler {
         auto_observe_if_needed(tab, target_str, vp).await?;
         let desc = fill_with_retry(tab, target_str, text, vp).await?;
         tab.elements.clear();
-        Ok(Response::ok_text(format!("Filled {} with \"{}\"", desc, text)))
+        Ok(Response::ok_text(format!(
+            "Filled {} with \"{}\"",
+            desc, text
+        )))
     }
 
     async fn cmd_select(&mut self, args: &Value) -> Result<Response, String> {
@@ -493,11 +537,17 @@ impl Handler {
         );
         let selected: bool = tab.page.evaluate(&js).await.map_err(|e| e.to_string())?;
         if !selected {
-            return Err(format!("Option \"{}\" not found in {}", value, resolved.desc));
+            return Err(format!(
+                "Option \"{}\" not found in {}",
+                value, resolved.desc
+            ));
         }
         let _ = wait_for_stable(&tab.page).await;
         tab.elements.clear();
-        Ok(Response::ok_text(format!("Selected \"{}\" in {}", value, resolved.desc)))
+        Ok(Response::ok_text(format!(
+            "Selected \"{}\" in {}",
+            value, resolved.desc
+        )))
     }
 
     async fn cmd_hover(&mut self, args: &Value) -> Result<Response, String> {
@@ -519,7 +569,11 @@ impl Handler {
     async fn cmd_key(&mut self, args: &Value) -> Result<Response, String> {
         let key = self.arg_str(args, "key")?;
         let tab = self.require_tab()?;
-        tab.page.human().press_key(key).await.map_err(|e| e.to_string())?;
+        tab.page
+            .human()
+            .press_key(key)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Response::ok_text(format!("Pressed {}", key)))
     }
 
@@ -561,7 +615,11 @@ impl Handler {
             ),
             None => format!("JSON.stringify(eval({}))", json_str(&code)),
         };
-        let result: String = tab.page.evaluate_sync(&js).await.map_err(|e| e.to_string())?;
+        let result: String = tab
+            .page
+            .evaluate_sync(&js)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Response::ok_text(result))
     }
 
@@ -650,7 +708,11 @@ impl Handler {
         let tab = self.require_tab()?;
         let domain = match args["domain"].as_str() {
             Some(d) => d.to_string(),
-            None => tab.page.evaluate_sync("location.hostname").await.unwrap_or_default(),
+            None => tab
+                .page
+                .evaluate_sync("location.hostname")
+                .await
+                .unwrap_or_default(),
         };
 
         let cookie = eoka::cdp::types::NetworkSetCookie {
@@ -664,7 +726,10 @@ impl Handler {
             same_site: None,
             expires: None,
         };
-        tab.page.set_cookies_bulk(vec![cookie]).await.map_err(|e| e.to_string())?;
+        tab.page
+            .set_cookies_bulk(vec![cookie])
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Response::ok_text(format!("Set cookie: {}={}", name, value)))
     }
 
@@ -673,11 +738,18 @@ impl Handler {
         let tab = self.require_tab()?;
         let domain = match args["domain"].as_str() {
             Some(d) => d.to_string(),
-            None => tab.page.evaluate_sync::<String>("location.hostname").await.unwrap_or_default(),
+            None => tab
+                .page
+                .evaluate_sync::<String>("location.hostname")
+                .await
+                .unwrap_or_default(),
         };
         tab.page
             .session()
-            .send::<_, Value>("Network.deleteCookies", &json!({ "name": name, "domain": domain }))
+            .send::<_, Value>(
+                "Network.deleteCookies",
+                &json!({ "name": name, "domain": domain }),
+            )
             .await
             .map_err(|e| e.to_string())?;
         Ok(Response::ok_text(format!("Deleted cookie: {}", name)))
@@ -685,7 +757,10 @@ impl Handler {
 
     async fn cmd_clear_cookies(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        tab.page.clear_all_cookies().await.map_err(|e| e.to_string())?;
+        tab.page
+            .clear_all_cookies()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Response::ok_text("Cleared all cookies"))
     }
 
@@ -694,7 +769,11 @@ impl Handler {
     async fn cmd_storage(&mut self, args: &Value) -> Result<Response, String> {
         let key = args["key"].as_str();
         let session = args["session_storage"].as_bool().unwrap_or(false);
-        let s = if session { "sessionStorage" } else { "localStorage" };
+        let s = if session {
+            "sessionStorage"
+        } else {
+            "localStorage"
+        };
         let tab = self.require_tab()?;
 
         if let Some(k) = key {
@@ -713,16 +792,27 @@ impl Handler {
         let key = self.arg_str(args, "key")?;
         let value = self.arg_str(args, "value")?;
         let session = args["session_storage"].as_bool().unwrap_or(false);
-        let s = if session { "sessionStorage" } else { "localStorage" };
+        let s = if session {
+            "sessionStorage"
+        } else {
+            "localStorage"
+        };
         let tab = self.require_tab()?;
         let js = format!("{}.setItem({}, {})", s, json_str(key), json_str(value));
-        tab.page.execute_sync(&js).await.map_err(|e| e.to_string())?;
-        Ok(Response::ok_text(format!("Set {}.{} = \"{}\"", s, key, value)))
+        tab.page
+            .execute_sync(&js)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Response::ok_text(format!(
+            "Set {}.{} = \"{}\"",
+            s, key, value
+        )))
     }
 
     async fn cmd_dump_storage(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        let combined: String = tab.page
+        let combined: String = tab
+            .page
             .evaluate_sync(
                 "JSON.stringify({\
                     localStorage: Object.fromEntries(Object.entries(localStorage)),\
@@ -745,7 +835,10 @@ impl Handler {
         std::fs::write(path, &json).map_err(|e| e.to_string())?;
         Ok(Response::ok_text(format!(
             "Saved state to {} ({} cookies, {} localStorage, {} sessionStorage)",
-            path, state.cookies.len(), state.local_storage.len(), state.session_storage.len()
+            path,
+            state.cookies.len(),
+            state.local_storage.len(),
+            state.session_storage.len()
         )))
     }
 
@@ -760,7 +853,10 @@ impl Handler {
         let state = self.require_state_mut()?;
 
         if !no_navigate && !saved.url.is_empty() {
-            state.ensure_tab(&saved.url).await.map_err(|e| e.to_string())?;
+            state
+                .ensure_tab(&saved.url)
+                .await
+                .map_err(|e| e.to_string())?;
         }
 
         let tab = state.current_tab_mut().ok_or("No tab open.")?;
@@ -769,7 +865,10 @@ impl Handler {
 
         Ok(Response::ok_text(format!(
             "Loaded state from {} ({} cookies, {} localStorage, {} sessionStorage)",
-            path, saved.cookies.len(), saved.local_storage.len(), saved.session_storage.len()
+            path,
+            saved.cookies.len(),
+            saved.local_storage.len(),
+            saved.session_storage.len()
         )))
     }
 
@@ -784,8 +883,14 @@ impl Handler {
         };
 
         let tab = self.require_tab()?;
-        tab.page.set_extra_headers(headers.clone()).await.map_err(|e| e.to_string())?;
-        Ok(Response::ok_text(format!("Set {} extra headers", headers.len())))
+        tab.page
+            .set_extra_headers(headers.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Response::ok_text(format!(
+            "Set {} extra headers",
+            headers.len()
+        )))
     }
 
     // ── Console / Errors ────────────────────────────────────────────────
@@ -804,9 +909,17 @@ impl Handler {
             ),
             None => "JSON.stringify(__eoka_console || [])".into(),
         };
-        let result: String = tab.page.evaluate_sync(&js).await.unwrap_or_else(|_| "[]".into());
+        let result: String = tab
+            .page
+            .evaluate_sync(&js)
+            .await
+            .unwrap_or_else(|_| "[]".into());
         if clear {
-            let _: String = tab.page.evaluate_sync("__eoka_console = []").await.unwrap_or_default();
+            let _: String = tab
+                .page
+                .evaluate_sync("__eoka_console = []")
+                .await
+                .unwrap_or_default();
         }
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
@@ -817,12 +930,17 @@ impl Handler {
         let tab = self.require_tab_mut()?;
         ensure_console_capture(tab).await?;
 
-        let result: String = tab.page
+        let result: String = tab
+            .page
             .evaluate_sync("JSON.stringify(__eoka_errors || [])")
             .await
             .unwrap_or_else(|_| "[]".into());
         if clear {
-            let _: String = tab.page.evaluate_sync("__eoka_errors = []").await.unwrap_or_default();
+            let _: String = tab
+                .page
+                .evaluate_sync("__eoka_errors = []")
+                .await
+                .unwrap_or_default();
         }
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
@@ -837,10 +955,18 @@ impl Handler {
 
         let mut out = String::new();
         for tab in tabs {
-            let marker = if Some(tab.id.as_str()) == current_id { " *" } else { "" };
+            let marker = if Some(tab.id.as_str()) == current_id {
+                " *"
+            } else {
+                ""
+            };
             let _ = writeln!(out, "[{}]{} {}\n  {}", tab.id, marker, tab.title, tab.url);
         }
-        Ok(Response::ok_text(if out.is_empty() { "No tabs open.".into() } else { out }))
+        Ok(Response::ok_text(if out.is_empty() {
+            "No tabs open.".into()
+        } else {
+            out
+        }))
     }
 
     async fn cmd_tab_new(&mut self, args: &Value) -> Result<Response, String> {
@@ -850,7 +976,10 @@ impl Handler {
         let (tab_id, tab) = state.new_tab(url).await.map_err(|e| e.to_string())?;
         let url = tab.page.url().await.map_err(|e| e.to_string())?;
         let title = title_nonblocking(&tab.page).await;
-        Ok(Response::ok_text(format!("Opened new tab [{}]\nURL: {}\nTitle: {}", tab_id, url, title)))
+        Ok(Response::ok_text(format!(
+            "Opened new tab [{}]\nURL: {}\nTitle: {}",
+            tab_id, url, title
+        )))
     }
 
     async fn cmd_tab_switch(&mut self, args: &Value) -> Result<Response, String> {
@@ -860,7 +989,10 @@ impl Handler {
         let tab = state.current_tab().ok_or("Tab switch failed")?;
         let url = tab.page.url().await.map_err(|e| e.to_string())?;
         let title = title_nonblocking(&tab.page).await;
-        Ok(Response::ok_text(format!("Switched to tab [{}]\nURL: {}\nTitle: {}", tab_id, url, title)))
+        Ok(Response::ok_text(format!(
+            "Switched to tab [{}]\nURL: {}\nTitle: {}",
+            tab_id, url, title
+        )))
     }
 
     async fn cmd_tab_attach(&mut self, args: &Value) -> Result<Response, String> {
@@ -938,15 +1070,24 @@ impl Handler {
         let tab = self.require_tab()?;
 
         if let Some(text) = args["text"].as_str() {
-            tab.page.wait_for_text(text, timeout).await.map_err(|e| e.to_string())?;
+            tab.page
+                .wait_for_text(text, timeout)
+                .await
+                .map_err(|e| e.to_string())?;
             return Ok(Response::ok_text(format!("Text \"{}\" appeared", text)));
         }
         if let Some(url_pat) = args["url"].as_str() {
-            tab.page.wait_for_url_contains(url_pat, timeout).await.map_err(|e| e.to_string())?;
+            tab.page
+                .wait_for_url_contains(url_pat, timeout)
+                .await
+                .map_err(|e| e.to_string())?;
             return Ok(Response::ok_text(format!("URL matched \"{}\"", url_pat)));
         }
         if args["load"].as_str().is_some() {
-            tab.page.wait_for_network_idle(500, timeout).await.map_err(|e| e.to_string())?;
+            tab.page
+                .wait_for_network_idle(500, timeout)
+                .await
+                .map_err(|e| e.to_string())?;
             return Ok(Response::ok_text("Network idle"));
         }
         Err("Provide ms, --text, --url, or --load".into())
@@ -1021,10 +1162,14 @@ impl Handler {
         let _: String = tab.page.evaluate_sync(&js).await.unwrap_or_default();
 
         // Grant camera permission
-        let _ = tab.page.session().send::<_, Value>(
-            "Browser.grantPermissions",
-            &json!({ "permissions": ["videoCapture", "audioCapture"] }),
-        ).await;
+        let _ = tab
+            .page
+            .session()
+            .send::<_, Value>(
+                "Browser.grantPermissions",
+                &json!({ "permissions": ["videoCapture", "audioCapture"] }),
+            )
+            .await;
 
         Ok(Response::ok_text(format!(
             "Fake camera injected ({}KB {}, loop={})",
@@ -1039,7 +1184,11 @@ impl Handler {
     async fn cmd_wasm_info(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
         let js = include_str!("../js/wasm_info.js");
-        let result: String = tab.page.evaluate_sync(js).await.map_err(|e| e.to_string())?;
+        let result: String = tab
+            .page
+            .evaluate_sync(js)
+            .await
+            .map_err(|e| e.to_string())?;
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
     }
@@ -1071,9 +1220,16 @@ impl Handler {
                 offset = offset,
                 chunk_len = chunk_len,
             );
-            let chunk: String = tab.page.evaluate_sync(&js).await.map_err(|e| e.to_string())?;
+            let chunk: String = tab
+                .page
+                .evaluate_sync(&js)
+                .await
+                .map_err(|e| e.to_string())?;
             if chunk == "null" || chunk.is_empty() {
-                return Err(format!("WASM memory not found or address out of bounds (tried {})", mem_expr));
+                return Err(format!(
+                    "WASM memory not found or address out of bounds (tried {})",
+                    mem_expr
+                ));
             }
             hex_output.push_str(&chunk);
             offset += chunk_len;
@@ -1087,7 +1243,9 @@ impl Handler {
             use std::fmt::Write;
             let _ = write!(formatted, "{:08x}  ", line_addr);
             for (j, pair) in chunk.chunks(2).enumerate() {
-                if j == 8 { formatted.push(' '); }
+                if j == 8 {
+                    formatted.push(' ');
+                }
                 formatted.push(pair[0] as char);
                 formatted.push(pair[1] as char);
                 formatted.push(' ');
@@ -1105,7 +1263,7 @@ impl Handler {
 
         // Normalize hex: remove spaces, ensure even length
         let hex_clean: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if hex_clean.len() % 2 != 0 {
+        if !hex_clean.len().is_multiple_of(2) {
             return Err("Hex string must have even length".into());
         }
 
@@ -1124,7 +1282,11 @@ impl Handler {
         );
 
         let tab = self.require_tab()?;
-        let result: String = tab.page.evaluate_sync(&js).await.map_err(|e| e.to_string())?;
+        let result: String = tab
+            .page
+            .evaluate_sync(&js)
+            .await
+            .map_err(|e| e.to_string())?;
         if result.starts_with("error:") {
             return Err(result);
         }
@@ -1140,11 +1302,15 @@ impl Handler {
         let pattern = self.arg_str(args, "pattern")?;
         let memory = args["memory"].as_str();
         let max = args["max"].as_u64().unwrap_or(20) as usize;
-        let start = args["start"].as_str().map(parse_addr).transpose()?.unwrap_or(0);
+        let start = args["start"]
+            .as_str()
+            .map(parse_addr)
+            .transpose()?
+            .unwrap_or(0);
         let end = args["end"].as_str().map(parse_addr).transpose()?;
 
         let pattern_clean: String = pattern.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if pattern_clean.len() % 2 != 0 || pattern_clean.is_empty() {
+        if !pattern_clean.len().is_multiple_of(2) || pattern_clean.is_empty() {
             return Err("Pattern must be non-empty hex with even length".into());
         }
 
@@ -1182,7 +1348,11 @@ impl Handler {
         );
 
         let tab = self.require_tab()?;
-        let result: String = tab.page.evaluate_sync(&js).await.map_err(|e| e.to_string())?;
+        let result: String = tab
+            .page
+            .evaluate_sync(&js)
+            .await
+            .map_err(|e| e.to_string())?;
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Null);
 
         if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
@@ -1194,7 +1364,11 @@ impl Handler {
 
         match matches {
             Some(addrs) if !addrs.is_empty() => {
-                let mut out = format!("Found {} matches (searched {} bytes):\n", addrs.len(), searched);
+                let mut out = format!(
+                    "Found {} matches (searched {} bytes):\n",
+                    addrs.len(),
+                    searched
+                );
                 for a in addrs {
                     if let Some(addr) = a.as_u64() {
                         use std::fmt::Write;
@@ -1218,7 +1392,9 @@ impl Handler {
         let respond = args["respond"].as_str().map(std::path::PathBuf::from);
         let status = args["status"].as_u64().unwrap_or(200) as u16;
 
-        let id = self.intercept.add_rule(url_pattern.clone(), capture, respond, status);
+        let id = self
+            .intercept
+            .add_rule(url_pattern.clone(), capture, respond, status);
 
         // Enable Fetch interception if not already enabled
         if !self.intercept.enabled {
@@ -1251,7 +1427,11 @@ impl Handler {
             if self.intercept.enabled {
                 if let Some(ref state) = self.state {
                     if let Some(tab) = state.current_tab() {
-                        let _ = tab.page.session().send::<_, Value>("Fetch.disable", &json!({})).await;
+                        let _ = tab
+                            .page
+                            .session()
+                            .send::<_, Value>("Fetch.disable", &json!({}))
+                            .await;
                     }
                 }
                 self.intercept.enabled = false;
@@ -1325,10 +1505,20 @@ impl Handler {
 
             // Match rule and extract what we need before borrowing session
             let matched = self.intercept.match_url(&url).map(|r| {
-                (r.id, r.capture_path.clone(), r.respond_path.clone(), r.respond_status)
+                (
+                    r.id,
+                    r.capture_path.clone(),
+                    r.respond_path.clone(),
+                    r.respond_status,
+                )
             });
 
-            let session = match self.state.as_ref().and_then(|s| s.current_tab()).map(|t| t.page.session()) {
+            let session = match self
+                .state
+                .as_ref()
+                .and_then(|s| s.current_tab())
+                .map(|t| t.page.session())
+            {
                 Some(s) => s,
                 None => continue,
             };
@@ -1341,20 +1531,29 @@ impl Handler {
                         "postData": &post_data,
                         "headers": params.get("request").and_then(|r| r.get("headers")),
                     });
-                    let _ = std::fs::write(path, serde_json::to_string_pretty(&body).unwrap_or_default());
+                    let _ = std::fs::write(
+                        path,
+                        serde_json::to_string_pretty(&body).unwrap_or_default(),
+                    );
                 }
 
                 let action = if let Some(ref path) = respond_path {
                     if let Ok(body) = std::fs::read(path) {
                         let body_str = String::from_utf8_lossy(&body);
-                        let _ = session.fetch_fulfill(&request_id, respond_status, None, Some(&body_str)).await;
+                        let _ = session
+                            .fetch_fulfill(&request_id, respond_status, None, Some(&body_str))
+                            .await;
                         "responded"
                     } else {
-                        let _ = session.fetch_continue(&request_id, None, None, None, None).await;
+                        let _ = session
+                            .fetch_continue(&request_id, None, None, None, None)
+                            .await;
                         "continue (respond file not found)"
                     }
                 } else {
-                    let _ = session.fetch_continue(&request_id, None, None, None, None).await;
+                    let _ = session
+                        .fetch_continue(&request_id, None, None, None, None)
+                        .await;
                     "continue (captured)"
                 };
 
@@ -1366,7 +1565,9 @@ impl Handler {
                     action: action.to_string(),
                 });
             } else {
-                let _ = session.fetch_continue(&request_id, None, None, None, None).await;
+                let _ = session
+                    .fetch_continue(&request_id, None, None, None, None)
+                    .await;
             }
         }
     }
@@ -1402,7 +1603,8 @@ fn parse_addr(s: &str) -> Result<usize, String> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         usize::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex address '{}': {}", s, e))
     } else {
-        s.parse().map_err(|e| format!("Invalid address '{}': {}", s, e))
+        s.parse()
+            .map_err(|e| format!("Invalid address '{}': {}", s, e))
     }
 }
 

@@ -45,10 +45,7 @@ struct AXValue {
 
 impl AXValue {
     fn as_str(&self) -> &str {
-        self.value
-            .as_ref()
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
+        self.value.as_ref().and_then(|v| v.as_str()).unwrap_or("")
     }
 
     fn is_truthy(&self) -> bool {
@@ -238,7 +235,10 @@ pub async fn snapshot(page: &Page, include_all: bool) -> Result<SnapshotResult> 
         .await;
     let _ = page
         .session()
-        .send::<_, serde_json::Value>("DOM.getDocument", &serde_json::json!({"depth": -1, "pierce": true}))
+        .send::<_, serde_json::Value>(
+            "DOM.getDocument",
+            &serde_json::json!({"depth": -1, "pierce": true}),
+        )
         .await;
 
     let result: AXTreeResult = page

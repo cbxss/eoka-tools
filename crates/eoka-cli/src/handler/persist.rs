@@ -126,9 +126,7 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
 
 /// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String> {
-    page.clear_all_cookies()
-        .await
-        .map_err(|e| e.to_string())?;
+    page.clear_all_cookies().await.map_err(|e| e.to_string())?;
     let set_cookies: Vec<eoka::cdp::types::NetworkSetCookie> = state
         .cookies
         .iter()
@@ -191,7 +189,7 @@ pub async fn clone_state_from_source(source: &str) -> Result<SavedState, String>
 // Console capture
 // ---------------------------------------------------------------------------
 
-const CONSOLE_CAPTURE_JS: &str = include_str!("../../../eoka-agent/src/js/console_capture.js");
+const CONSOLE_CAPTURE_JS: &str = include_str!("../js/console_capture.js");
 
 /// Inject console capture into the current page and register for future navigations.
 pub async fn ensure_console_capture(tab: &mut TabState) -> Result<(), String> {
