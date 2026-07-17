@@ -1,6 +1,6 @@
 ---
 name: eoka
-description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, scraping protected/Cloudflare-gated endpoints with real cookies and TLS fingerprint, headless screenshots (plain or annotated with numbered element labels), CDP fetch interception, WASM memory dumps, fake-camera injection for getUserMedia, and SPA navigation. Triggers on: eoka, browser cli, headless screenshot, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
+description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, protected-site sessions and AWS WAF CAPTCHA solving, headless screenshots, CDP fetch interception, WASM memory, fake-camera injection, and SPA navigation. Triggers on: eoka, browser cli, AWS WAF, captcha, anti-captcha, headless screenshot, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
 ---
 
 # eoka — Browser Automation CLI
@@ -107,6 +107,17 @@ eoka set-cookie session abc123 --domain .target.com
 eoka delete-cookie tracking
 eoka clear-cookies
 ```
+
+### CAPTCHA
+
+Solve through Anti-Captcha without starting a browser. Set `ANTI_CAPTCHA_KEY`; never put it in a command transcript.
+
+```bash
+eoka captcha solve --captcha-type hcaptcha --website-url https://example.com --website-key <sitekey>
+eoka captcha solve --captcha-type amazon_waf --website-url https://parks.sonomacounty.ca.gov/ --website-key <key> --iv <iv> --context <context>
+```
+
+AWS WAF inputs come from `window.gokuProps`. The result contains `token` and `user_agent`: set `token` as the `aws-waf-token` cookie, use that User-Agent, then reload in the same session.
 
 ### Storage
 

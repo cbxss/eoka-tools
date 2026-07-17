@@ -167,7 +167,9 @@ pub struct BatchRequest {
 pub struct SolveCaptchaRequest {
     #[schemars(description = "Anti-captcha.com API key")]
     pub api_key: String,
-    #[schemars(description = "Captcha type: 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'")]
+    #[schemars(
+        description = "Captcha type: 'hcaptcha', 'recaptcha_v2', 'recaptcha_v3', or 'amazon_waf'"
+    )]
     pub captcha_type: String,
     #[schemars(description = "Website/page URL")]
     pub website_url: String,
@@ -177,6 +179,16 @@ pub struct SolveCaptchaRequest {
     pub page_action: Option<String>,
     #[schemars(description = "Minimum score (for reCAPTCHA v3, default 0.3)")]
     pub min_score: Option<f32>,
+    #[schemars(description = "AWS WAF iv value from window.gokuProps (required for amazon_waf)")]
+    pub iv: Option<String>,
+    #[schemars(
+        description = "AWS WAF context value from window.gokuProps (required for amazon_waf)"
+    )]
+    pub context: Option<String>,
+    #[schemars(description = "Optional AWS WAF captcha.js URL")]
+    pub captcha_script: Option<String>,
+    #[schemars(description = "Optional AWS WAF challenge.js URL")]
+    pub challenge_script: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -1,0 +1,18 @@
+[package]
+name = "captcha"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optional CAPTCHA solver integrations for eoka"
+repository = "https://github.com/cbxss/eoka-tools"
+
+[features]
+default = ["anti-captcha"]
+anti-captcha = ["dep:reqwest"]
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+url = "2"
