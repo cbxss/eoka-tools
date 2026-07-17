@@ -110,14 +110,7 @@ eoka clear-cookies
 
 ### CAPTCHA
 
-Solve through Anti-Captcha without starting a browser. Set `ANTI_CAPTCHA_KEY`; never put it in a command transcript.
-
-```bash
-eoka captcha solve --captcha-type hcaptcha --website-url https://example.com --website-key <sitekey>
-eoka captcha solve --captcha-type amazon_waf --website-url https://parks.sonomacounty.ca.gov/ --website-key <key> --iv <iv> --context <context>
-```
-
-AWS WAF inputs come from `window.gokuProps`. The result contains `token` and `user_agent`: set `token` as the `aws-waf-token` cookie, use that User-Agent, then reload in the same session.
+For install and AWS WAF usage, read [references/captcha.md](references/captcha.md).
 
 ### Storage
 
