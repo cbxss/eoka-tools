@@ -2,14 +2,10 @@
 
 ## Install
 
-Install from crates.io on any supported platform, or use the macOS ARM64 GitHub release installer.
+Install from crates.io on any supported platform.
 
 ```bash
-# Any platform
 cargo install eoka-cli
-
-# macOS Apple Silicon (no Rust toolchain)
-curl -fsSL https://raw.githubusercontent.com/cbxss/eoka-tools/main/crates/eoka-cli/scripts/install.sh | sh
 ```
 
 Ensure `$HOME/.local/bin` is on `PATH`.
