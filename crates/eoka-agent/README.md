@@ -27,6 +27,7 @@ session.close().await?;
 - **Live targeting** — `text:Submit`, `css:button.primary`, `id:btn`, `placeholder:Email`
 - **SPA support** — detect and navigate React Router, Next.js, Vue Router, etc.
 - **Extract** — run JS expressions and get typed results back
+- **CAPTCHA solving** — hCaptcha, reCAPTCHA v2/v3, and AWS WAF via Anti-Captcha
 
 ## MCP Server
 
@@ -35,4 +36,4 @@ cargo install eoka-agent
 claude mcp add eoka-agent -- eoka-agent
 ```
 
-44 tools: tab management, navigation, observe/screenshot, click/fill/select/hover/scroll, SPA navigation, JS execution, cookies, batch actions.
+Includes CAPTCHA tools. For AWS WAF, provide `website_key`, `iv`, and `context` from `window.gokuProps`; use the returned `token` as the `aws-waf-token` cookie and retain the returned `user_agent`.

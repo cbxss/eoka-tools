@@ -116,6 +116,33 @@ pub enum Command {
         annotate: bool,
     },
 
+    /// Solve a CAPTCHA through an optional provider integration (no browser needed).
+    Captcha {
+        #[command(subcommand)]
+        action: CaptchaAction,
+    },
+
+    /// Emulate a device viewport (CDP Emulation.setDeviceMetricsOverride).
+    /// Defaults to an iPhone-class 390x844 @2x mobile viewport.
+    #[command(alias = "viewport", alias = "device")]
+    Emulate {
+        /// Viewport width in CSS pixels
+        #[arg(long, default_value = "390")]
+        width: u32,
+        /// Viewport height in CSS pixels
+        #[arg(long, default_value = "844")]
+        height: u32,
+        /// Device pixel ratio (retina = 2 or 3)
+        #[arg(long, default_value = "2")]
+        dpr: f64,
+        /// Emulate desktop instead of mobile (disables the mobile flag + touch)
+        #[arg(long)]
+        desktop: bool,
+        /// Clear the device emulation override and return to the window size
+        #[arg(long)]
+        reset: bool,
+    },
+
     /// Get page URL and title
     Info,
 
@@ -390,6 +417,37 @@ pub enum Command {
         /// Write the snapshot to a JSON file (otherwise loaded into the daemon's session)
         #[arg(long)]
         to: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CaptchaAction {
+    /// Solve hCaptcha, reCAPTCHA, or an AWS WAF challenge with Anti-Captcha.
+    Solve {
+        /// hcaptcha, recaptcha_v2, recaptcha_v3, or amazon_waf
+        #[arg(long)]
+        captcha_type: String,
+        #[arg(long)]
+        website_url: String,
+        #[arg(long)]
+        website_key: String,
+        /// Anti-Captcha key; defaults to ANTI_CAPTCHA_KEY.
+        #[arg(long, env = "ANTI_CAPTCHA_KEY")]
+        api_key: Option<String>,
+        #[arg(long)]
+        page_action: Option<String>,
+        #[arg(long)]
+        min_score: Option<f32>,
+        /// Required for amazon_waf; obtain from window.gokuProps.
+        #[arg(long)]
+        iv: Option<String>,
+        /// Required for amazon_waf; obtain from window.gokuProps.
+        #[arg(long)]
+        context: Option<String>,
+        #[arg(long)]
+        captcha_script: Option<String>,
+        #[arg(long)]
+        challenge_script: Option<String>,
     },
 }
 

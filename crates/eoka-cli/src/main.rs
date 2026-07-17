@@ -8,7 +8,7 @@ mod protocol;
 mod session;
 
 use clap::Parser;
-use cli::{Cli, Command, InterceptAction, TabAction, WasmAction};
+use cli::{CaptchaAction, Cli, Command, InterceptAction, TabAction, WasmAction};
 use launch_spec::LaunchSpec;
 use protocol::Request;
 use serde_json::json;
@@ -56,6 +56,17 @@ async fn main() {
 
     // Handle commands that don't need the daemon at all.
     match &command {
+        Command::Captcha { action } => {
+            let response = match solve_captcha(action).await {
+                Ok(value) => protocol::Response::ok(value),
+                Err(error) => protocol::Response::err(error),
+            };
+            output::print_response(&response, cli.json);
+            if !response.ok {
+                std::process::exit(1);
+            }
+            return;
+        }
         Command::Status => {
             if client::is_daemon_running(&effective_session) {
                 println!("Daemon running (session={})", effective_session);
@@ -120,6 +131,38 @@ async fn main() {
     if matches!(command, Command::Close) {
         let _ = client::kill_daemon(&effective_session);
     }
+}
+
+async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, String> {
+    let CaptchaAction::Solve {
+        captcha_type,
+        website_url,
+        website_key,
+        api_key,
+        page_action,
+        min_score,
+        iv,
+        context,
+        captcha_script,
+        challenge_script,
+    } = action;
+    let api_key = api_key
+        .as_deref()
+        .ok_or("Anti-Captcha key required: use --api-key or ANTI_CAPTCHA_KEY")?;
+    let solver = captcha::AntiCaptcha::new(api_key);
+    let solution = match captcha_type.to_lowercase().as_str() {
+        "hcaptcha" => solver.solve_hcaptcha(website_url, website_key).await,
+        "recaptcha_v2" => solver.solve_recaptcha_v2(website_url, website_key).await,
+        "recaptcha_v3" => solver.solve_recaptcha_v3(website_url, website_key, page_action.as_deref().unwrap_or("submit"), min_score.unwrap_or(0.3)).await,
+        "amazon_waf" => solver.solve_amazon_waf(
+            website_url, website_key,
+            iv.as_deref().ok_or("amazon_waf requires --iv")?,
+            context.as_deref().ok_or("amazon_waf requires --context")?,
+            captcha_script.as_deref(), challenge_script.as_deref(),
+        ).await,
+        _ => return Err(format!("Unknown CAPTCHA type '{captcha_type}'. Use hcaptcha, recaptcha_v2, recaptcha_v3, or amazon_waf.")),
+    }.map_err(|e| e.to_string())?;
+    Ok(json!({ "token": solution.token(), "user_agent": solution.user_agent }))
 }
 
 /// Map CLI flags to a `LaunchSpec`. Resolves --cdp ports to ws:// URLs eagerly.
@@ -226,6 +269,22 @@ fn command_to_request(cmd: &Command) -> Request {
             args: json!({
                 "output": output.as_ref().map(|p| p.to_string_lossy().to_string()),
                 "annotate": annotate,
+            }),
+        },
+        Command::Emulate {
+            width,
+            height,
+            dpr,
+            desktop,
+            reset,
+        } => Request {
+            cmd: "emulate".into(),
+            args: json!({
+                "width": width,
+                "height": height,
+                "dpr": dpr,
+                "desktop": desktop,
+                "reset": reset,
             }),
         },
         Command::Info => Request {
@@ -549,7 +608,9 @@ fn command_to_request(cmd: &Command) -> Request {
             }),
         },
 
-        // Status/Kill/CdpUrl handled above
-        Command::Status | Command::Kill | Command::CdpUrl { .. } => unreachable!(),
+        // Commands handled before daemon startup.
+        Command::Captcha { .. } | Command::Status | Command::Kill | Command::CdpUrl { .. } => {
+            unreachable!()
+        }
     }
 }

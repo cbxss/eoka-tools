@@ -7,6 +7,7 @@ Browser automation toolkit built on [eoka](https://github.com/cbxss/eoka).
 | Crate | Description |
 |-------|-------------|
 | [**eoka-agent**](crates/eoka-agent) | AI agent interaction layer — MCP server, observe/act loop for LLMs |
+| [**captcha**](crates/captcha) | Optional Anti-Captcha client — hCaptcha, reCAPTCHA, AWS WAF |
 | [**eoka-email**](crates/eoka-email) | IMAP helpers — OTP codes, verification links, email polling |
 | [**eoka-runner**](crates/eoka-runner) | Config-based automation — YAML configs, CLI, scripted execution |
 
@@ -16,6 +17,7 @@ Browser automation toolkit built on [eoka](https://github.com/cbxss/eoka).
 eoka (core)              Low-level CDP browser automation
     │
     ├── eoka-agent       AI agent layer (MCP, Session, observe/act)
+    ├── captcha          Optional CAPTCHA solver integrations
     │
     └── eoka-runner      Scripted automation (Config, Runner, CLI)
 ```
@@ -89,6 +91,7 @@ eoka-runner crates/eoka-runner/configs/example.yaml -v
 ## Documentation
 
 - [eoka-agent README](crates/eoka-agent/README.md) — MCP tools, Session API
+- [eoka CLI skill](crates/eoka-cli/SKILL.md) — CLI workflow and CAPTCHA usage
 - [eoka-runner README](crates/eoka-runner/README.md) — YAML config format, CLI options
 
 ## License

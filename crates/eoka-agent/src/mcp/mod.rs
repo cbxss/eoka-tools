@@ -1012,26 +1012,16 @@ impl EokaServer {
         text_ok(format!("Cookie '{}' set", req.0.name))
     }
 
-    #[tool(
-        description = "Detect and solve CAPTCHAs (hCaptcha, reCAPTCHA) using anti-captcha.com API"
-    )]
+    #[tool(description = "Solve hCaptcha, reCAPTCHA, or AWS WAF CAPTCHAs using anti-captcha.com")]
     async fn solve_captcha(
         &self,
         req: Parameters<SolveCaptchaRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let solver = captcha::AntiCaptcha::new(req.0.api_key);
+        let solver = ::captcha::AntiCaptcha::new(req.0.api_key);
 
         let solution = match req.0.captcha_type.to_lowercase().as_str() {
-            "hcaptcha" => {
-                solver
-                    .solve_hcaptcha(&req.0.website_url, &req.0.website_key)
-                    .await
-            }
-            "recaptcha_v2" => {
-                solver
-                    .solve_recaptcha_v2(&req.0.website_url, &req.0.website_key)
-                    .await
-            }
+            "hcaptcha" => solver.solve_hcaptcha(&req.0.website_url, &req.0.website_key).await,
+            "recaptcha_v2" => solver.solve_recaptcha_v2(&req.0.website_url, &req.0.website_key).await,
             "recaptcha_v3" => {
                 let page_action = req.0.page_action.unwrap_or_else(|| "submit".to_string());
                 let min_score = req.0.min_score.unwrap_or(0.3);
@@ -1044,19 +1034,35 @@ impl EokaServer {
                     )
                     .await
             }
+            "amazon_waf" => {
+                let iv = req.0.iv.as_deref().ok_or_else(|| internal("amazon_waf requires iv"))?;
+                let context = req.0.context.as_deref().ok_or_else(|| internal("amazon_waf requires context"))?;
+                solver.solve_amazon_waf(
+                    &req.0.website_url, &req.0.website_key, iv, context,
+                    req.0.captcha_script.as_deref(), req.0.challenge_script.as_deref(),
+                ).await
+            }
             _ => {
                 return Err(internal(format!(
-                    "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', or 'recaptcha_v3'",
+                    "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', 'recaptcha_v3', or 'amazon_waf'",
                     req.0.captcha_type
                 )))
             }
         };
 
         match solution {
-            Ok(token) => text_ok(format!(
-                "Captcha solved! Token: {}...",
-                &token[..token.len().min(50)]
-            )),
+            Ok(solution) => {
+                let token = solution
+                    .token()
+                    .ok_or_else(|| internal("Captcha solution contained no token"))?;
+                text_ok(
+                    serde_json::json!({
+                        "token": token,
+                        "user_agent": solution.user_agent,
+                    })
+                    .to_string(),
+                )
+            }
             Err(e) => Err(internal(format!("Failed to solve captcha: {}", e))),
         }
     }
@@ -1077,7 +1083,7 @@ impl EokaServer {
             .ok_or_else(|| ErrorData::from(AgentError::NoTab))?;
 
         if req.0.auto_detect.unwrap_or(true) {
-            if let Some(info) = captcha::AntiCaptcha::detect_captcha_on_page(&tab.page).await {
+            if let Some(info) = captcha::detect_captcha_on_page(&tab.page).await {
                 text_ok(format!(
                     "Captcha detected!\nType: {}\nSitekey: {}",
                     info.captcha_type, info.sitekey

@@ -137,6 +137,7 @@ impl Handler {
             "snapshot" => self.cmd_snapshot(args).await,
             "observe" => self.cmd_observe(args).await,
             "screenshot" => self.cmd_screenshot(args).await,
+            "emulate" => self.cmd_emulate(args).await,
             "info" => self.cmd_info().await,
             "text" => self.cmd_text().await,
             "find" => self.cmd_find(args).await,
@@ -417,6 +418,61 @@ impl Handler {
             result["elements"] = Value::String(list);
         }
         Ok(Response::ok(result))
+    }
+
+    async fn cmd_emulate(&mut self, args: &Value) -> Result<Response, String> {
+        self.ensure_browser().await?;
+        let reset = args["reset"].as_bool().unwrap_or(false);
+        let tab = self.require_tab_mut()?;
+        let session = tab.page.session();
+
+        if reset {
+            session
+                .send::<_, Value>("Emulation.clearDeviceMetricsOverride", &json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
+            let _ = session
+                .send::<_, Value>(
+                    "Emulation.setTouchEmulationEnabled",
+                    &json!({ "enabled": false }),
+                )
+                .await;
+            return Ok(Response::ok_text("Device emulation cleared"));
+        }
+
+        let width = args["width"].as_u64().unwrap_or(390);
+        let height = args["height"].as_u64().unwrap_or(844);
+        let dpr = args["dpr"].as_f64().unwrap_or(2.0);
+        let mobile = !args["desktop"].as_bool().unwrap_or(false);
+
+        session
+            .send::<_, Value>(
+                "Emulation.setDeviceMetricsOverride",
+                &json!({
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": dpr,
+                    "mobile": mobile,
+                }),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Mobile viewports get touch input so gesture-driven UIs (RN-web
+        // PanResponder, carousels) behave like a real device. Best-effort.
+        let _ = session
+            .send::<_, Value>(
+                "Emulation.setTouchEmulationEnabled",
+                &json!({ "enabled": mobile, "maxTouchPoints": 5 }),
+            )
+            .await;
+
+        Ok(Response::ok(json!({
+            "width": width,
+            "height": height,
+            "dpr": dpr,
+            "mobile": mobile,
+        })))
     }
 
     async fn cmd_info(&mut self) -> Result<Response, String> {
