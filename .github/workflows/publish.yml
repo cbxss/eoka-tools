@@ -41,19 +41,20 @@ jobs:
             manifest="crates/${crate}/Cargo.toml"
             [ -f "$manifest" ] || continue
 
+            package_name=$(grep '^name' "$manifest" | head -1 | sed 's/.*"\(.*\)"/\1/')
             version=$(grep '^version' "$manifest" | head -1 | sed 's/.*"\(.*\)"/\1/')
             tag="${crate}-v${version}"
-            echo "::group::${crate} @ ${version}"
+            echo "::group::${package_name} @ ${version}"
 
-            api_url="https://crates.io/api/v1/crates/${crate}/${version}"
+            api_url="https://crates.io/api/v1/crates/${package_name}/${version}"
             http_status=$(curl -sS -o /dev/null -w "%{http_code}" -A "$UA" "$api_url" || echo 000)
             if [ "$http_status" = "200" ]; then
-              echo "${crate} ${version} already on crates.io — skip"
+              echo "${package_name} ${version} already on crates.io — skip"
               echo "::endgroup::"
               continue
             fi
 
-            echo "Publishing ${crate} ${version}"
+            echo "Publishing ${package_name} ${version}"
             cargo publish --manifest-path "$manifest" --token "$CARGO_REGISTRY_TOKEN"
 
             if git rev-parse "$tag" >/dev/null 2>&1; then
