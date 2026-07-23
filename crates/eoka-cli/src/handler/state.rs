@@ -139,7 +139,7 @@ impl BrowserState {
             return self
                 .tabs
                 .get_mut(&existing_id)
-                .ok_or_else(|| eoka::Error::CdpSimple("Current tab disappeared".into()));
+                .ok_or_else(|| eoka::Error::cdp_msg("Current tab disappeared"));
         }
 
         let page = self.browser.new_page(url).await?;
@@ -207,7 +207,7 @@ impl BrowserState {
 
     pub async fn close_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
         if self.tabs.len() <= 1 {
-            return Err(eoka::Error::CdpSimple("Cannot close the last tab".into()));
+            return Err(eoka::Error::cdp_msg("Cannot close the last tab"));
         }
         self.browser.close_tab(tab_id).await?;
         self.tabs.remove(tab_id);

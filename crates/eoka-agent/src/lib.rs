@@ -453,13 +453,10 @@ impl Session {
 
     /// Hover over element.
     pub async fn hover(&mut self, index: usize) -> Result<()> {
-        let el = self.require_fresh(index).await?;
-        let cx = el.bbox.x + el.bbox.width / 2.0;
-        let cy = el.bbox.y + el.bbox.height / 2.0;
-        self.page
-            .session()
-            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
-            .await
+        // eoka 0.5 made the raw CDP mouse API private; use the public
+        // `Page::hover`, which finds the element and dispatches the move.
+        let selector = self.require_fresh(index).await?.selector.clone();
+        self.page.hover(&selector).await
     }
 
     /// Scroll element into view.
@@ -527,7 +524,7 @@ impl Session {
         );
         let json_str: String = self.page.evaluate(&js).await?;
         let pairs: Vec<(String, String)> = serde_json::from_str(&json_str)
-            .map_err(|e| eoka::Error::CdpSimple(format!("options parse error: {}", e)))?;
+            .map_err(|e| eoka::Error::cdp_msg(format!("options parse error: {}", e)))?;
         Ok(pairs)
     }
 
@@ -685,11 +682,11 @@ impl Session {
     /// ```
     pub async fn extract<T: serde::de::DeserializeOwned>(&self, js_expression: &str) -> Result<T> {
         let escaped_js = serde_json::to_string(js_expression)
-            .map_err(|e| eoka::Error::CdpSimple(format!("Failed to escape JS: {}", e)))?;
+            .map_err(|e| eoka::Error::cdp_msg(format!("Failed to escape JS: {}", e)))?;
         let js = format!("JSON.stringify(eval({}))", escaped_js);
         let json_str: String = self.page.evaluate(&js).await?;
         if json_str == "null" || json_str == "undefined" || json_str.is_empty() {
-            return Err(eoka::Error::CdpSimple(format!(
+            return Err(eoka::Error::cdp_msg(format!(
                 "extract returned null/undefined for: {}",
                 if js_expression.len() > 60 {
                     &js_expression[..60]
@@ -699,7 +696,7 @@ impl Session {
             )));
         }
         serde_json::from_str(&json_str).map_err(|e| {
-            eoka::Error::CdpSimple(format!(
+            eoka::Error::cdp_msg(format!(
                 "extract parse error: {} (got: {})",
                 e,
                 if json_str.len() > 80 {

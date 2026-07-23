@@ -546,28 +546,10 @@ async fn select_option(page: &Page, selector: &str, value: &str, target: &Target
 }
 
 async fn hover_element(page: &Page, selector: &str) -> Result<()> {
-    let js = format!(
-        r#"(() => {{
-            const el = document.querySelector({});
-            if (!el) return null;
-            const rect = el.getBoundingClientRect();
-            return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
-        }})()"#,
-        serde_json::to_string(selector).unwrap()
-    );
-    let coords: Option<serde_json::Value> = page.evaluate(&js).await?;
-    if let Some(c) = coords {
-        let x = c["x"].as_f64().unwrap_or(0.0);
-        let y = c["y"].as_f64().unwrap_or(0.0);
-        page.session()
-            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, x, y, None, None)
-            .await?;
-        page.wait(100).await;
-        Ok(())
-    } else {
-        Err(Error::ActionFailed(format!(
-            "hover target '{}' not found",
-            selector
-        )))
-    }
+    // eoka 0.5 exposes a public `Page::hover` that finds the element, computes
+    // its center, and dispatches a MouseMoved event — the same thing this used
+    // to do by hand via the (now private) CDP mouse API.
+    page.hover(selector).await?;
+    page.wait(100).await;
+    Ok(())
 }

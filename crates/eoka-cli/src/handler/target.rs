@@ -11,7 +11,6 @@ use super::state::TabState;
 pub struct ResolvedTarget {
     pub selector: String,
     pub desc: String,
-    pub bbox: target::BBox,
 }
 
 /// Shared selector-generation JS (used by ref resolution).
@@ -61,7 +60,7 @@ async fn resolve_ref(
         .ok_or_else(|| stale("selector returned null"))
 }
 
-/// Resolve target string to selector + bbox.
+/// Resolve target string to a selector + description.
 pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<ResolvedTarget, String> {
     match Target::parse(target_str) {
         Target::Index(idx) => {
@@ -71,12 +70,6 @@ pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<Resolved
             Ok(ResolvedTarget {
                 selector: el.selector.clone(),
                 desc: el.to_string(),
-                bbox: target::BBox {
-                    x: el.bbox.x,
-                    y: el.bbox.y,
-                    width: el.bbox.width,
-                    height: el.bbox.height,
-                },
             })
         }
         Target::Ref(label) => {
@@ -84,7 +77,6 @@ pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<Resolved
             Ok(ResolvedTarget {
                 desc: format!("ref {}", label),
                 selector,
-                bbox: target::BBox::default(),
             })
         }
         Target::Live(pattern) => {
@@ -99,7 +91,6 @@ pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<Resolved
             Ok(ResolvedTarget {
                 selector: r.selector,
                 desc: format!("<{}> \"{}\"", r.tag, r.text),
-                bbox: r.bbox,
             })
         }
     }

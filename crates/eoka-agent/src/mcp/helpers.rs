@@ -15,7 +15,6 @@ use super::types::JsRequest;
 pub(crate) struct ResolvedTarget {
     pub selector: String,
     pub desc: String,
-    pub bbox: target::BBox,
 }
 
 /// Shared selector-generation JS (used by ref resolution and live resolve).
@@ -85,12 +84,6 @@ pub(crate) async fn resolve_target(
             Ok(ResolvedTarget {
                 selector: el.selector.clone(),
                 desc: el.to_string(),
-                bbox: target::BBox {
-                    x: el.bbox.x,
-                    y: el.bbox.y,
-                    width: el.bbox.width,
-                    height: el.bbox.height,
-                },
             })
         }
         Target::Ref(label) => {
@@ -98,7 +91,6 @@ pub(crate) async fn resolve_target(
             Ok(ResolvedTarget {
                 desc: format!("ref {}", label),
                 selector,
-                bbox: target::BBox::default(),
             })
         }
         Target::Live(pattern) => {
@@ -114,7 +106,6 @@ pub(crate) async fn resolve_target(
             Ok(ResolvedTarget {
                 selector: r.selector,
                 desc: format!("<{}> \"{}\"", r.tag, r.text),
-                bbox: r.bbox,
             })
         }
     }
@@ -141,8 +132,8 @@ pub(crate) async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
             return Ok(());
         }
         if start.elapsed() > max_wait {
-            return Err(eoka::Error::CdpSimple(
-                "Page did not reach interactive state within 10s".into(),
+            return Err(eoka::Error::cdp_msg(
+                "Page did not reach interactive state within 10s",
             ));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -315,14 +306,14 @@ pub struct SavedCookie {
     pub same_site: Option<String>,
 }
 
-impl From<eoka::cdp::types::Cookie> for SavedCookie {
-    fn from(c: eoka::cdp::types::Cookie) -> Self {
+impl From<eoka::SessionCookie> for SavedCookie {
+    fn from(c: eoka::SessionCookie) -> Self {
         Self {
             name: c.name,
             value: c.value,
             domain: c.domain,
             path: c.path,
-            expires: c.expires,
+            expires: c.expires.unwrap_or(0.0),
             http_only: c.http_only,
             secure: c.secure,
             same_site: c.same_site,
@@ -331,15 +322,14 @@ impl From<eoka::cdp::types::Cookie> for SavedCookie {
 }
 
 impl SavedCookie {
-    pub fn to_network_set_cookie(&self) -> eoka::cdp::types::NetworkSetCookie {
-        eoka::cdp::types::NetworkSetCookie {
+    pub fn to_session_cookie(&self) -> eoka::SessionCookie {
+        eoka::SessionCookie {
             name: self.name.clone(),
             value: self.value.clone(),
-            url: None,
-            domain: Some(self.domain.clone()),
-            path: Some(self.path.clone()),
-            secure: Some(self.secure),
-            http_only: Some(self.http_only),
+            domain: self.domain.clone(),
+            path: self.path.clone(),
+            secure: self.secure,
+            http_only: self.http_only,
             same_site: self.same_site.clone(),
             expires: if self.expires > 0.0 {
                 Some(self.expires)
@@ -405,10 +395,10 @@ pub(crate) async fn capture_state(page: &Page) -> Result<SavedState, ErrorData> 
 pub(crate) async fn restore_state(page: &Page, state: &SavedState) -> Result<(), ErrorData> {
     // Restore cookies via CDP (full fidelity: httpOnly, secure, sameSite, expires)
     page.clear_all_cookies().await.map_err(internal)?;
-    let set_cookies: Vec<eoka::cdp::types::NetworkSetCookie> = state
+    let set_cookies: Vec<eoka::SessionCookie> = state
         .cookies
         .iter()
-        .map(|c| c.to_network_set_cookie())
+        .map(|c| c.to_session_cookie())
         .collect();
     if !set_cookies.is_empty() {
         page.set_cookies_bulk(set_cookies).await.map_err(internal)?;
@@ -534,17 +524,15 @@ mod tests {
 
     #[test]
     fn saved_cookie_from_cdp_cookie() {
-        let cdp = eoka::cdp::types::Cookie {
+        let cdp = eoka::SessionCookie {
             name: "sid".into(),
             value: "abc123".into(),
             domain: ".example.com".into(),
             path: "/".into(),
-            expires: 1700000000.0,
-            size: 10,
-            http_only: true,
             secure: true,
-            session: false,
+            http_only: true,
             same_site: Some("Lax".into()),
+            expires: Some(1700000000.0),
         };
         let saved = SavedCookie::from(cdp);
         assert_eq!(saved.name, "sid");
@@ -553,11 +541,11 @@ mod tests {
         assert!(saved.secure);
         assert_eq!(saved.same_site.as_deref(), Some("Lax"));
 
-        let net = saved.to_network_set_cookie();
-        assert_eq!(net.name, "sid");
-        assert_eq!(net.domain.as_deref(), Some(".example.com"));
-        assert_eq!(net.http_only, Some(true));
-        assert_eq!(net.expires, Some(1700000000.0));
+        let sc = saved.to_session_cookie();
+        assert_eq!(sc.name, "sid");
+        assert_eq!(sc.domain, ".example.com");
+        assert!(sc.http_only);
+        assert_eq!(sc.expires, Some(1700000000.0));
     }
 
     #[test]
@@ -572,8 +560,8 @@ mod tests {
             secure: false,
             same_site: None,
         };
-        let net = saved.to_network_set_cookie();
-        assert_eq!(net.expires, None);
+        let sc = saved.to_session_cookie();
+        assert_eq!(sc.expires, None);
     }
 
     #[test]
@@ -627,31 +615,28 @@ mod tests {
 
     #[test]
     fn saved_cookie_all_fields_survive_conversion() {
-        let cdp = eoka::cdp::types::Cookie {
+        let cdp = eoka::SessionCookie {
             name: "token".into(),
             value: "eyJhbGciOiJSUzI1NiJ9".into(),
             domain: ".app.example.com".into(),
             path: "/api".into(),
-            expires: 1893456000.0,
-            size: 42,
-            http_only: true,
             secure: true,
-            session: false,
+            http_only: true,
             same_site: Some("Strict".into()),
+            expires: Some(1893456000.0),
         };
         let saved = SavedCookie::from(cdp);
-        let net = saved.to_network_set_cookie();
+        let sc = saved.to_session_cookie();
 
         // Verify full round-trip fidelity
-        assert_eq!(net.name, "token");
-        assert_eq!(net.value, "eyJhbGciOiJSUzI1NiJ9");
-        assert_eq!(net.domain.as_deref(), Some(".app.example.com"));
-        assert_eq!(net.path.as_deref(), Some("/api"));
-        assert_eq!(net.expires, Some(1893456000.0));
-        assert_eq!(net.http_only, Some(true));
-        assert_eq!(net.secure, Some(true));
-        assert_eq!(net.same_site.as_deref(), Some("Strict"));
-        assert!(net.url.is_none()); // url is never set from cookie conversion
+        assert_eq!(sc.name, "token");
+        assert_eq!(sc.value, "eyJhbGciOiJSUzI1NiJ9");
+        assert_eq!(sc.domain, ".app.example.com");
+        assert_eq!(sc.path, "/api");
+        assert_eq!(sc.expires, Some(1893456000.0));
+        assert!(sc.http_only);
+        assert!(sc.secure);
+        assert_eq!(sc.same_site.as_deref(), Some("Strict"));
     }
 
     #[test]

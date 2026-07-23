@@ -43,14 +43,14 @@ pub async fn spa_navigate(page: &Page, router_type: &RouterType, path: &str) -> 
 
     let json: String = page.evaluate(&js).await?;
     let result: NavResult = serde_json::from_str(&json)
-        .map_err(|e| eoka::Error::CdpSimple(format!("Failed to parse navigation result: {}", e)))?;
+        .map_err(|e| eoka::Error::cdp_msg(format!("Failed to parse navigation result: {}", e)))?;
 
     if result.success {
         // Brief wait for SPA to update
         page.wait(100).await;
         Ok(result.new_path.unwrap_or_else(|| path.to_string()))
     } else {
-        Err(eoka::Error::CdpSimple(format!(
+        Err(eoka::Error::cdp_msg(format!(
             "SPA navigation failed: {}",
             result.error.unwrap_or_else(|| "unknown error".into())
         )))
@@ -67,14 +67,14 @@ pub async fn history_go(page: &Page, delta: i32) -> Result<()> {
 
     let json: String = page.evaluate(&js).await?;
     let result: NavResult = serde_json::from_str(&json)
-        .map_err(|e| eoka::Error::CdpSimple(format!("Failed to parse history result: {}", e)))?;
+        .map_err(|e| eoka::Error::cdp_msg(format!("Failed to parse history result: {}", e)))?;
 
     if result.success {
         // Wait for navigation to complete
         page.wait(200).await;
         Ok(())
     } else {
-        Err(eoka::Error::CdpSimple(format!(
+        Err(eoka::Error::cdp_msg(format!(
             "History navigation failed: {}",
             result.error.unwrap_or_else(|| "unknown error".into())
         )))

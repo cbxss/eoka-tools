@@ -195,7 +195,7 @@ impl BrowserState {
 
     pub async fn close_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
         if self.tabs.len() <= 1 {
-            return Err(eoka::Error::CdpSimple("Cannot close the last tab".into()));
+            return Err(eoka::Error::cdp_msg("Cannot close the last tab"));
         }
         if !self.tabs.contains_key(tab_id) {
             return Err(eoka::Error::ElementNotFound(format!(

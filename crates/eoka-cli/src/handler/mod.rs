@@ -613,11 +613,8 @@ impl Handler {
 
         auto_observe_if_needed(tab, target_str, vp).await?;
         let resolved = resolve_target(tab, target_str).await?;
-        let cx = resolved.bbox.x + resolved.bbox.width / 2.0;
-        let cy = resolved.bbox.y + resolved.bbox.height / 2.0;
         tab.page
-            .session()
-            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
+            .hover(&resolved.selector)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Response::ok_text(format!("Hovered {}", resolved.desc)))
@@ -772,14 +769,13 @@ impl Handler {
                 .unwrap_or_default(),
         };
 
-        let cookie = eoka::cdp::types::NetworkSetCookie {
+        let cookie = eoka::SessionCookie {
             name: name.to_string(),
             value: value.to_string(),
-            url: None,
-            domain: Some(domain),
-            path: Some(path.to_string()),
-            secure: None,
-            http_only: None,
+            domain,
+            path: path.to_string(),
+            secure: false,
+            http_only: false,
             same_site: None,
             expires: None,
         };
@@ -1459,7 +1455,10 @@ impl Handler {
             let tab = self.require_tab()?;
             tab.page
                 .session()
-                .fetch_enable(false)
+                .send::<_, serde_json::Value>(
+                    "Fetch.enable",
+                    &json!({ "handleAuthRequests": false }),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
             self.intercept.enabled = true;
@@ -1598,18 +1597,32 @@ impl Handler {
                     if let Ok(body) = std::fs::read(path) {
                         let body_str = String::from_utf8_lossy(&body);
                         let _ = session
-                            .fetch_fulfill(&request_id, respond_status, None, Some(&body_str))
+                            .send::<_, serde_json::Value>(
+                                "Fetch.fulfillRequest",
+                                &json!({
+                                    "requestId": request_id,
+                                    "responseCode": respond_status,
+                                    "body": base64::engine::general_purpose::STANDARD
+                                        .encode(body_str.as_bytes()),
+                                }),
+                            )
                             .await;
                         "responded"
                     } else {
                         let _ = session
-                            .fetch_continue(&request_id, None, None, None, None)
+                            .send::<_, serde_json::Value>(
+                                "Fetch.continueRequest",
+                                &json!({ "requestId": request_id }),
+                            )
                             .await;
                         "continue (respond file not found)"
                     }
                 } else {
                     let _ = session
-                        .fetch_continue(&request_id, None, None, None, None)
+                        .send::<_, serde_json::Value>(
+                            "Fetch.continueRequest",
+                            &json!({ "requestId": request_id }),
+                        )
                         .await;
                     "continue (captured)"
                 };
@@ -1623,7 +1636,10 @@ impl Handler {
                 });
             } else {
                 let _ = session
-                    .fetch_continue(&request_id, None, None, None, None)
+                    .send::<_, serde_json::Value>(
+                        "Fetch.continueRequest",
+                        &json!({ "requestId": request_id }),
+                    )
                     .await;
             }
         }
