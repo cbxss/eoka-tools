@@ -475,10 +475,7 @@ impl EokaServer {
         auto_observe_if_needed(tab, &req.0.target, vp).await?;
 
         let resolved = resolve_target(tab, &req.0.target).await?;
-        tab.page
-            .hover(&resolved.selector)
-            .await
-            .map_err(internal)?;
+        tab.page.hover(&resolved.selector).await.map_err(internal)?;
         text_ok(format!("Hovered {}", resolved.desc))
     }
 

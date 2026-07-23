@@ -1610,13 +1610,19 @@ impl Handler {
                         "responded"
                     } else {
                         let _ = session
-                            .send::<_, serde_json::Value>("Fetch.continueRequest", &json!({ "requestId": request_id }))
+                            .send::<_, serde_json::Value>(
+                                "Fetch.continueRequest",
+                                &json!({ "requestId": request_id }),
+                            )
                             .await;
                         "continue (respond file not found)"
                     }
                 } else {
                     let _ = session
-                        .send::<_, serde_json::Value>("Fetch.continueRequest", &json!({ "requestId": request_id }))
+                        .send::<_, serde_json::Value>(
+                            "Fetch.continueRequest",
+                            &json!({ "requestId": request_id }),
+                        )
                         .await;
                     "continue (captured)"
                 };
@@ -1630,7 +1636,10 @@ impl Handler {
                 });
             } else {
                 let _ = session
-                    .send::<_, serde_json::Value>("Fetch.continueRequest", &json!({ "requestId": request_id }))
+                    .send::<_, serde_json::Value>(
+                        "Fetch.continueRequest",
+                        &json!({ "requestId": request_id }),
+                    )
                     .await;
             }
         }
