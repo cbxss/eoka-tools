@@ -12,7 +12,7 @@ name = "eoka"
 path = "src/main.rs"
 
 [dependencies]
-eoka-agent = { version = "0.1.5", path = "../eoka-agent" }
+eoka-agent = { version = "0.1.6", path = "../eoka-agent" }
 captcha = { package = "eoka-captcha", version = "0.1.0", path = "../captcha" }
 eoka = "0.5"
 clap = { version = "4", features = ["derive", "env"] }
