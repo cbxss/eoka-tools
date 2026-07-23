@@ -34,14 +34,14 @@ pub struct SavedCookie {
     pub same_site: Option<String>,
 }
 
-impl From<eoka::cdp::types::Cookie> for SavedCookie {
-    fn from(c: eoka::cdp::types::Cookie) -> Self {
+impl From<eoka::SessionCookie> for SavedCookie {
+    fn from(c: eoka::SessionCookie) -> Self {
         Self {
             name: c.name,
             value: c.value,
             domain: c.domain,
             path: c.path,
-            expires: c.expires,
+            expires: c.expires.unwrap_or(0.0),
             http_only: c.http_only,
             secure: c.secure,
             same_site: c.same_site,
@@ -50,15 +50,14 @@ impl From<eoka::cdp::types::Cookie> for SavedCookie {
 }
 
 impl SavedCookie {
-    fn to_network_set_cookie(&self) -> eoka::cdp::types::NetworkSetCookie {
-        eoka::cdp::types::NetworkSetCookie {
+    fn to_session_cookie(&self) -> eoka::SessionCookie {
+        eoka::SessionCookie {
             name: self.name.clone(),
             value: self.value.clone(),
-            url: None,
-            domain: Some(self.domain.clone()),
-            path: Some(self.path.clone()),
-            secure: Some(self.secure),
-            http_only: Some(self.http_only),
+            domain: self.domain.clone(),
+            path: self.path.clone(),
+            secure: self.secure,
+            http_only: self.http_only,
             same_site: self.same_site.clone(),
             expires: if self.expires > 0.0 {
                 Some(self.expires)
@@ -127,10 +126,10 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
 /// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String> {
     page.clear_all_cookies().await.map_err(|e| e.to_string())?;
-    let set_cookies: Vec<eoka::cdp::types::NetworkSetCookie> = state
+    let set_cookies: Vec<eoka::SessionCookie> = state
         .cookies
         .iter()
-        .map(|c| c.to_network_set_cookie())
+        .map(|c| c.to_session_cookie())
         .collect();
     if !set_cookies.is_empty() {
         page.set_cookies_bulk(set_cookies)

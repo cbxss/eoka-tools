@@ -1070,7 +1070,7 @@ async fn test_hidden_elements_filtered() {
 async fn capture_state(
     page: &eoka::Page,
 ) -> (
-    Vec<eoka::cdp::types::Cookie>,
+    Vec<eoka::SessionCookie>,
     HashMap<String, String>,
     HashMap<String, String>,
 ) {
@@ -1114,23 +1114,10 @@ async fn restore_storage(
     }
 }
 
-/// Helper: convert CDP Cookie → NetworkSetCookie (same as SavedCookie conversion).
-fn cookie_to_set_cookie(c: &eoka::cdp::types::Cookie) -> eoka::cdp::types::NetworkSetCookie {
-    eoka::cdp::types::NetworkSetCookie {
-        name: c.name.clone(),
-        value: c.value.clone(),
-        domain: Some(c.domain.clone()),
-        path: Some(c.path.clone()),
-        secure: Some(c.secure),
-        http_only: Some(c.http_only),
-        same_site: c.same_site.clone(),
-        expires: if c.expires > 0.0 {
-            Some(c.expires)
-        } else {
-            None
-        },
-        url: None,
-    }
+/// Helper: cookies round-trip directly as `SessionCookie` in eoka 0.5
+/// (`set_cookies_bulk` takes the same type `cookies()` returns).
+fn cookie_to_set_cookie(c: &eoka::SessionCookie) -> eoka::SessionCookie {
+    c.clone()
 }
 
 #[tokio::test]
@@ -1238,27 +1225,25 @@ async fn test_state_restore_cookies() {
 
     page.clear_all_cookies().await.unwrap();
     let restored_cookies = vec![
-        eoka::cdp::types::NetworkSetCookie {
+        eoka::SessionCookie {
             name: "restored_1".into(),
             value: "val1".into(),
-            domain: Some(".example.com".into()),
-            path: Some("/".into()),
-            secure: Some(false),
-            http_only: Some(true),
+            domain: ".example.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: true,
             same_site: Some("Lax".into()),
             expires: None,
-            url: None,
         },
-        eoka::cdp::types::NetworkSetCookie {
+        eoka::SessionCookie {
             name: "restored_2".into(),
             value: "val2".into(),
-            domain: Some(".example.com".into()),
-            path: Some("/".into()),
-            secure: Some(false),
-            http_only: Some(false),
+            domain: ".example.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
             same_site: None,
             expires: None,
-            url: None,
         },
     ];
     page.set_cookies_bulk(restored_cookies).await.unwrap();

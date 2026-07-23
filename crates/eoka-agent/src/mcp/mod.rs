@@ -475,11 +475,8 @@ impl EokaServer {
         auto_observe_if_needed(tab, &req.0.target, vp).await?;
 
         let resolved = resolve_target(tab, &req.0.target).await?;
-        let cx = resolved.bbox.x + resolved.bbox.width / 2.0;
-        let cy = resolved.bbox.y + resolved.bbox.height / 2.0;
         tab.page
-            .session()
-            .dispatch_mouse_event(eoka::cdp::MouseEventType::MouseMoved, cx, cy, None, None)
+            .hover(&resolved.selector)
             .await
             .map_err(internal)?;
         text_ok(format!("Hovered {}", resolved.desc))

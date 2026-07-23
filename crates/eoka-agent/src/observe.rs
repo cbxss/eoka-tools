@@ -75,7 +75,7 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
     );
     let json_str: String = page.evaluate(&js).await?;
 
-    parse_raw_elements(&json_str).map_err(eoka::Error::CdpSimple)
+    parse_raw_elements(&json_str).map_err(eoka::Error::cdp_msg)
 }
 
 #[cfg(test)]
