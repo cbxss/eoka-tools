@@ -116,7 +116,7 @@ pub enum Command {
         annotate: bool,
     },
 
-    /// Solve a CAPTCHA through an optional provider integration (no browser needed).
+    /// Solve or inject CAPTCHA tokens.
     Captcha {
         #[command(subcommand)]
         action: CaptchaAction,
@@ -453,6 +453,23 @@ pub enum CaptchaAction {
         captcha_script: Option<String>,
         #[arg(long)]
         challenge_script: Option<String>,
+        /// Inject the solved token into the current browser session.
+        #[arg(long)]
+        inject: bool,
+        /// Optional JavaScript callback expression to call with the solved token.
+        #[arg(long)]
+        inject_callback: Option<String>,
+    },
+
+    /// Inject an already-solved CAPTCHA token into the current browser session.
+    Inject {
+        token: String,
+        /// auto, recaptcha, hcaptcha, or turnstile
+        #[arg(long, default_value = "auto")]
+        captcha_type: String,
+        /// Optional JavaScript callback expression to call with the token.
+        #[arg(long)]
+        callback: Option<String>,
     },
 }
 

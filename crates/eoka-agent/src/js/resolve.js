@@ -33,10 +33,48 @@
             });
     }
 
+    function textCandidateScore(el, query) {
+        const tag = el.tagName.toLowerCase();
+        const role = lc(el.getAttribute('role'));
+        const textValue = lc(text(el));
+        const exact = textValue === query ? 1 : 0;
+        let control = 0;
+
+        if (tag === 'button') control = 100;
+        else if (role === 'button') control = 90;
+        else if (tag === 'input' && ['button', 'submit', 'reset'].includes(lc(el.type))) control = 85;
+        else if (tag === 'a') control = 70;
+        else if (['select', 'textarea', 'input'].includes(tag)) control = 60;
+        else if (el.hasAttribute('onclick')) control = 25;
+        else if (el.hasAttribute('tabindex')) control = 20;
+
+        let depth = 0;
+        for (let n = el; n && n.nodeType === 1; n = n.parentElement) depth++;
+        const r = el.getBoundingClientRect();
+        const area = r.width * r.height;
+
+        return { exact, control, depth, area };
+    }
+
+    function bestTextMatch(elements, query) {
+        return elements
+            .map((el, index) => ({ el, index, score: textCandidateScore(el, query) }))
+            .sort((a, b) =>
+                (b.score.control - a.score.control) ||
+                (b.score.exact - a.score.exact) ||
+                (b.score.depth - a.score.depth) ||
+                (a.score.area - b.score.area) ||
+                (a.index - b.index)
+            )[0]?.el || null;
+    }
+
     let el = null;
     switch (type) {
         case 'text':
-            el = interactive().find(e => lc(text(e)).includes(valLc));
+            el = bestTextMatch(
+                interactive().filter(e => lc(text(e)).includes(valLc)),
+                valLc
+            );
             break;
         case 'placeholder':
             el = document.querySelector(`input[placeholder*="${value}" i],textarea[placeholder*="${value}" i]`)

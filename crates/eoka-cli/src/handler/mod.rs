@@ -76,8 +76,8 @@ impl Handler {
                     } else {
                         s.ensure_blank_tab().await.map_err(|e| e.to_string())?
                     };
-                    restore_state(&tab.page, &saved).await?;
-                    tab.invalidate();
+                    let _ = wait_for_stable(&tab.page).await;
+                    restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
                 }
                 s
             }
@@ -158,6 +158,7 @@ impl Handler {
             "scroll" => self.cmd_scroll(args).await,
             "eval" => self.cmd_eval(args).await,
             "exec" => self.cmd_exec(args).await,
+            "captcha_inject" => self.cmd_captcha_inject(args).await,
             "fetch" => self.cmd_fetch(args).await,
             "cookies" => self.cmd_cookies().await,
             "set_cookie" => self.cmd_set_cookie(args).await,
@@ -741,6 +742,18 @@ impl Handler {
         Ok(Response::ok_text("Executed successfully"))
     }
 
+    async fn cmd_captcha_inject(&mut self, args: &Value) -> Result<Response, String> {
+        self.ensure_browser().await?;
+        let token = self.arg_str(args, "token")?;
+        let captcha_type = args["captcha_type"].as_str().unwrap_or("auto");
+        let callback = args["callback"].as_str();
+        let js = build_captcha_inject_js(token, captcha_type, callback)?;
+        let tab = self.require_tab()?;
+        let result: String = tab.page.evaluate(&js).await.map_err(|e| e.to_string())?;
+        let parsed: Value = serde_json::from_str(&result).map_err(|e| e.to_string())?;
+        Ok(Response::ok(parsed))
+    }
+
     // ── Network ─────────────────────────────────────────────────────────
 
     async fn cmd_fetch(&mut self, args: &Value) -> Result<Response, String> {
@@ -970,15 +983,20 @@ impl Handler {
         let state = self.require_state_mut()?;
 
         if !no_navigate && !saved.url.is_empty() {
-            state
+            let tab = state
                 .ensure_tab(&saved.url)
                 .await
                 .map_err(|e| e.to_string())?;
+            let _ = wait_for_stable(&tab.page).await;
         }
 
         let tab = state.current_tab_mut().ok_or("No tab open.")?;
-        restore_state(&tab.page, &saved).await?;
-        tab.invalidate();
+        let reload_after_restore = if !no_navigate && !saved.url.is_empty() {
+            state_url_can_reload(&saved.url)
+        } else {
+            page_url_can_reload_state(&tab.page).await
+        };
+        restore_state_and_maybe_reload(tab, &saved, reload_after_restore).await?;
 
         Ok(Response::ok_text(format!(
             "Loaded state from {} ({} cookies, {} localStorage, {} sessionStorage)",
@@ -1169,8 +1187,8 @@ impl Handler {
         } else {
             state.ensure_blank_tab().await.map_err(|e| e.to_string())?
         };
-        restore_state(&tab.page, &saved).await?;
-        tab.invalidate();
+        let _ = wait_for_stable(&tab.page).await;
+        restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
         Ok(Response::ok_text(format!(
             "Hydrated session from {} ({} cookies, {} localStorage, {} sessionStorage)",
             source,
@@ -1940,6 +1958,34 @@ fn fetch_body_only_text(parsed: &Value) -> Result<String, String> {
         .to_string())
 }
 
+async fn restore_state_and_maybe_reload(
+    tab: &mut TabState,
+    saved: &SavedState,
+    reload_after_restore: bool,
+) -> Result<(), String> {
+    restore_state(&tab.page, saved).await?;
+    tab.invalidate();
+
+    if reload_after_restore {
+        tab.page.reload().await.map_err(|e| e.to_string())?;
+        let _ = wait_for_stable(&tab.page).await;
+        tab.invalidate();
+    }
+
+    Ok(())
+}
+
+async fn page_url_can_reload_state(page: &eoka::Page) -> bool {
+    page.url()
+        .await
+        .map(|url| state_url_can_reload(&url))
+        .unwrap_or(false)
+}
+
+fn state_url_can_reload(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
 async fn format_runtime_eval_result(
     session: &CdpSession,
     result: &Value,
@@ -2073,6 +2119,35 @@ const RUNTIME_OBJECT_TO_TEXT_JS: &str = r#"function() {
   }
   return text;
 }"#;
+
+const CAPTCHA_INJECT_JS: &str = include_str!("../js/captcha_inject.js");
+
+fn build_captcha_inject_js(
+    token: &str,
+    captcha_type: &str,
+    callback: Option<&str>,
+) -> Result<String, String> {
+    let kind = normalize_captcha_inject_kind(captcha_type)?;
+    Ok(format!(
+        "{}({},{},{})",
+        CAPTCHA_INJECT_JS,
+        json_str(token),
+        json_str(kind),
+        json_str(callback.unwrap_or_default())
+    ))
+}
+
+fn normalize_captcha_inject_kind(kind: &str) -> Result<&'static str, String> {
+    match kind.to_lowercase().as_str() {
+        "" | "auto" => Ok("auto"),
+        "recaptcha" | "recaptcha_v2" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
+        "hcaptcha" => Ok("hcaptcha"),
+        "turnstile" => Ok("turnstile"),
+        other => Err(format!(
+            "Unsupported captcha injection type '{other}'. Use auto, recaptcha, hcaptcha, or turnstile."
+        )),
+    }
+}
 
 fn unserializable_runtime_value_text(value: &str) -> String {
     match value {
@@ -2241,6 +2316,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(text, "abc...(truncated 20 chars)");
+    }
+
+    #[test]
+    fn captcha_inject_normalizes_supported_types() {
+        assert_eq!(normalize_captcha_inject_kind("auto").unwrap(), "auto");
+        assert_eq!(
+            normalize_captcha_inject_kind("recaptcha_v3").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("recaptcha_enterprise").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("hcaptcha").unwrap(),
+            "hcaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("turnstile").unwrap(),
+            "turnstile"
+        );
+        assert!(normalize_captcha_inject_kind("amazon_waf").is_err());
+    }
+
+    #[test]
+    fn captcha_inject_js_escapes_token_and_callback() {
+        let js =
+            build_captcha_inject_js("tok\"en", "recaptcha_v2", Some("window.onCaptcha")).unwrap();
+
+        assert!(js.contains("\"tok\\\"en\""));
+        assert!(js.contains("\"recaptcha\""));
+        assert!(js.contains("\"window.onCaptcha\""));
+        assert!(js.contains("textarea[name=\"g-recaptcha-response\"]"));
+    }
+
+    #[test]
+    fn state_restore_reload_only_for_web_origins() {
+        assert!(state_url_can_reload("https://www.recreation.gov/"));
+        assert!(state_url_can_reload("http://127.0.0.1:3000/"));
+        assert!(!state_url_can_reload(""));
+        assert!(!state_url_can_reload("about:blank"));
+        assert!(!state_url_can_reload("data:text/html,hello"));
     }
 
     #[test]
