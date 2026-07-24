@@ -567,6 +567,7 @@ fn command_to_request(cmd: &Command) -> Request {
             user_agent,
             bypass_csp,
             inject_js,
+            load_state,
         } => {
             let mut args = json!({ "url": url });
             if let Some(h) = headers {
@@ -582,6 +583,9 @@ fn command_to_request(cmd: &Command) -> Request {
             }
             if let Some(js) = inject_js {
                 args["inject_js"] = json!(js);
+            }
+            if let Some(path) = load_state {
+                args["load_state"] = json!(path.to_string_lossy());
             }
             Request {
                 cmd: "open".into(),
@@ -1024,6 +1028,22 @@ mod tests {
         assert_eq!(request.cmd, "fetch");
         assert_eq!(request.args["body_only"], true);
         assert_eq!(request.args["max_body"], 16);
+    }
+
+    #[test]
+    fn open_load_state_maps_to_daemon_request() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "open",
+            "/camping/campsites/71576",
+            "--load-state",
+            "auth.json",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd, "open");
+        assert_eq!(request.args["url"], "/camping/campsites/71576");
+        assert_eq!(request.args["load_state"], "auth.json");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
 use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
-use persist::{capture_state, ensure_console_capture, restore_state, SavedState};
+use persist::{capture_state, ensure_console_capture, restore_cookies, restore_state, SavedState};
 use state::{BrowserState, TabState};
 use target::{
     auto_observe_if_needed, click_with_retry, fill_with_retry, json_str, resolve_target,
@@ -32,7 +32,6 @@ pub struct Handler {
     state: Option<BrowserState>,
     spec: LaunchSpec,
     intercept: InterceptState,
-    loaded_state: Option<SavedState>,
     fetch_events: Option<tokio::sync::broadcast::Receiver<CdpMessage>>,
     fetch_sessions: HashMap<String, CdpSession>,
 }
@@ -43,7 +42,6 @@ impl Handler {
             state: None,
             spec,
             intercept: InterceptState::new(),
-            loaded_state: None,
             fetch_events: None,
             fetch_sessions: HashMap::new(),
         }
@@ -80,7 +78,6 @@ impl Handler {
                     };
                     let _ = wait_for_stable(&tab.page).await;
                     restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
-                    self.loaded_state = Some(saved);
                 }
                 s
             }
@@ -220,13 +217,16 @@ impl Handler {
 
     async fn cmd_open(&mut self, args: &Value) -> Result<Response, String> {
         let requested_url = self.arg_str(args, "url")?.to_string();
-        self.ensure_browser().await?;
-        let url = resolve_open_url_for_loaded_state(&requested_url, self.loaded_state.as_ref());
-        let state_init_js = self
-            .loaded_state
+        let open_state = args["load_state"]
+            .as_str()
+            .map(read_saved_state_file)
+            .transpose()?;
+        let url = resolve_open_url_for_state(&requested_url, open_state.as_ref())?;
+        let state_init_js = open_state
             .as_ref()
             .filter(|saved| state_should_prime_open(saved, &url))
             .and_then(build_storage_seed_js);
+        self.ensure_browser().await?;
 
         let headers: Option<HashMap<String, String>> = args
             .get("headers")
@@ -240,6 +240,7 @@ impl Handler {
             || user_agent.is_some()
             || bypass_csp
             || inject_js.is_some()
+            || open_state.is_some()
             || state_init_js.is_some();
 
         let drain = self.start_fetch_drain();
@@ -258,6 +259,9 @@ impl Handler {
                 } else {
                     state.ensure_blank_tab().await.map_err(|e| e.to_string())?
                 };
+                if let Some(saved) = open_state.as_ref() {
+                    restore_cookies(&tab.page, saved).await?;
+                }
                 if let Some(ua) = user_agent {
                     tab.page
                         .set_user_agent(ua)
@@ -1035,8 +1039,7 @@ impl Handler {
         let path = self.arg_str(args, "path")?;
         let no_navigate = args["no_navigate"].as_bool().unwrap_or(false);
 
-        let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let saved: SavedState = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let saved = read_saved_state_file(path)?;
 
         self.ensure_browser().await?;
         let state = self.require_state_mut()?;
@@ -1056,7 +1059,6 @@ impl Handler {
             page_url_can_reload_state(&tab.page).await
         };
         restore_state_and_maybe_reload(tab, &saved, reload_after_restore).await?;
-        self.loaded_state = Some(saved.clone());
 
         Ok(Response::ok_text(format!(
             "Loaded state from {} ({} cookies, {} localStorage, {} sessionStorage)",
@@ -1249,7 +1251,6 @@ impl Handler {
         };
         let _ = wait_for_stable(&tab.page).await;
         restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
-        self.loaded_state = Some(saved.clone());
         Ok(Response::ok_text(format!(
             "Hydrated session from {} ({} cookies, {} localStorage, {} sessionStorage)",
             source,
@@ -2072,13 +2073,22 @@ fn same_web_origin(left: &str, right: &str) -> bool {
     }
 }
 
-fn resolve_open_url_for_loaded_state(url: &str, saved: Option<&SavedState>) -> String {
+fn read_saved_state_file(path: &str) -> Result<SavedState, String> {
+    let json = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    serde_json::from_str(&json).map_err(|e| format!("{path}: {e}"))
+}
+
+fn resolve_open_url_for_state(url: &str, saved: Option<&SavedState>) -> Result<String, String> {
     if url.starts_with('/') && !url.starts_with("//") {
-        if let Some(origin) = saved.and_then(|state| web_origin(&state.url)) {
-            return format!("{origin}{url}");
-        }
+        let saved = saved.ok_or_else(|| {
+            "Relative URLs require --load-state with a saved http(s) URL.".to_string()
+        })?;
+        let origin = web_origin(&saved.url).ok_or_else(|| {
+            "Relative URLs require --load-state with a saved http(s) URL.".to_string()
+        })?;
+        return Ok(format!("{origin}{url}"));
     }
-    url.to_string()
+    Ok(url.to_string())
 }
 
 fn state_should_prime_open(saved: &SavedState, url: &str) -> bool {
@@ -2490,21 +2500,29 @@ mod tests {
     }
 
     #[test]
-    fn loaded_state_resolves_relative_open_to_saved_origin() {
+    fn atomic_open_state_resolves_relative_url_to_saved_origin() {
         let saved = saved_state_with_storage("https://www.recreation.gov/");
 
         assert_eq!(
-            resolve_open_url_for_loaded_state("/camping/campsites/71576", Some(&saved)),
+            resolve_open_url_for_state("/camping/campsites/71576", Some(&saved)).unwrap(),
             "https://www.recreation.gov/camping/campsites/71576"
         );
         assert_eq!(
-            resolve_open_url_for_loaded_state("https://other.test/path", Some(&saved)),
+            resolve_open_url_for_state("https://other.test/path", Some(&saved)).unwrap(),
             "https://other.test/path"
         );
     }
 
     #[test]
-    fn loaded_state_primes_only_same_origin_open() {
+    fn atomic_open_state_rejects_relative_url_without_saved_origin() {
+        let saved = saved_state_with_storage("about:blank");
+
+        assert!(resolve_open_url_for_state("/deep", None).is_err());
+        assert!(resolve_open_url_for_state("/deep", Some(&saved)).is_err());
+    }
+
+    #[test]
+    fn atomic_open_state_primes_only_same_origin_open() {
         let saved = saved_state_with_storage("https://www.recreation.gov/cart");
 
         assert!(state_should_prime_open(

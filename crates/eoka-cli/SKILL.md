@@ -46,7 +46,7 @@ All action commands (`click`, `fill`, `hover`, `scroll`, `select`) accept these 
 ### Navigation
 
 ```bash
-eoka open <url> [--headers '{"Auth": "Bearer ..."}'] [--bypass-csp] [--user-agent UA]
+eoka open <url> [--headers '{"Auth": "Bearer ..."}'] [--bypass-csp] [--user-agent UA] [--load-state ./auth.json]
 eoka back
 eoka forward
 eoka reload
@@ -138,7 +138,7 @@ eoka dump-storage                       # Both local and session storage
 eoka save-state ./auth.json             # Save cookies + storage + URL
 eoka load-state ./auth.json             # Restore, navigate to saved URL, then reload so app auth initializes
 eoka load-state ./auth.json --no-navigate  # Restore into current origin; reloads current web page when possible
-eoka open /camping/campsites/71576      # After load-state, relative opens resolve against the saved origin
+eoka open /camping/campsites/71576 --load-state ./auth.json  # Restore before this deep-link navigation
 ```
 
 ### Extra Headers

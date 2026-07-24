@@ -74,6 +74,9 @@ pub enum Command {
         /// Inject JS file via addScriptToEvaluateOnNewDocument (runs before any page script)
         #[arg(long, value_name = "FILE")]
         inject_js: Option<String>,
+        /// Restore cookies and seed storage before this navigation.
+        #[arg(long, value_name = "FILE")]
+        load_state: Option<PathBuf>,
     },
 
     /// Go back in history

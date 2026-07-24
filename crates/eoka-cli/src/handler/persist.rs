@@ -12,7 +12,7 @@ use super::state::TabState;
 // Saved state types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SavedState {
     pub url: String,
     pub cookies: Vec<SavedCookie>,
@@ -22,7 +22,7 @@ pub struct SavedState {
     pub saved_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SavedCookie {
     pub name: String,
     pub value: String,
@@ -125,6 +125,14 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
 
 /// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String> {
+    restore_cookies(page, state).await?;
+    restore_storage(page, "localStorage", &state.local_storage).await;
+    restore_storage(page, "sessionStorage", &state.session_storage).await;
+    Ok(())
+}
+
+/// Restore cookies only. Storage must be restored in the destination origin.
+pub async fn restore_cookies(page: &Page, state: &SavedState) -> Result<(), String> {
     page.clear_all_cookies().await.map_err(|e| e.to_string())?;
     let set_cookies: Vec<eoka::SessionCookie> = state
         .cookies
@@ -136,9 +144,6 @@ pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String
             .await
             .map_err(|e| e.to_string())?;
     }
-
-    restore_storage(page, "localStorage", &state.local_storage).await;
-    restore_storage(page, "sessionStorage", &state.session_storage).await;
     Ok(())
 }
 
