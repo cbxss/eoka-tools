@@ -33,7 +33,7 @@ All action commands (`click`, `fill`, `hover`, `scroll`, `select`) accept these 
 | Format | Example | Description |
 |--------|---------|-------------|
 | Ref | `@e1` | From snapshot, resolves via CDP |
-| Index | `0`, `5` | From observe, uses cached elements |
+| Index | `[0]`, `0`, `index:0` | From observe, uses cached elements |
 | Text | `text:Submit` | Find by visible text |
 | Placeholder | `placeholder:Email` | Find by placeholder |
 | CSS | `css:#submit-btn` | CSS selector |
@@ -97,6 +97,7 @@ Use `--no-return` or `--max-size` when evaluating scripts that produce large res
 eoka fetch https://api.target.com/me
 eoka fetch https://api.target.com/data -m POST --headers '{"Content-Type": "application/json"}' -b '{"key": "value"}'
 eoka fetch https://target.com/oauth --redirect manual   # Capture redirect URL
+eoka fetch https://target.com/app.js --body-only          # Print only response body for grep/sed/awk
 ```
 
 ### Cookies

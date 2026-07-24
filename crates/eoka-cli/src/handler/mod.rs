@@ -10,12 +10,13 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use base64::Engine;
+use eoka::cdp::{transport::CdpMessage, Session as CdpSession};
 use eoka_agent::{annotate, observe, snapshot};
 use serde_json::{json, Value};
 
 use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
-use intercept::{InterceptLogEntry, InterceptState};
+use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
 use persist::{capture_state, ensure_console_capture, restore_state, SavedState};
 use state::{BrowserState, TabState};
 use target::{
@@ -31,6 +32,8 @@ pub struct Handler {
     state: Option<BrowserState>,
     spec: LaunchSpec,
     intercept: InterceptState,
+    fetch_events: Option<tokio::sync::broadcast::Receiver<CdpMessage>>,
+    fetch_sessions: HashMap<String, CdpSession>,
 }
 
 impl Handler {
@@ -39,6 +42,8 @@ impl Handler {
             state: None,
             spec,
             intercept: InterceptState::new(),
+            fetch_events: None,
+            fetch_sessions: HashMap::new(),
         }
     }
 
@@ -116,10 +121,13 @@ impl Handler {
     }
 
     pub async fn handle(&mut self, cmd: &str, args: &Value) -> Response {
-        match self.dispatch(cmd, args).await {
+        self.drain_fetch_events().await;
+        let response = match self.dispatch(cmd, args).await {
             Ok(resp) => resp,
             Err(e) => Response::err(e),
-        }
+        };
+        self.drain_fetch_events().await;
+        response
     }
 
     async fn dispatch(&mut self, cmd: &str, args: &Value) -> Result<Response, String> {
@@ -221,69 +229,77 @@ impl Handler {
         let has_extras =
             headers.is_some() || user_agent.is_some() || bypass_csp || inject_js.is_some();
 
-        let state = self.require_state_mut()?;
+        let drain = self.start_fetch_drain();
+        let result = async {
+            let state = self.require_state_mut()?;
 
-        // In live mode, never navigate the user's currently-attached tab.
-        // Always pop a fresh tab in their browser.
-        if state.is_live {
-            state.new_tab(None).await.map_err(|e| e.to_string())?;
-        }
+            // In live mode, never navigate the user's currently-attached tab.
+            // Always pop a fresh tab in their browser.
+            if state.is_live {
+                state.new_tab(None).await.map_err(|e| e.to_string())?;
+            }
 
-        if has_extras {
-            let tab = if state.current_tab_id.is_some() {
-                state.current_tab_mut().ok_or("No tab")?
-            } else {
-                state.ensure_blank_tab().await.map_err(|e| e.to_string())?
-            };
-            if let Some(ua) = user_agent {
-                tab.page
-                    .set_user_agent(ua)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-            if bypass_csp {
-                tab.page
-                    .set_bypass_csp(true)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-            if let Some(ref h) = headers {
-                tab.page
-                    .set_extra_headers(h.clone())
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-            if let Some(js) = inject_js {
-                let source = if js.ends_with(".js") {
-                    std::fs::read_to_string(js)
-                        .map_err(|e| format!("inject_js read error: {}", e))?
+            if has_extras {
+                let tab = if state.current_tab_id.is_some() {
+                    state.current_tab_mut().ok_or("No tab")?
                 } else {
-                    js.to_string()
+                    state.ensure_blank_tab().await.map_err(|e| e.to_string())?
                 };
-                tab.page
-                    .session()
-                    .send::<_, serde_json::Value>(
-                        "Page.addScriptToEvaluateOnNewDocument",
-                        &serde_json::json!({ "source": source }),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                if let Some(ua) = user_agent {
+                    tab.page
+                        .set_user_agent(ua)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                if bypass_csp {
+                    tab.page
+                        .set_bypass_csp(true)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                if let Some(ref h) = headers {
+                    tab.page
+                        .set_extra_headers(h.clone())
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                if let Some(js) = inject_js {
+                    let source = if js.ends_with(".js") {
+                        std::fs::read_to_string(js)
+                            .map_err(|e| format!("inject_js read error: {}", e))?
+                    } else {
+                        js.to_string()
+                    };
+                    tab.page
+                        .session()
+                        .send::<_, serde_json::Value>(
+                            "Page.addScriptToEvaluateOnNewDocument",
+                            &serde_json::json!({ "source": source }),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                tab.invalidate();
+                let nav_result = tab.page.goto(url).await;
+                if headers.is_some() {
+                    // Best-effort clear; if it fails the browser is likely broken
+                    let _ = tab.page.clear_extra_headers().await;
+                }
+                nav_result.map_err(|e| e.to_string())?;
+            } else {
+                state.ensure_tab(url).await.map_err(|e| e.to_string())?;
             }
-            tab.invalidate();
-            let nav_result = tab.page.goto(url).await;
-            if headers.is_some() {
-                // Best-effort clear; if it fails the browser is likely broken
-                let _ = tab.page.clear_extra_headers().await;
-            }
-            nav_result.map_err(|e| e.to_string())?;
-        } else {
-            state.ensure_tab(url).await.map_err(|e| e.to_string())?;
-        }
 
-        let tab = state.current_tab_mut().ok_or("No tab after navigate")?;
-        let _ = wait_for_stable(&tab.page).await;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
-        let title = title_nonblocking(&tab.page).await;
+            let tab = state.current_tab_mut().ok_or("No tab after navigate")?;
+            let _ = wait_for_stable(&tab.page).await;
+            let url = tab.page.url().await.map_err(|e| e.to_string())?;
+            let title = title_nonblocking(&tab.page).await;
+            Ok::<_, String>((url, title))
+        }
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let (url, title) = result?;
+        self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
             "Navigated to: {}\nTitle: {}",
             url, title
@@ -297,19 +313,33 @@ impl Handler {
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = eoka::Result<()>> + '_>>,
     {
-        let tab = self.require_tab()?;
-        f(&tab.page).await.map_err(|e| e.to_string())?;
-        let _ = wait_for_stable(&tab.page).await;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
+        let page = self.require_tab()?.page.clone();
+        let drain = self.start_fetch_drain();
+        let result = async {
+            f(&page).await.map_err(|e| e.to_string())?;
+            let _ = wait_for_stable(&page).await;
+            page.url().await.map_err(|e| e.to_string())
+        }
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let url = result?;
         Ok(Response::ok_text(format!("{} to: {}", label, url)))
     }
 
     async fn cmd_reload(&mut self) -> Result<Response, String> {
-        let tab = self.require_tab_mut()?;
-        tab.page.reload().await.map_err(|e| e.to_string())?;
-        tab.invalidate();
-        let _ = wait_for_stable(&tab.page).await;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
+        let page = self.require_tab()?.page.clone();
+        let drain = self.start_fetch_drain();
+        let result = async {
+            page.reload().await.map_err(|e| e.to_string())?;
+            let _ = wait_for_stable(&page).await;
+            page.url().await.map_err(|e| e.to_string())
+        }
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let url = result?;
+        if let Ok(tab) = self.require_tab_mut() {
+            tab.invalidate();
+        }
         Ok(Response::ok_text(format!("Reloaded: {}", url)))
     }
 
@@ -526,12 +556,18 @@ impl Handler {
     async fn cmd_click(&mut self, args: &Value) -> Result<Response, String> {
         self.ensure_browser().await?;
         let target_str = self.arg_str(args, "target")?;
-        let (tab, vp) = self.tab_with_config()?;
-
-        auto_observe_if_needed(tab, target_str, vp).await?;
-        let desc = click_with_retry(tab, target_str, vp).await?;
-        let _ = wait_for_stable(&tab.page).await;
-        tab.elements.clear();
+        let drain = self.start_fetch_drain();
+        let result = async {
+            let (tab, vp) = self.tab_with_config()?;
+            auto_observe_if_needed(tab, target_str, vp).await?;
+            let desc = click_with_retry(tab, target_str, vp).await?;
+            let _ = wait_for_stable(&tab.page).await;
+            tab.elements.clear();
+            Ok::<_, String>(desc)
+        }
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let desc = result?;
         Ok(Response::ok_text(format!("Clicked {}", desc)))
     }
 
@@ -574,13 +610,14 @@ impl Handler {
     async fn cmd_select(&mut self, args: &Value) -> Result<Response, String> {
         let target_str = self.arg_str(args, "target")?;
         let value = self.arg_str(args, "value")?;
-        let (tab, vp) = self.tab_with_config()?;
-
-        auto_observe_if_needed(tab, target_str, vp).await?;
-        let resolved = resolve_target(tab, target_str).await?;
-        let arg = json!({ "sel": resolved.selector, "val": value });
-        let js = format!(
-            r#"(() => {{
+        let drain = self.start_fetch_drain();
+        let result = async {
+            let (tab, vp) = self.tab_with_config()?;
+            auto_observe_if_needed(tab, target_str, vp).await?;
+            let resolved = resolve_target(tab, target_str).await?;
+            let arg = json!({ "sel": resolved.selector, "val": value });
+            let js = format!(
+                r#"(() => {{
                 const arg = {arg};
                 const sel = document.querySelector(arg.sel);
                 if (!sel) return false;
@@ -590,20 +627,25 @@ impl Handler {
                 sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 return true;
             }})()"#,
-            arg = serde_json::to_string(&arg).map_err(|e| e.to_string())?
-        );
-        let selected: bool = tab.page.evaluate(&js).await.map_err(|e| e.to_string())?;
-        if !selected {
-            return Err(format!(
-                "Option \"{}\" not found in {}",
-                value, resolved.desc
-            ));
+                arg = serde_json::to_string(&arg).map_err(|e| e.to_string())?
+            );
+            let selected: bool = tab.page.evaluate(&js).await.map_err(|e| e.to_string())?;
+            if !selected {
+                return Err(format!(
+                    "Option \"{}\" not found in {}",
+                    value, resolved.desc
+                ));
+            }
+            let _ = wait_for_stable(&tab.page).await;
+            tab.elements.clear();
+            Ok::<_, String>(resolved.desc)
         }
-        let _ = wait_for_stable(&tab.page).await;
-        tab.elements.clear();
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let desc = result?;
         Ok(Response::ok_text(format!(
             "Selected \"{}\" in {}",
-            value, resolved.desc
+            value, desc
         )))
     }
 
@@ -659,22 +701,37 @@ impl Handler {
     async fn cmd_eval(&mut self, args: &Value) -> Result<Response, String> {
         let code = resolve_js(args)?;
         let max_size = args["max_size"].as_u64().map(|v| v as usize);
-        let tab = self.require_tab()?;
+        let session = self.require_tab()?.page.session().clone();
 
-        // Truncate server-side in JS to avoid CDP message size crashes
-        let js = match max_size {
-            Some(max) => format!(
-                "(() => {{ const r = JSON.stringify(eval({})); return r.length > {} ? r.slice(0, {}) + '...(truncated ' + r.length + ' chars)' : r; }})()",
-                json_str(&code), max, max
-            ),
-            None => format!("JSON.stringify(eval({}))", json_str(&code)),
-        };
-        let result: String = tab
-            .page
-            .evaluate_sync(&js)
+        if let Some(max) = max_size {
+            let result: Value = session
+                .send(
+                    "Runtime.evaluate",
+                    &json!({
+                        "expression": build_limited_eval_js(&code, max),
+                        "returnByValue": true,
+                        "awaitPromise": false,
+                    }),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(Response::ok_text(runtime_eval_string_value(&result)?));
+        }
+
+        let result: Value = session
+            .send(
+                "Runtime.evaluate",
+                &json!({
+                    "expression": code,
+                    "returnByValue": false,
+                    "awaitPromise": false,
+                }),
+            )
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Response::ok_text(result))
+        Ok(Response::ok_text(
+            format_runtime_eval_result(&session, &result).await?,
+        ))
     }
 
     async fn cmd_exec(&mut self, args: &Value) -> Result<Response, String> {
@@ -690,7 +747,11 @@ impl Handler {
         let url = self.arg_str(args, "url")?;
         let method = args["method"].as_str().unwrap_or("GET");
         let redirect = args["redirect"].as_str().unwrap_or("follow");
-        let max_body = args["max_body"].as_u64().unwrap_or(8192) as usize;
+        let body_only = args["body_only"].as_bool().unwrap_or(false);
+        let max_body = args["max_body"]
+            .as_u64()
+            .map(|v| v as usize)
+            .unwrap_or(if body_only { 0 } else { 8192 });
 
         let headers_json = args
             .get("headers")
@@ -733,6 +794,9 @@ impl Handler {
         let tab = self.require_tab()?;
         let result: String = tab.page.evaluate(&js).await.map_err(|e| e.to_string())?;
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::String(result));
+        if body_only {
+            return Ok(Response::ok_text(fetch_body_only_text(&parsed)?));
+        }
         Ok(Response::ok(parsed))
     }
 
@@ -1026,9 +1090,13 @@ impl Handler {
         self.ensure_browser().await?;
         let url = args["url"].as_str();
         let state = self.require_state_mut()?;
-        let (tab_id, tab) = state.new_tab(url).await.map_err(|e| e.to_string())?;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
-        let title = title_nonblocking(&tab.page).await;
+        let (tab_id, url, title) = {
+            let (tab_id, tab) = state.new_tab(url).await.map_err(|e| e.to_string())?;
+            let url = tab.page.url().await.map_err(|e| e.to_string())?;
+            let title = title_nonblocking(&tab.page).await;
+            (tab_id, url, title)
+        };
+        self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
             "Opened new tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1039,9 +1107,13 @@ impl Handler {
         let tab_id = self.arg_str(args, "tab_id")?;
         let state = self.require_state_mut()?;
         state.switch_tab(tab_id).await.map_err(|e| e.to_string())?;
-        let tab = state.current_tab().ok_or("Tab switch failed")?;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
-        let title = title_nonblocking(&tab.page).await;
+        let (url, title) = {
+            let tab = state.current_tab().ok_or("Tab switch failed")?;
+            let url = tab.page.url().await.map_err(|e| e.to_string())?;
+            let title = title_nonblocking(&tab.page).await;
+            (url, title)
+        };
+        self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
             "Switched to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1056,9 +1128,13 @@ impl Handler {
             .attach_existing_tab(&tab_id)
             .await
             .map_err(|e| e.to_string())?;
-        let tab = state.current_tab().ok_or("Attach failed")?;
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
-        let title = title_nonblocking(&tab.page).await;
+        let (url, title) = {
+            let tab = state.current_tab().ok_or("Attach failed")?;
+            let url = tab.page.url().await.map_err(|e| e.to_string())?;
+            let title = title_nonblocking(&tab.page).await;
+            (url, title)
+        };
+        self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
             "Attached to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1105,9 +1181,18 @@ impl Handler {
     }
 
     async fn cmd_tab_close(&mut self, args: &Value) -> Result<Response, String> {
-        let tab_id = self.arg_str(args, "tab_id")?;
+        let tab_id = self.arg_str(args, "tab_id")?.to_string();
+        let closing_session = self
+            .state
+            .as_ref()
+            .and_then(|s| s.tabs.get(&tab_id))
+            .map(|t| t.page.session().clone());
         let state = self.require_state_mut()?;
-        state.close_tab(tab_id).await.map_err(|e| e.to_string())?;
+        state.close_tab(&tab_id).await.map_err(|e| e.to_string())?;
+        if let Some(session) = closing_session {
+            self.disable_fetch_session(&session).await;
+        }
+        self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!("Closed tab [{}]", tab_id)))
     }
 
@@ -1120,30 +1205,33 @@ impl Handler {
             return Ok(Response::ok_text(format!("Waited {}ms", ms)));
         }
         let timeout = args["timeout"].as_u64().unwrap_or(10_000);
-        let tab = self.require_tab()?;
+        let page = self.require_tab()?.page.clone();
+        let drain = self.start_fetch_drain();
 
-        if let Some(text) = args["text"].as_str() {
-            tab.page
-                .wait_for_text(text, timeout)
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(Response::ok_text(format!("Text \"{}\" appeared", text)));
+        let result = async {
+            if let Some(text) = args["text"].as_str() {
+                page.wait_for_text(text, timeout)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(Response::ok_text(format!("Text \"{}\" appeared", text)));
+            }
+            if let Some(url_pat) = args["url"].as_str() {
+                page.wait_for_url_contains(url_pat, timeout)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(Response::ok_text(format!("URL matched \"{}\"", url_pat)));
+            }
+            if args["load"].as_str().is_some() {
+                page.wait_for_network_idle(500, timeout)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(Response::ok_text("Network idle"));
+            }
+            Err("Provide ms, --text, --url, or --load".into())
         }
-        if let Some(url_pat) = args["url"].as_str() {
-            tab.page
-                .wait_for_url_contains(url_pat, timeout)
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(Response::ok_text(format!("URL matched \"{}\"", url_pat)));
-        }
-        if args["load"].as_str().is_some() {
-            tab.page
-                .wait_for_network_idle(500, timeout)
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(Response::ok_text("Network idle"));
-        }
-        Err("Provide ms, --text, --url, or --load".into())
+        .await;
+        self.stop_fetch_drain(drain).await;
+        result
     }
 
     // ── SPA ─────────────────────────────────────────────────────────────
@@ -1162,16 +1250,22 @@ impl Handler {
 
     async fn cmd_spa_navigate(&mut self, args: &Value) -> Result<Response, String> {
         let path = self.arg_str(args, "path")?;
-        let tab = self.require_tab_mut()?;
-        let info = eoka_agent::spa::detect_router(&tab.page)
-            .await
-            .map_err(|e: eoka::Error| e.to_string())?;
-        eoka_agent::spa::spa_navigate(&tab.page, &info.router_type, path)
-            .await
-            .map_err(|e: eoka::Error| e.to_string())?;
-        let _ = wait_for_stable(&tab.page).await;
-        tab.invalidate();
-        let url = tab.page.url().await.map_err(|e| e.to_string())?;
+        let drain = self.start_fetch_drain();
+        let result = async {
+            let tab = self.require_tab_mut()?;
+            let info = eoka_agent::spa::detect_router(&tab.page)
+                .await
+                .map_err(|e: eoka::Error| e.to_string())?;
+            eoka_agent::spa::spa_navigate(&tab.page, &info.router_type, path)
+                .await
+                .map_err(|e: eoka::Error| e.to_string())?;
+            let _ = wait_for_stable(&tab.page).await;
+            tab.invalidate();
+            tab.page.url().await.map_err(|e| e.to_string())
+        }
+        .await;
+        self.stop_fetch_drain(drain).await;
+        let url = result?;
         Ok(Response::ok_text(format!("SPA navigated to: {}", url)))
     }
 
@@ -1439,6 +1533,127 @@ impl Handler {
 
     // ── Intercept ───────────────────────────────────────────────────────
 
+    async fn disable_fetch_session(&mut self, session: &CdpSession) {
+        let session_id = session.session_id().to_string();
+        let _ = session.send::<_, Value>("Fetch.disable", &json!({})).await;
+        self.fetch_sessions.remove(&session_id);
+        if self.fetch_sessions.is_empty() {
+            self.intercept.enabled = false;
+            self.fetch_events = None;
+        }
+    }
+
+    async fn disable_stale_fetch_sessions(&mut self, keep_session_id: Option<&str>) {
+        let stale: Vec<CdpSession> = self
+            .fetch_sessions
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != keep_session_id)
+            .map(|(_, session)| session.clone())
+            .collect();
+
+        for session in stale {
+            self.disable_fetch_session(&session).await;
+        }
+    }
+
+    async fn disable_all_fetch_sessions(&mut self) {
+        self.disable_stale_fetch_sessions(None).await;
+        self.fetch_sessions.clear();
+        self.intercept.enabled = false;
+        self.fetch_events = None;
+    }
+
+    fn fetch_command_transport(&self) -> Option<std::sync::Arc<eoka::cdp::Transport>> {
+        self.fetch_sessions
+            .values()
+            .next()
+            .map(|session| session.transport().clone())
+            .or_else(|| {
+                self.state
+                    .as_ref()
+                    .and_then(|state| state.current_tab())
+                    .map(|tab| tab.page.session().transport().clone())
+            })
+    }
+
+    fn current_fetch_session_id(&self) -> Option<&str> {
+        self.fetch_sessions.keys().next().map(String::as_str)
+    }
+
+    fn fetch_drain_config(&self) -> Option<FetchDrainConfig> {
+        Some(FetchDrainConfig {
+            transport: self.fetch_command_transport()?,
+            fallback_session_id: self.current_fetch_session_id().map(str::to_string),
+            rules: self.intercept.rules_snapshot(),
+        })
+    }
+
+    fn start_fetch_drain(&mut self) -> Option<FetchDrainHandle> {
+        if !self.intercept.enabled {
+            return None;
+        }
+        let config = self.fetch_drain_config()?;
+        let rx = self.fetch_events.take()?;
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let join = tokio::spawn(fetch_drain_until_stopped(rx, config, stop_rx));
+        Some(FetchDrainHandle {
+            stop: stop_tx,
+            join,
+        })
+    }
+
+    async fn stop_fetch_drain(&mut self, handle: Option<FetchDrainHandle>) {
+        let Some(handle) = handle else {
+            return;
+        };
+        let _ = handle.stop.send(());
+        match handle.join.await {
+            Ok((rx, logs)) => {
+                if self.fetch_events.is_none() && self.intercept.enabled {
+                    self.fetch_events = Some(rx);
+                }
+                for log in logs {
+                    self.intercept.add_log(log);
+                }
+            }
+            Err(_) => {
+                self.fetch_events = None;
+            }
+        }
+    }
+
+    async fn sync_fetch_interception(&mut self) -> Result<(), String> {
+        if self.intercept.is_empty() {
+            self.disable_all_fetch_sessions().await;
+            return Ok(());
+        }
+
+        self.ensure_browser().await?;
+        let patterns = self.intercept.fetch_patterns_json();
+        let session = {
+            let tab = self.require_tab()?;
+            tab.page.session().clone()
+        };
+        let session_id = session.session_id().to_string();
+        self.disable_stale_fetch_sessions(Some(&session_id)).await;
+        session
+            .send::<_, serde_json::Value>(
+                "Fetch.enable",
+                &json!({
+                    "patterns": patterns,
+                    "handleAuthRequests": false,
+                }),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        self.intercept.enabled = true;
+        if self.fetch_events.is_none() {
+            self.fetch_events = Some(session.transport().subscribe());
+        }
+        self.fetch_sessions.insert(session_id, session);
+        Ok(())
+    }
+
     async fn cmd_intercept_add(&mut self, args: &Value) -> Result<Response, String> {
         let url_pattern = self.arg_str(args, "url_pattern")?.to_string();
         let capture = args["capture"].as_str().map(std::path::PathBuf::from);
@@ -1448,21 +1663,7 @@ impl Handler {
         let id = self
             .intercept
             .add_rule(url_pattern.clone(), capture, respond, status);
-
-        // Enable Fetch interception if not already enabled
-        if !self.intercept.enabled {
-            self.ensure_browser().await?;
-            let tab = self.require_tab()?;
-            tab.page
-                .session()
-                .send::<_, serde_json::Value>(
-                    "Fetch.enable",
-                    &json!({ "handleAuthRequests": false }),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-            self.intercept.enabled = true;
-        }
+        self.sync_fetch_interception().await?;
 
         Ok(Response::ok_text(format!(
             "Added intercept rule #{} for \"{}\"",
@@ -1480,22 +1681,12 @@ impl Handler {
         let id = self.arg_str(args, "id")?;
         if id == "all" {
             self.intercept.remove_all();
-            if self.intercept.enabled {
-                if let Some(ref state) = self.state {
-                    if let Some(tab) = state.current_tab() {
-                        let _ = tab
-                            .page
-                            .session()
-                            .send::<_, Value>("Fetch.disable", &json!({}))
-                            .await;
-                    }
-                }
-                self.intercept.enabled = false;
-            }
+            self.sync_fetch_interception().await?;
             Ok(Response::ok_text("Removed all intercept rules"))
         } else {
             let id_num: usize = id.parse().map_err(|_| "Invalid rule ID")?;
             if self.intercept.remove_rule(id_num) {
+                self.sync_fetch_interception().await?;
                 Ok(Response::ok_text(format!("Removed rule #{}", id_num)))
             } else {
                 Err(format!("Rule #{} not found", id_num))
@@ -1520,134 +1711,32 @@ impl Handler {
             return;
         }
 
-        // Collect events first to avoid borrow conflict
-        let events = {
-            let state = match self.state.as_ref() {
-                Some(s) => s,
-                None => return,
-            };
-            let tab = match state.current_tab() {
-                Some(t) => t,
-                None => return,
-            };
-            let transport = tab.page.session().transport();
-            let mut events = Vec::new();
-            loop {
-                match transport.try_recv_event().await {
-                    Some(eoka::cdp::transport::CdpMessage::Event { method, params, .. })
-                        if method == "Fetch.requestPaused" =>
-                    {
-                        events.push(params);
-                    }
-                    Some(_) => {} // discard non-Fetch events
-                    None => break,
-                }
-            }
-            events
+        let config = match self.fetch_drain_config() {
+            Some(config) => config,
+            None => return,
         };
-
-        // Process collected events
-        for params in events {
-            let request_id = match params.get("requestId").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => continue,
+        let mut logs = Vec::new();
+        let closed = {
+            let rx = match self.fetch_events.as_mut() {
+                Some(rx) => rx,
+                None => return,
             };
-            let req_field = |name: &str| -> Option<String> {
-                params.get("request")?.get(name)?.as_str().map(String::from)
-            };
-            let url = req_field("url").unwrap_or_default();
-            let method = req_field("method").unwrap_or_else(|| "GET".to_string());
-            let post_data = req_field("postData");
+            drain_fetch_receiver(rx, &config, &mut logs).await
+        };
+        if closed {
+            self.fetch_events = None;
+            return;
+        }
 
-            // Match rule and extract what we need before borrowing session
-            let matched = self.intercept.match_url(&url).map(|r| {
-                (
-                    r.id,
-                    r.capture_path.clone(),
-                    r.respond_path.clone(),
-                    r.respond_status,
-                )
-            });
-
-            let session = match self
-                .state
-                .as_ref()
-                .and_then(|s| s.current_tab())
-                .map(|t| t.page.session())
-            {
-                Some(s) => s,
-                None => continue,
-            };
-
-            if let Some((rule_id, capture_path, respond_path, respond_status)) = matched {
-                if let Some(ref path) = capture_path {
-                    let body = json!({
-                        "url": &url,
-                        "method": &method,
-                        "postData": &post_data,
-                        "headers": params.get("request").and_then(|r| r.get("headers")),
-                    });
-                    let _ = std::fs::write(
-                        path,
-                        serde_json::to_string_pretty(&body).unwrap_or_default(),
-                    );
-                }
-
-                let action = if let Some(ref path) = respond_path {
-                    if let Ok(body) = std::fs::read(path) {
-                        let body_str = String::from_utf8_lossy(&body);
-                        let _ = session
-                            .send::<_, serde_json::Value>(
-                                "Fetch.fulfillRequest",
-                                &json!({
-                                    "requestId": request_id,
-                                    "responseCode": respond_status,
-                                    "body": base64::engine::general_purpose::STANDARD
-                                        .encode(body_str.as_bytes()),
-                                }),
-                            )
-                            .await;
-                        "responded"
-                    } else {
-                        let _ = session
-                            .send::<_, serde_json::Value>(
-                                "Fetch.continueRequest",
-                                &json!({ "requestId": request_id }),
-                            )
-                            .await;
-                        "continue (respond file not found)"
-                    }
-                } else {
-                    let _ = session
-                        .send::<_, serde_json::Value>(
-                            "Fetch.continueRequest",
-                            &json!({ "requestId": request_id }),
-                        )
-                        .await;
-                    "continue (captured)"
-                };
-
-                self.intercept.add_log(InterceptLogEntry {
-                    rule_id,
-                    url: url.clone(),
-                    method: method.clone(),
-                    has_body: post_data.is_some(),
-                    action: action.to_string(),
-                });
-            } else {
-                let _ = session
-                    .send::<_, serde_json::Value>(
-                        "Fetch.continueRequest",
-                        &json!({ "requestId": request_id }),
-                    )
-                    .await;
-            }
+        for log in logs {
+            self.intercept.add_log(log);
         }
     }
 
     // ── Close ───────────────────────────────────────────────────────────
 
     async fn cmd_close(&mut self) -> Result<Response, String> {
+        self.disable_all_fetch_sessions().await;
         if let Some(state) = self.state.take() {
             state.close().await.map_err(|e| e.to_string())?;
         }
@@ -1658,6 +1747,365 @@ impl Handler {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+struct FetchPausedEvent {
+    session_id: Option<String>,
+    params: Value,
+}
+
+struct FetchDrainConfig {
+    transport: std::sync::Arc<eoka::cdp::Transport>,
+    fallback_session_id: Option<String>,
+    rules: Vec<InterceptRule>,
+}
+
+struct FetchDrainHandle {
+    stop: tokio::sync::oneshot::Sender<()>,
+    join: tokio::task::JoinHandle<(
+        tokio::sync::broadcast::Receiver<CdpMessage>,
+        Vec<InterceptLogEntry>,
+    )>,
+}
+
+async fn fetch_drain_until_stopped(
+    mut rx: tokio::sync::broadcast::Receiver<CdpMessage>,
+    config: FetchDrainConfig,
+    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+) -> (
+    tokio::sync::broadcast::Receiver<CdpMessage>,
+    Vec<InterceptLogEntry>,
+) {
+    let mut logs = Vec::new();
+    loop {
+        tokio::select! {
+            _ = &mut stop_rx => {
+                let _ = drain_fetch_receiver(&mut rx, &config, &mut logs).await;
+                break;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {
+                if drain_fetch_receiver(&mut rx, &config, &mut logs).await {
+                    break;
+                }
+            }
+        }
+    }
+    (rx, logs)
+}
+
+async fn drain_fetch_receiver(
+    rx: &mut tokio::sync::broadcast::Receiver<CdpMessage>,
+    config: &FetchDrainConfig,
+    logs: &mut Vec<InterceptLogEntry>,
+) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(message) if is_fetch_request_paused(&message) => {
+                if let CdpMessage::Event {
+                    params, session_id, ..
+                } = message
+                {
+                    if let Some(log) =
+                        process_fetch_paused_event(config, FetchPausedEvent { session_id, params })
+                            .await
+                    {
+                        logs.push(log);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => return false,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return true,
+        }
+    }
+}
+
+async fn process_fetch_paused_event(
+    config: &FetchDrainConfig,
+    event: FetchPausedEvent,
+) -> Option<InterceptLogEntry> {
+    let params = event.params;
+    let request_id = params
+        .get("requestId")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let req_field = |name: &str| -> Option<String> {
+        params.get("request")?.get(name)?.as_str().map(String::from)
+    };
+    let url = req_field("url").unwrap_or_default();
+    let method = req_field("method").unwrap_or_else(|| "GET".to_string());
+    let post_data = req_field("postData");
+    let session_id = fetch_command_session_id(
+        event.session_id.as_deref(),
+        config.fallback_session_id.as_deref(),
+    )?;
+
+    let matched = config.rules.iter().find(|rule| rule.matches_url(&url));
+    let Some(rule) = matched else {
+        let _ = config
+            .transport
+            .send_to_session::<_, serde_json::Value>(
+                &session_id,
+                "Fetch.continueRequest",
+                &json!({ "requestId": request_id }),
+            )
+            .await;
+        return None;
+    };
+
+    if let Some(ref path) = rule.capture_path {
+        let body = json!({
+            "url": &url,
+            "method": &method,
+            "postData": &post_data,
+            "headers": params.get("request").and_then(|r| r.get("headers")),
+        });
+        let _ = std::fs::write(
+            path,
+            serde_json::to_string_pretty(&body).unwrap_or_default(),
+        );
+    }
+
+    let action = if let Some(ref path) = rule.respond_path {
+        if let Ok(body) = std::fs::read(path) {
+            let body_str = String::from_utf8_lossy(&body);
+            let _ = config
+                .transport
+                .send_to_session::<_, serde_json::Value>(
+                    &session_id,
+                    "Fetch.fulfillRequest",
+                    &json!({
+                        "requestId": request_id,
+                        "responseCode": rule.respond_status,
+                        "body": base64::engine::general_purpose::STANDARD
+                            .encode(body_str.as_bytes()),
+                    }),
+                )
+                .await;
+            "responded"
+        } else {
+            let _ = config
+                .transport
+                .send_to_session::<_, serde_json::Value>(
+                    &session_id,
+                    "Fetch.continueRequest",
+                    &json!({ "requestId": request_id }),
+                )
+                .await;
+            "continue (respond file not found)"
+        }
+    } else {
+        let _ = config
+            .transport
+            .send_to_session::<_, serde_json::Value>(
+                &session_id,
+                "Fetch.continueRequest",
+                &json!({ "requestId": request_id }),
+            )
+            .await;
+        "continue (captured)"
+    };
+
+    Some(InterceptLogEntry {
+        rule_id: rule.id,
+        url,
+        method,
+        has_body: post_data.is_some(),
+        action: action.to_string(),
+    })
+}
+
+fn is_fetch_request_paused(message: &CdpMessage) -> bool {
+    matches!(
+        message,
+        CdpMessage::Event { method, .. } if method == "Fetch.requestPaused"
+    )
+}
+
+fn fetch_command_session_id(
+    event_session_id: Option<&str>,
+    fallback_session_id: Option<&str>,
+) -> Option<String> {
+    event_session_id.or(fallback_session_id).map(str::to_string)
+}
+
+fn fetch_body_only_text(parsed: &Value) -> Result<String, String> {
+    if let Some(error) = parsed.get("error").and_then(Value::as_str) {
+        return Err(error.to_string());
+    }
+    Ok(parsed
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+async fn format_runtime_eval_result(
+    session: &CdpSession,
+    result: &Value,
+) -> Result<String, String> {
+    if let Some(exception) = result.get("exceptionDetails").filter(|v| !v.is_null()) {
+        return Err(format_runtime_exception(exception));
+    }
+
+    let remote = result
+        .get("result")
+        .ok_or_else(|| "Runtime.evaluate response missing result".to_string())?;
+    format_runtime_remote_object(session, remote).await
+}
+
+fn runtime_eval_string_value(result: &Value) -> Result<String, String> {
+    if let Some(exception) = result.get("exceptionDetails").filter(|v| !v.is_null()) {
+        return Err(format_runtime_exception(exception));
+    }
+
+    let remote = result
+        .get("result")
+        .ok_or_else(|| "Runtime.evaluate response missing result".to_string())?;
+    if remote.get("type").and_then(Value::as_str) == Some("undefined") {
+        return Ok("undefined".into());
+    }
+    remote
+        .get("value")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "Runtime.evaluate did not return a string".to_string())
+}
+
+fn format_runtime_exception(exception: &Value) -> String {
+    let text = exception
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("JavaScript error");
+    let line = exception
+        .get("lineNumber")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let column = exception
+        .get("columnNumber")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    format!("JavaScript error: {} at {}:{}", text, line, column)
+}
+
+async fn format_runtime_remote_object(
+    session: &CdpSession,
+    remote: &Value,
+) -> Result<String, String> {
+    if let Some(text) = runtime_primitive_object_text(remote) {
+        return Ok(text);
+    }
+
+    if let Some(object_id) = remote.get("objectId").and_then(Value::as_str) {
+        let text = stringify_remote_object(session, object_id)
+            .await?
+            .unwrap_or_else(|| runtime_remote_description(remote));
+        let _ = session
+            .send::<_, Value>("Runtime.releaseObject", &json!({ "objectId": object_id }))
+            .await;
+        return Ok(text);
+    }
+
+    Ok(runtime_remote_description(remote))
+}
+
+fn runtime_primitive_object_text(remote: &Value) -> Option<String> {
+    let remote_type = remote.get("type").and_then(Value::as_str).unwrap_or("");
+    if remote_type == "undefined" || remote_type == "function" || remote_type == "symbol" {
+        return Some("undefined".into());
+    }
+
+    if let Some(value) = remote.get("value") {
+        return Some(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()));
+    }
+
+    if let Some(value) = remote.get("unserializableValue").and_then(Value::as_str) {
+        return Some(unserializable_runtime_value_text(value));
+    }
+
+    None
+}
+
+fn runtime_remote_description(remote: &Value) -> String {
+    let remote_type = remote.get("type").and_then(Value::as_str).unwrap_or("");
+    remote
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or(remote_type)
+        .to_string()
+}
+
+async fn stringify_remote_object(
+    session: &CdpSession,
+    object_id: &str,
+) -> Result<Option<String>, String> {
+    let result: Value = session
+        .send(
+            "Runtime.callFunctionOn",
+            &json!({
+                "objectId": object_id,
+                "functionDeclaration": RUNTIME_OBJECT_TO_TEXT_JS,
+                "returnByValue": true,
+                "awaitPromise": false,
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if result.get("exceptionDetails").is_some_and(|v| !v.is_null()) {
+        return Ok(None);
+    }
+    Ok(runtime_eval_string_value(&result).ok())
+}
+
+const RUNTIME_OBJECT_TO_TEXT_JS: &str = r#"function() {
+  let text;
+  try {
+    text = JSON.stringify(this);
+  } catch (error) {
+    text = String(this);
+  }
+  if (text === undefined) {
+    text = String(this);
+  }
+  if (text === undefined) {
+    text = "undefined";
+  }
+  return text;
+}"#;
+
+fn unserializable_runtime_value_text(value: &str) -> String {
+    match value {
+        "NaN" | "Infinity" | "-Infinity" => "null".into(),
+        "-0" => "0".into(),
+        bigint if bigint.ends_with('n') => bigint.trim_end_matches('n').into(),
+        other => other.into(),
+    }
+}
+
+fn build_limited_eval_js(code: &str, max_size: usize) -> String {
+    format!(
+        r#"(() => {{
+  const source = {source};
+  const value = Function("return eval(arguments[0])")(source);
+  let text;
+  try {{
+    text = JSON.stringify(value);
+  }} catch (error) {{
+    text = String(value);
+  }}
+  if (text === undefined) {{
+    text = "undefined";
+  }}
+  if (text.length <= {max}) {{
+    return text;
+  }}
+  return text.slice(0, {max}) + "...(truncated " + text.length + " chars)";
+}})()"#,
+        source = json_str(code),
+        max = max_size,
+    )
+}
 
 fn resolve_js(args: &Value) -> Result<String, String> {
     if let Some(path) = args["file"].as_str() {
@@ -1699,4 +2147,138 @@ fn hex_to_byte_array(hex: &str) -> String {
         .map(|pair| format!("0x{}{}", pair[0] as char, pair[1] as char))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_eval_formats_undefined() {
+        let text = runtime_primitive_object_text(&json!({ "type": "undefined" })).unwrap();
+
+        assert_eq!(text, "undefined");
+    }
+
+    #[test]
+    fn runtime_eval_formats_string_as_json_string() {
+        let text = runtime_primitive_object_text(&json!({ "type": "string", "value": "patched" }))
+            .unwrap();
+
+        assert_eq!(text, "\"patched\"");
+    }
+
+    #[test]
+    fn runtime_eval_formats_remote_object_descriptions() {
+        let text = runtime_remote_description(&json!({
+            "type": "object",
+            "description": "Object"
+        }));
+
+        assert_eq!(text, "Object");
+    }
+
+    #[test]
+    fn runtime_eval_formats_exception_details() {
+        let err = format_runtime_exception(&json!({
+            "text": "Uncaught",
+            "lineNumber": 1,
+            "columnNumber": 2
+        }));
+
+        assert_eq!(err, "JavaScript error: Uncaught at 1:2");
+    }
+
+    #[test]
+    fn runtime_eval_result_detects_exception_details() {
+        let result = json!({
+            "exceptionDetails": {
+                "text": "Uncaught",
+                "lineNumber": 1,
+                "columnNumber": 2
+            },
+            "result": { "type": "object" }
+        });
+        let err = result
+            .get("exceptionDetails")
+            .filter(|v| !v.is_null())
+            .map(format_runtime_exception)
+            .unwrap();
+
+        assert_eq!(err, "JavaScript error: Uncaught at 1:2");
+    }
+
+    #[test]
+    fn runtime_eval_formats_unserializable_values_like_json_stringify() {
+        assert_eq!(
+            runtime_primitive_object_text(
+                &json!({ "type": "number", "unserializableValue": "NaN" })
+            ),
+            Some("null".to_string())
+        );
+        assert_eq!(
+            runtime_primitive_object_text(
+                &json!({ "type": "bigint", "unserializableValue": "123n" })
+            ),
+            Some("123".to_string())
+        );
+    }
+
+    #[test]
+    fn limited_eval_js_truncates_in_browser() {
+        let js = build_limited_eval_js("document.body.innerText", 128);
+
+        assert!(js.contains("Function(\"return eval(arguments[0])\")"));
+        assert!(js.contains("text.slice(0, 128)"));
+        assert!(js.contains("...(truncated "));
+    }
+
+    #[test]
+    fn runtime_eval_string_value_extracts_limited_helper_result() {
+        let text = runtime_eval_string_value(
+            &json!({ "result": { "type": "string", "value": "abc...(truncated 20 chars)" } }),
+        )
+        .unwrap();
+
+        assert_eq!(text, "abc...(truncated 20 chars)");
+    }
+
+    #[test]
+    fn fetch_body_only_surfaces_fetch_errors() {
+        let err = fetch_body_only_text(&json!({ "error": "Failed to fetch" })).unwrap_err();
+
+        assert_eq!(err, "Failed to fetch");
+    }
+
+    #[test]
+    fn fetch_body_only_extracts_body() {
+        let body = fetch_body_only_text(&json!({ "status": 200, "body": "ok" })).unwrap();
+
+        assert_eq!(body, "ok");
+    }
+
+    #[test]
+    fn fetch_command_session_prefers_event_session() {
+        assert_eq!(
+            fetch_command_session_id(Some("event-session"), Some("current-session")),
+            Some("event-session".to_string())
+        );
+    }
+
+    #[test]
+    fn fetch_request_paused_detection_keeps_session_id_available() {
+        let message = CdpMessage::Event {
+            method: "Fetch.requestPaused".into(),
+            params: json!({ "requestId": "req-1" }),
+            session_id: Some("session-1".into()),
+        };
+
+        assert!(is_fetch_request_paused(&message));
+        match message {
+            CdpMessage::Event { session_id, .. } => {
+                assert_eq!(session_id.as_deref(), Some("session-1"))
+            }
+            _ => panic!("expected event"),
+        }
+    }
 }

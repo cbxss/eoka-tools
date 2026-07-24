@@ -1,6 +1,6 @@
 [package]
 name = "eoka-agent"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 license = "MIT"
 description = "AI agent interaction layer for browser automation — MCP server, observe/act loop"
