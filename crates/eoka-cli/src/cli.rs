@@ -158,7 +158,7 @@ pub enum Command {
     // ── Actions ─────────────────────────────────────────────────────
     /// Click element
     Click {
-        /// Target: @e1, index, text:Submit, css:#btn, id:login, role:button
+        /// Target: [0], 0, index:0, @e1, text:Submit, css:#btn, id:login, role:button
         target: String,
     },
 
@@ -234,7 +234,10 @@ pub enum Command {
         /// Redirect handling: follow, manual, error
         #[arg(long)]
         redirect: Option<String>,
-        /// Max response body bytes (default: 8192, 0 for headers-only)
+        /// Print only the response body. Alias: --raw
+        #[arg(long, alias = "raw")]
+        body_only: bool,
+        /// Max response body chars (default: 8192, 0 for unlimited)
         #[arg(long)]
         max_body: Option<usize>,
     },
@@ -350,9 +353,11 @@ pub enum Command {
 
     /// Execute multiple commands in sequence
     Batch {
-        /// Read commands as JSON from stdin
-        #[arg(long)]
-        json: bool,
+        /// JSON batch. If omitted, commands are read from stdin.
+        input: Option<String>,
+        /// Read JSON batch from file instead of argv/stdin.
+        #[arg(short, long)]
+        file: Option<PathBuf>,
         /// Stop on first error
         #[arg(long)]
         bail: bool,

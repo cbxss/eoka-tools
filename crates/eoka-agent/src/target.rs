@@ -30,12 +30,25 @@ pub enum LivePattern {
 }
 
 impl Target {
-    /// Parse target string. Numbers become Index, @eN becomes Ref, everything else is Live.
+    /// Parse target string. Numbers and observe labels become Index,
+    /// @eN becomes Ref, everything else is Live.
     pub fn parse(s: &str) -> Self {
         let s = s.trim();
 
-        // Numbers are indices
-        if let Ok(idx) = s.parse::<usize>() {
+        let index = s
+            .strip_prefix("index:")
+            .or_else(|| s.strip_prefix("idx:"))
+            .unwrap_or(s)
+            .trim();
+
+        // Numbers are indices. Accept the bracketed form printed by observe,
+        // e.g. `[38]`, so users can copy/paste observed targets directly.
+        let index = index
+            .strip_prefix('[')
+            .and_then(|v| v.strip_suffix(']'))
+            .unwrap_or(index)
+            .trim();
+        if let Ok(idx) = index.parse::<usize>() {
             return Target::Index(idx);
         }
 
@@ -127,6 +140,11 @@ mod tests {
         assert!(matches!(Target::parse("0"), Target::Index(0)));
         assert!(matches!(Target::parse("15"), Target::Index(15)));
         assert!(matches!(Target::parse("  42  "), Target::Index(42)));
+        assert!(matches!(Target::parse("[38]"), Target::Index(38)));
+        assert!(matches!(Target::parse(" [ 38 ] "), Target::Index(38)));
+        assert!(matches!(Target::parse("index:38"), Target::Index(38)));
+        assert!(matches!(Target::parse("index: 38"), Target::Index(38)));
+        assert!(matches!(Target::parse("idx:38"), Target::Index(38)));
     }
 
     #[test]
@@ -171,6 +189,18 @@ mod tests {
         ));
         assert!(matches!(
             Target::parse("Click Me"),
+            Target::Live(LivePattern::Text(_))
+        ));
+        assert!(matches!(
+            Target::parse("[not-an-index]"),
+            Target::Live(LivePattern::Text(_))
+        ));
+        assert!(matches!(
+            Target::parse("index:abc"),
+            Target::Live(LivePattern::Text(_))
+        ));
+        assert!(matches!(
+            Target::parse("text:[38]"),
             Target::Live(LivePattern::Text(_))
         ));
     }

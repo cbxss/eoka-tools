@@ -5,12 +5,19 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 /// A single intercept rule.
+#[derive(Clone)]
 pub struct InterceptRule {
     pub id: usize,
     pub url_pattern: String,
     pub capture_path: Option<PathBuf>,
     pub respond_path: Option<PathBuf>,
     pub respond_status: u16,
+}
+
+impl InterceptRule {
+    pub fn matches_url(&self, url: &str) -> bool {
+        url_matches(&self.url_pattern, url)
+    }
 }
 
 /// Log entry for an intercepted request.
@@ -69,9 +76,26 @@ impl InterceptState {
         self.rules.clear();
     }
 
-    /// Find the first matching rule for a URL.
-    pub fn match_url(&self, url: &str) -> Option<&InterceptRule> {
-        self.rules.iter().find(|r| url_matches(&r.url_pattern, url))
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    pub fn fetch_patterns_json(&self) -> Value {
+        Value::Array(
+            self.rules
+                .iter()
+                .map(|r| {
+                    json!({
+                        "urlPattern": r.url_pattern,
+                        "requestStage": "Request",
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn rules_snapshot(&self) -> Vec<InterceptRule> {
+        self.rules.clone()
     }
 
     pub fn add_log(&mut self, entry: InterceptLogEntry) {
@@ -161,5 +185,39 @@ mod tests {
         ));
         assert!(!url_matches("*/api/data*", "https://example.com/other"));
         assert!(url_matches("example.com", "https://example.com/foo"));
+    }
+
+    #[test]
+    fn fetch_patterns_include_rule_patterns() {
+        let mut state = InterceptState::new();
+        state.add_rule("*/api/*".into(), None, None, 200);
+
+        assert_eq!(
+            state.fetch_patterns_json(),
+            json!([{ "urlPattern": "*/api/*", "requestStage": "Request" }])
+        );
+    }
+
+    #[test]
+    fn fetch_patterns_are_empty_when_no_rules_exist() {
+        let state = InterceptState::new();
+
+        assert!(state.is_empty());
+        assert_eq!(state.fetch_patterns_json(), json!([]));
+    }
+
+    #[test]
+    fn fetch_patterns_include_all_active_rules() {
+        let mut state = InterceptState::new();
+        state.add_rule("*/api/*".into(), None, None, 200);
+        state.add_rule("*/graphql".into(), None, None, 200);
+
+        assert_eq!(
+            state.fetch_patterns_json(),
+            json!([
+                { "urlPattern": "*/api/*", "requestStage": "Request" },
+                { "urlPattern": "*/graphql", "requestStage": "Request" },
+            ])
+        );
     }
 }
