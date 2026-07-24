@@ -263,12 +263,15 @@ async fn test_live_text_prefers_button_over_matching_containers() {
     agent
         .goto(
             r#"data:text/html,
-        <div id="dialog" onclick="window.clicked = 'dialog'">
-          <div id="container" tabindex="0">Continue Booking</div>
+        <div id="dialog" tabindex="-1">
+          <div id="container" role="button" onclick="window.clicked = 'container'">
+            Continue Booking
+            <button id="continue-button" onclick="window.clicked = 'button'">
+              <span>Continue Booking</span>
+            </button>
+          </div>
+          <div id="plain-container" tabindex="0">Continue Booking</div>
           <span id="before" tabindex="0">Continue Booking</span>
-          <button id="continue-button" onclick="window.clicked = 'button'">
-            <span>Continue Booking</span>
-          </button>
           <span id="after" tabindex="0">Continue Booking</span>
         </div>
     "#,

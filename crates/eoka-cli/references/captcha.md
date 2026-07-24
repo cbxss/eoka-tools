@@ -25,6 +25,7 @@ For reCAPTCHA or hCaptcha flows, inject the token into the active browser sessio
 eoka captcha solve --captcha-type recaptcha_v3 --website-url https://target.com --website-key <site-key> --page-action submit --inject
 eoka captcha inject <token> --captcha-type recaptcha
 eoka captcha inject <token> --captcha-type hcaptcha --callback window.onCaptchaSolved
+eoka captcha inject <token> --captcha-type recaptcha --click-after "text:Continue Booking"
 ```
 
-Injection sets the common hidden response fields, dispatches form events, and calls discovered grecaptcha/hCaptcha callbacks. Use `--callback` when the page exposes a known callback.
+Injection sets the common hidden response fields, dispatches form events, and calls discovered grecaptcha/hCaptcha callbacks. Use `--callback` when the page exposes a known callback. Some pages require the submit or continuation control to be clicked again after token injection; use `--click-after` for that retry click.

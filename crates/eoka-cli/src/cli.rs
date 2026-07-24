@@ -459,6 +459,9 @@ pub enum CaptchaAction {
         /// Optional JavaScript callback expression to call with the solved token.
         #[arg(long)]
         inject_callback: Option<String>,
+        /// Target to click after injecting the solved token.
+        #[arg(long)]
+        click_after: Option<String>,
     },
 
     /// Inject an already-solved CAPTCHA token into the current browser session.
@@ -470,6 +473,9 @@ pub enum CaptchaAction {
         /// Optional JavaScript callback expression to call with the token.
         #[arg(long)]
         callback: Option<String>,
+        /// Target to click after injecting the token.
+        #[arg(long)]
+        click_after: Option<String>,
     },
 }
 

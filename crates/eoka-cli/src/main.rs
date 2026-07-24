@@ -166,6 +166,7 @@ async fn solve_captcha_command(
         captcha_type,
         inject,
         inject_callback,
+        click_after,
         ..
     } = action
     else {
@@ -180,7 +181,12 @@ async fn solve_captcha_command(
     let inject_type = captcha_inject_kind_from_solve(captcha_type)?;
     let response = client::send_command(
         session_name,
-        captcha_inject_request(&token, inject_type, inject_callback.as_deref()),
+        captcha_inject_request(
+            &token,
+            inject_type,
+            inject_callback.as_deref(),
+            click_after.as_deref(),
+        ),
         spec,
     )
     .await
@@ -213,6 +219,7 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
         challenge_script,
         inject: _,
         inject_callback: _,
+        click_after: _,
     } = action
     else {
         unreachable!("only solve actions reach solve_captcha")
@@ -254,13 +261,19 @@ fn captcha_inject_kind_from_solve(captcha_type: &str) -> Result<&'static str, St
     }
 }
 
-fn captcha_inject_request(token: &str, captcha_type: &str, callback: Option<&str>) -> Request {
+fn captcha_inject_request(
+    token: &str,
+    captcha_type: &str,
+    callback: Option<&str>,
+    click_after: Option<&str>,
+) -> Request {
     Request {
         cmd: "captcha_inject".into(),
         args: json!({
             "token": token,
             "captcha_type": captcha_type,
             "callback": callback,
+            "click_after": click_after,
         }),
     }
 }
@@ -956,8 +969,14 @@ fn command_to_request(cmd: &Command) -> Request {
                     token,
                     captcha_type,
                     callback,
+                    click_after,
                 },
-        } => captcha_inject_request(token, captcha_type, callback.as_deref()),
+        } => captcha_inject_request(
+            token,
+            captcha_type,
+            callback.as_deref(),
+            click_after.as_deref(),
+        ),
 
         // Commands handled before daemon startup.
         Command::Captcha {
@@ -1018,6 +1037,8 @@ mod tests {
             "recaptcha",
             "--callback",
             "window.onCaptcha",
+            "--click-after",
+            "text:Continue Booking",
         ]);
         let request = command_to_request(&command);
 
@@ -1025,6 +1046,7 @@ mod tests {
         assert_eq!(request.args["token"], "token-123");
         assert_eq!(request.args["captcha_type"], "recaptcha");
         assert_eq!(request.args["callback"], "window.onCaptcha");
+        assert_eq!(request.args["click_after"], "text:Continue Booking");
     }
 
     #[test]
@@ -1044,6 +1066,8 @@ mod tests {
             "--inject",
             "--inject-callback",
             "window.onCaptcha",
+            "--click-after",
+            "text:Continue Booking",
         ]);
 
         match command {
@@ -1052,11 +1076,13 @@ mod tests {
                     CaptchaAction::Solve {
                         inject,
                         inject_callback,
+                        click_after,
                         ..
                     },
             } => {
                 assert!(inject);
                 assert_eq!(inject_callback.as_deref(), Some("window.onCaptcha"));
+                assert_eq!(click_after.as_deref(), Some("text:Continue Booking"));
             }
             _ => panic!("expected captcha solve command"),
         }

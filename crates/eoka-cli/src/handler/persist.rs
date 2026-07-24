@@ -12,7 +12,7 @@ use super::state::TabState;
 // Saved state types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedState {
     pub url: String,
     pub cookies: Vec<SavedCookie>,
@@ -22,7 +22,7 @@ pub struct SavedState {
     pub saved_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedCookie {
     pub name: String,
     pub value: String,

@@ -117,9 +117,10 @@ For install and AWS WAF usage, read [references/captcha.md](references/captcha.m
 eoka captcha solve --captcha-type recaptcha_v3 --website-url https://target.com --website-key SITE_KEY --page-action submit
 eoka captcha inject TOKEN --captcha-type recaptcha
 eoka captcha solve --captcha-type recaptcha_v3 --website-url https://target.com --website-key SITE_KEY --page-action submit --inject
+eoka captcha inject TOKEN --captcha-type recaptcha --click-after "text:Continue Booking"
 ```
 
-`captcha inject` sets common response fields and calls discovered grecaptcha/hCaptcha callbacks. Use `--callback window.someCallback` when the page exposes a specific callback.
+`captcha inject` sets common response fields and calls discovered grecaptcha/hCaptcha callbacks. Use `--callback window.someCallback` when the page exposes a specific callback. Some pages do not automatically retry after a callback fires; use `--click-after` to click the continuation control after injection.
 
 ### Storage
 
@@ -137,6 +138,7 @@ eoka dump-storage                       # Both local and session storage
 eoka save-state ./auth.json             # Save cookies + storage + URL
 eoka load-state ./auth.json             # Restore, navigate to saved URL, then reload so app auth initializes
 eoka load-state ./auth.json --no-navigate  # Restore into current origin; reloads current web page when possible
+eoka open /camping/campsites/71576      # After load-state, relative opens resolve against the saved origin
 ```
 
 ### Extra Headers
