@@ -33,7 +33,7 @@ All action commands (`click`, `fill`, `hover`, `scroll`, `select`) accept these 
 | Format | Example | Description |
 |--------|---------|-------------|
 | Ref | `@e1` | From snapshot, resolves via CDP |
-| Index | `[0]`, `0`, `index:0` | From observe, uses cached elements |
+| Index | `[0]`, `0`, `index:0` | From observe's full interactive list, not DOM `querySelectorAll()` indices |
 | Text | `text:Submit` | Find by visible text |
 | Placeholder | `placeholder:Email` | Find by placeholder |
 | CSS | `css:#submit-btn` | CSS selector |
@@ -46,7 +46,7 @@ All action commands (`click`, `fill`, `hover`, `scroll`, `select`) accept these 
 ### Navigation
 
 ```bash
-eoka open <url> [--headers '{"Auth": "Bearer ..."}'] [--bypass-csp] [--user-agent UA]
+eoka open <url> [--headers '{"Auth": "Bearer ..."}'] [--bypass-csp] [--user-agent UA] [--load-state ./auth.json]
 eoka back
 eoka forward
 eoka reload
@@ -113,6 +113,15 @@ eoka clear-cookies
 
 For install and AWS WAF usage, read [references/captcha.md](references/captcha.md).
 
+```bash
+eoka captcha solve --captcha-type recaptcha_v3 --website-url https://target.com --website-key SITE_KEY --page-action submit
+eoka captcha inject TOKEN --captcha-type recaptcha
+eoka captcha solve --captcha-type recaptcha_v3 --website-url https://target.com --website-key SITE_KEY --page-action submit --inject
+eoka captcha inject TOKEN --captcha-type recaptcha --click-after "text:Continue Booking"
+```
+
+`captcha inject` sets common response fields and calls discovered grecaptcha/hCaptcha callbacks. Use `--callback window.someCallback` when the page exposes a specific callback. Some pages do not automatically retry after a callback fires; use `--click-after` to click the continuation control after injection.
+
 ### Storage
 
 ```bash
@@ -127,8 +136,9 @@ eoka dump-storage                       # Both local and session storage
 
 ```bash
 eoka save-state ./auth.json             # Save cookies + storage + URL
-eoka load-state ./auth.json             # Restore and navigate to saved URL
-eoka load-state ./auth.json --no-navigate  # Restore without navigating
+eoka load-state ./auth.json             # Restore, navigate to saved URL, then reload so app auth initializes
+eoka load-state ./auth.json --no-navigate  # Restore into current origin; reloads current web page when possible
+eoka open /camping/campsites/71576 --load-state ./auth.json  # Restore before this deep-link navigation
 ```
 
 ### Extra Headers

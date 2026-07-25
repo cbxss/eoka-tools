@@ -33,10 +33,69 @@
             });
     }
 
+    function controlRank(el) {
+        const tag = el.tagName.toLowerCase();
+        const role = lc(el.getAttribute('role'));
+
+        if (el.disabled || role === 'presentation' || role === 'none' || lc(el.getAttribute('aria-disabled')) === 'true') {
+            return -100;
+        }
+        if (tag === 'button') return 600;
+        if (tag === 'input' && ['button', 'submit', 'reset'].includes(lc(el.type))) return 580;
+        if (role === 'button') return 560;
+        if (tag === 'a') return 500;
+        if (role === 'link') return 480;
+        if (['select', 'textarea', 'input'].includes(tag)) return 420;
+        if (['tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch'].includes(role)) return 360;
+        if (el.hasAttribute('onclick')) return 160;
+        if (el.hasAttribute('tabindex')) return 80;
+        return 0;
+    }
+
+    function textCandidateScore(el, query) {
+        const textValue = lc(text(el));
+        const exact = textValue === query ? 1 : 0;
+        const control = controlRank(el);
+
+        let depth = 0;
+        for (let n = el; n && n.nodeType === 1; n = n.parentElement) depth++;
+        const r = el.getBoundingClientRect();
+        const area = r.width * r.height;
+
+        return { exact, control, depth, area };
+    }
+
+    function bestTextMatch(elements, query) {
+        const candidates = elements
+            .map((el, index) => ({ el, index, score: textCandidateScore(el, query) }));
+
+        const leafCandidates = candidates.filter(candidate =>
+            !candidates.some(other =>
+                other.el !== candidate.el &&
+                candidate.el.contains(other.el) &&
+                other.score.control > candidate.score.control &&
+                other.score.control > 0 &&
+                lc(text(other.el)).includes(query)
+            )
+        );
+
+        return (leafCandidates.length ? leafCandidates : candidates)
+            .sort((a, b) =>
+                (b.score.control - a.score.control) ||
+                (b.score.exact - a.score.exact) ||
+                (b.score.depth - a.score.depth) ||
+                (a.score.area - b.score.area) ||
+                (a.index - b.index)
+            )[0]?.el || null;
+    }
+
     let el = null;
     switch (type) {
         case 'text':
-            el = interactive().find(e => lc(text(e)).includes(valLc));
+            el = bestTextMatch(
+                interactive().filter(e => lc(text(e)).includes(valLc)),
+                valLc
+            );
             break;
         case 'placeholder':
             el = document.querySelector(`input[placeholder*="${value}" i],textarea[placeholder*="${value}" i]`)

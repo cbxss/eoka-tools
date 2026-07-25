@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use eoka_agent::{ObserveConfig, Session};
+use eoka_agent::{target, LivePattern, ObserveConfig, Session};
 
 /// Check if Chrome is available
 fn chrome_available() -> bool {
@@ -247,6 +247,47 @@ async fn test_find_by_text() {
     let indices = agent.find_all_by_text("submit");
     assert_eq!(indices.len(), 2);
     assert_eq!(indices, vec![0, 2]);
+
+    agent.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "requires Chrome"]
+async fn test_live_text_prefers_button_over_matching_containers() {
+    if !chrome_available() {
+        eprintln!("Chrome not found, skipping test");
+        return;
+    }
+
+    let mut agent = Session::launch().await.expect("Failed to launch");
+    agent
+        .goto(
+            r#"data:text/html,
+        <div id="dialog" tabindex="-1">
+          <div id="container" role="button" onclick="window.clicked = 'container'">
+            Continue Booking
+            <button id="continue-button" onclick="window.clicked = 'button'">
+              <span>Continue Booking</span>
+            </button>
+          </div>
+          <div id="plain-container" tabindex="0">Continue Booking</div>
+          <span id="before" tabindex="0">Continue Booking</span>
+          <span id="after" tabindex="0">Continue Booking</span>
+        </div>
+    "#,
+        )
+        .await
+        .expect("Failed to navigate");
+
+    let resolved = target::resolve(
+        agent.page(),
+        &LivePattern::Text("Continue Booking".to_string()),
+    )
+    .await
+    .expect("Failed to resolve text target");
+
+    assert_eq!(resolved.tag, "button");
+    assert_eq!(resolved.selector, "#continue-button");
 
     agent.close().await.expect("Failed to close");
 }

@@ -58,11 +58,12 @@ async fn main() {
 
     // Handle commands that don't need the daemon at all.
     match &command {
-        Command::Captcha { action } => {
-            let response = match solve_captcha(action).await {
-                Ok(value) => protocol::Response::ok(value),
-                Err(error) => protocol::Response::err(error),
-            };
+        Command::Captcha {
+            action: action @ CaptchaAction::Solve { .. },
+        } => {
+            let response = solve_captcha_command(action, &effective_session, spec.clone())
+                .await
+                .unwrap_or_else(protocol::Response::err);
             output::print_response(&response, json_mode);
             if !response.ok {
                 std::process::exit(1);
@@ -155,6 +156,55 @@ async fn main() {
     }
 }
 
+async fn solve_captcha_command(
+    action: &CaptchaAction,
+    session_name: &str,
+    spec: LaunchSpec,
+) -> Result<protocol::Response, String> {
+    let mut value = solve_captcha(action).await?;
+    let CaptchaAction::Solve {
+        captcha_type,
+        inject,
+        inject_callback,
+        click_after,
+        ..
+    } = action
+    else {
+        unreachable!("only solve actions reach solve_captcha_command")
+    };
+
+    if !inject {
+        return Ok(protocol::Response::ok(value));
+    }
+
+    let token = captcha_solution_token(&value)?.to_string();
+    let inject_type = captcha_inject_kind_from_solve(captcha_type)?;
+    let response = client::send_command(
+        session_name,
+        captcha_inject_request(
+            &token,
+            inject_type,
+            inject_callback.as_deref(),
+            click_after.as_deref(),
+        ),
+        spec,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if !response.ok {
+        return Err(format!(
+            "Captcha solved but injection failed: {}",
+            response.error.unwrap_or_else(|| "unknown error".into())
+        ));
+    }
+
+    if let Value::Object(ref mut object) = value {
+        object.insert("injected".into(), response.data.unwrap_or(Value::Null));
+    }
+    Ok(protocol::Response::ok(value))
+}
+
 async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, String> {
     let CaptchaAction::Solve {
         captcha_type,
@@ -167,7 +217,13 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
         context,
         captcha_script,
         challenge_script,
-    } = action;
+        inject: _,
+        inject_callback: _,
+        click_after: _,
+    } = action
+    else {
+        unreachable!("only solve actions reach solve_captcha")
+    };
     let api_key = api_key
         .as_deref()
         .ok_or("Anti-Captcha key required: use --api-key or ANTI_CAPTCHA_KEY")?;
@@ -185,6 +241,41 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
         _ => return Err(format!("Unknown CAPTCHA type '{captcha_type}'. Use hcaptcha, recaptcha_v2, recaptcha_v3, or amazon_waf.")),
     }.map_err(|e| e.to_string())?;
     Ok(json!({ "token": solution.token(), "user_agent": solution.user_agent }))
+}
+
+fn captcha_solution_token(value: &Value) -> Result<&str, String> {
+    value
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "Captcha solution contained no token to inject".into())
+}
+
+fn captcha_inject_kind_from_solve(captcha_type: &str) -> Result<&'static str, String> {
+    match captcha_type.to_lowercase().as_str() {
+        "hcaptcha" => Ok("hcaptcha"),
+        "recaptcha" | "recaptcha_v2" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
+        other => Err(format!(
+            "--inject is not supported for captcha type '{other}'. Use hcaptcha, recaptcha_v2, or recaptcha_v3."
+        )),
+    }
+}
+
+fn captcha_inject_request(
+    token: &str,
+    captcha_type: &str,
+    callback: Option<&str>,
+    click_after: Option<&str>,
+) -> Request {
+    Request {
+        cmd: "captcha_inject".into(),
+        args: json!({
+            "token": token,
+            "captcha_type": captcha_type,
+            "callback": callback,
+            "click_after": click_after,
+        }),
+    }
 }
 
 /// Map CLI flags to a `LaunchSpec`. Resolves --cdp ports to ws:// URLs eagerly.
@@ -354,6 +445,7 @@ fn normalize_batch_cmd(cmd: &str) -> String {
         "dump_storage" => "dump_storage".into(),
         "save_state" => "save_state".into(),
         "load_state" => "load_state".into(),
+        "captcha_inject" => "captcha_inject".into(),
         "spa_info" => "spa_info".into(),
         "spa_navigate" => "spa_navigate".into(),
         "fake_camera" => "fake_camera".into(),
@@ -375,6 +467,7 @@ fn normalize_batch_args(idx: usize, cmd: &str, value: Value) -> Result<Value, St
         "click" | "dblclick" | "hover" | "scroll" => string_arg(idx, cmd, value, "target"),
         "key" => string_arg(idx, cmd, value, "key"),
         "find" => string_arg(idx, cmd, value, "text"),
+        "captcha_inject" => string_arg(idx, cmd, value, "token"),
         "spa_navigate" => string_arg(idx, cmd, value, "path"),
         "tab_new" => string_arg(idx, cmd, value, "url"),
         "tab_switch" | "tab_close" | "tab_attach" => string_arg(idx, cmd, value, "tab_id"),
@@ -474,6 +567,7 @@ fn command_to_request(cmd: &Command) -> Request {
             user_agent,
             bypass_csp,
             inject_js,
+            load_state,
         } => {
             let mut args = json!({ "url": url });
             if let Some(h) = headers {
@@ -489,6 +583,9 @@ fn command_to_request(cmd: &Command) -> Request {
             }
             if let Some(js) = inject_js {
                 args["inject_js"] = json!(js);
+            }
+            if let Some(path) = load_state {
+                args["load_state"] = json!(path.to_string_lossy());
             }
             Request {
                 cmd: "open".into(),
@@ -869,8 +966,29 @@ fn command_to_request(cmd: &Command) -> Request {
             }),
         },
 
+        // CAPTCHA
+        Command::Captcha {
+            action:
+                CaptchaAction::Inject {
+                    token,
+                    captcha_type,
+                    callback,
+                    click_after,
+                },
+        } => captcha_inject_request(
+            token,
+            captcha_type,
+            callback.as_deref(),
+            click_after.as_deref(),
+        ),
+
         // Commands handled before daemon startup.
-        Command::Captcha { .. } | Command::Status | Command::Kill | Command::CdpUrl { .. } => {
+        Command::Captcha {
+            action: CaptchaAction::Solve { .. },
+        }
+        | Command::Status
+        | Command::Kill
+        | Command::CdpUrl { .. } => {
             unreachable!()
         }
     }
@@ -910,6 +1028,111 @@ mod tests {
         assert_eq!(request.cmd, "fetch");
         assert_eq!(request.args["body_only"], true);
         assert_eq!(request.args["max_body"], 16);
+    }
+
+    #[test]
+    fn open_load_state_maps_to_daemon_request() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "open",
+            "/camping/campsites/71576",
+            "--load-state",
+            "auth.json",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd, "open");
+        assert_eq!(request.args["url"], "/camping/campsites/71576");
+        assert_eq!(request.args["load_state"], "auth.json");
+    }
+
+    #[test]
+    fn captcha_inject_maps_to_daemon_request() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "captcha",
+            "inject",
+            "token-123",
+            "--captcha-type",
+            "recaptcha",
+            "--callback",
+            "window.onCaptcha",
+            "--click-after",
+            "text:Continue Booking",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd, "captcha_inject");
+        assert_eq!(request.args["token"], "token-123");
+        assert_eq!(request.args["captcha_type"], "recaptcha");
+        assert_eq!(request.args["callback"], "window.onCaptcha");
+        assert_eq!(request.args["click_after"], "text:Continue Booking");
+    }
+
+    #[test]
+    fn captcha_solve_accepts_inject_flags() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "captcha",
+            "solve",
+            "--captcha-type",
+            "recaptcha_v3",
+            "--website-url",
+            "https://example.com",
+            "--website-key",
+            "site-key",
+            "--api-key",
+            "api-key",
+            "--inject",
+            "--inject-callback",
+            "window.onCaptcha",
+            "--click-after",
+            "text:Continue Booking",
+        ]);
+
+        match command {
+            Command::Captcha {
+                action:
+                    CaptchaAction::Solve {
+                        inject,
+                        inject_callback,
+                        click_after,
+                        ..
+                    },
+            } => {
+                assert!(inject);
+                assert_eq!(inject_callback.as_deref(), Some("window.onCaptcha"));
+                assert_eq!(click_after.as_deref(), Some("text:Continue Booking"));
+            }
+            _ => panic!("expected captcha solve command"),
+        }
+    }
+
+    #[test]
+    fn captcha_solve_inject_kind_is_limited_to_browser_token_types() {
+        assert_eq!(
+            captcha_inject_kind_from_solve("recaptcha_v2").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            captcha_inject_kind_from_solve("recaptcha_v3").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            captcha_inject_kind_from_solve("hcaptcha").unwrap(),
+            "hcaptcha"
+        );
+        assert!(captcha_inject_kind_from_solve("amazon_waf").is_err());
+    }
+
+    #[test]
+    fn captcha_solution_token_rejects_missing_token() {
+        assert_eq!(
+            captcha_solution_token(&json!({ "token": "abc" })).unwrap(),
+            "abc"
+        );
+        assert!(captcha_solution_token(&json!({ "token": null })).is_err());
+        assert!(captcha_solution_token(&json!({ "token": "" })).is_err());
     }
 
     #[test]
@@ -974,6 +1197,15 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cmd, "spa_navigate");
         assert_eq!(requests[0].args["path"], "/cart");
+    }
+
+    #[test]
+    fn batch_accepts_captcha_inject_shorthand() {
+        let requests = parse_batch_requests(r#"[{"captcha-inject":"token-123"}]"#).unwrap();
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].cmd, "captcha_inject");
+        assert_eq!(requests[0].args["token"], "token-123");
     }
 
     #[test]

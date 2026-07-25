@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
 use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
-use persist::{capture_state, ensure_console_capture, restore_state, SavedState};
+use persist::{capture_state, ensure_console_capture, restore_cookies, restore_state, SavedState};
 use state::{BrowserState, TabState};
 use target::{
     auto_observe_if_needed, click_with_retry, fill_with_retry, json_str, resolve_target,
@@ -76,8 +76,8 @@ impl Handler {
                     } else {
                         s.ensure_blank_tab().await.map_err(|e| e.to_string())?
                     };
-                    restore_state(&tab.page, &saved).await?;
-                    tab.invalidate();
+                    let _ = wait_for_stable(&tab.page).await;
+                    restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
                 }
                 s
             }
@@ -158,6 +158,7 @@ impl Handler {
             "scroll" => self.cmd_scroll(args).await,
             "eval" => self.cmd_eval(args).await,
             "exec" => self.cmd_exec(args).await,
+            "captcha_inject" => self.cmd_captcha_inject(args).await,
             "fetch" => self.cmd_fetch(args).await,
             "cookies" => self.cmd_cookies().await,
             "set_cookie" => self.cmd_set_cookie(args).await,
@@ -215,7 +216,16 @@ impl Handler {
     // ── Navigation ──────────────────────────────────────────────────────
 
     async fn cmd_open(&mut self, args: &Value) -> Result<Response, String> {
-        let url = self.arg_str(args, "url")?;
+        let requested_url = self.arg_str(args, "url")?.to_string();
+        let open_state = args["load_state"]
+            .as_str()
+            .map(read_saved_state_file)
+            .transpose()?;
+        let url = resolve_open_url_for_state(&requested_url, open_state.as_ref())?;
+        let state_init_js = open_state
+            .as_ref()
+            .filter(|saved| state_should_prime_open(saved, &url))
+            .and_then(build_storage_seed_js);
         self.ensure_browser().await?;
 
         let headers: Option<HashMap<String, String>> = args
@@ -226,8 +236,12 @@ impl Handler {
         let bypass_csp = args["bypass_csp"].as_bool().unwrap_or(false);
         // --inject-js: inject a script via addScriptToEvaluateOnNewDocument before navigation
         let inject_js = args["inject_js"].as_str();
-        let has_extras =
-            headers.is_some() || user_agent.is_some() || bypass_csp || inject_js.is_some();
+        let has_extras = headers.is_some()
+            || user_agent.is_some()
+            || bypass_csp
+            || inject_js.is_some()
+            || open_state.is_some()
+            || state_init_js.is_some();
 
         let drain = self.start_fetch_drain();
         let result = async {
@@ -245,6 +259,9 @@ impl Handler {
                 } else {
                     state.ensure_blank_tab().await.map_err(|e| e.to_string())?
                 };
+                if let Some(saved) = open_state.as_ref() {
+                    restore_cookies(&tab.page, saved).await?;
+                }
                 if let Some(ua) = user_agent {
                     tab.page
                         .set_user_agent(ua)
@@ -279,15 +296,42 @@ impl Handler {
                         .await
                         .map_err(|e| e.to_string())?;
                 }
+                let state_script_id = if let Some(source) = state_init_js.as_deref() {
+                    let response: Value = tab
+                        .page
+                        .session()
+                        .send(
+                            "Page.addScriptToEvaluateOnNewDocument",
+                            &json!({ "source": source }),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    response
+                        .get("identifier")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                };
                 tab.invalidate();
-                let nav_result = tab.page.goto(url).await;
+                let nav_result = tab.page.goto(&url).await;
+                if let Some(identifier) = state_script_id {
+                    let _ = tab
+                        .page
+                        .session()
+                        .send::<_, Value>(
+                            "Page.removeScriptToEvaluateOnNewDocument",
+                            &json!({ "identifier": identifier }),
+                        )
+                        .await;
+                }
                 if headers.is_some() {
                     // Best-effort clear; if it fails the browser is likely broken
                     let _ = tab.page.clear_extra_headers().await;
                 }
                 nav_result.map_err(|e| e.to_string())?;
             } else {
-                state.ensure_tab(url).await.map_err(|e| e.to_string())?;
+                state.ensure_tab(&url).await.map_err(|e| e.to_string())?;
             }
 
             let tab = state.current_tab_mut().ok_or("No tab after navigate")?;
@@ -741,6 +785,38 @@ impl Handler {
         Ok(Response::ok_text("Executed successfully"))
     }
 
+    async fn cmd_captcha_inject(&mut self, args: &Value) -> Result<Response, String> {
+        self.ensure_browser().await?;
+        let token = self.arg_str(args, "token")?;
+        let captcha_type = args["captcha_type"].as_str().unwrap_or("auto");
+        let callback = args["callback"].as_str();
+        let click_after = args["click_after"].as_str().map(str::to_string);
+        let js = build_captcha_inject_js(token, captcha_type, callback)?;
+        let result: String = {
+            let tab = self.require_tab()?;
+            tab.page.evaluate(&js).await.map_err(|e| e.to_string())?
+        };
+        let mut parsed: Value = serde_json::from_str(&result).map_err(|e| e.to_string())?;
+        if let Some(target) = click_after {
+            let (tab, viewport_only) = self.tab_with_config()?;
+            let desc = click_with_retry(tab, &target, viewport_only).await?;
+            if let Value::Object(ref mut object) = parsed {
+                object.insert(
+                    "click_after".into(),
+                    json!({ "target": target, "clicked": desc }),
+                );
+            }
+        } else if let Value::Object(ref mut object) = parsed {
+            object.insert(
+                "next_action".into(),
+                Value::String(
+                    "If the page does not advance after callbacks run, click the continuation control again or pass --click-after.".into(),
+                ),
+            );
+        }
+        Ok(Response::ok(parsed))
+    }
+
     // ── Network ─────────────────────────────────────────────────────────
 
     async fn cmd_fetch(&mut self, args: &Value) -> Result<Response, String> {
@@ -963,22 +1039,26 @@ impl Handler {
         let path = self.arg_str(args, "path")?;
         let no_navigate = args["no_navigate"].as_bool().unwrap_or(false);
 
-        let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let saved: SavedState = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let saved = read_saved_state_file(path)?;
 
         self.ensure_browser().await?;
         let state = self.require_state_mut()?;
 
         if !no_navigate && !saved.url.is_empty() {
-            state
+            let tab = state
                 .ensure_tab(&saved.url)
                 .await
                 .map_err(|e| e.to_string())?;
+            let _ = wait_for_stable(&tab.page).await;
         }
 
         let tab = state.current_tab_mut().ok_or("No tab open.")?;
-        restore_state(&tab.page, &saved).await?;
-        tab.invalidate();
+        let reload_after_restore = if !no_navigate && !saved.url.is_empty() {
+            state_url_can_reload(&saved.url)
+        } else {
+            page_url_can_reload_state(&tab.page).await
+        };
+        restore_state_and_maybe_reload(tab, &saved, reload_after_restore).await?;
 
         Ok(Response::ok_text(format!(
             "Loaded state from {} ({} cookies, {} localStorage, {} sessionStorage)",
@@ -1169,8 +1249,8 @@ impl Handler {
         } else {
             state.ensure_blank_tab().await.map_err(|e| e.to_string())?
         };
-        restore_state(&tab.page, &saved).await?;
-        tab.invalidate();
+        let _ = wait_for_stable(&tab.page).await;
+        restore_state_and_maybe_reload(tab, &saved, state_url_can_reload(&url)).await?;
         Ok(Response::ok_text(format!(
             "Hydrated session from {} ({} cookies, {} localStorage, {} sessionStorage)",
             source,
@@ -1940,6 +2020,100 @@ fn fetch_body_only_text(parsed: &Value) -> Result<String, String> {
         .to_string())
 }
 
+async fn restore_state_and_maybe_reload(
+    tab: &mut TabState,
+    saved: &SavedState,
+    reload_after_restore: bool,
+) -> Result<(), String> {
+    restore_state(&tab.page, saved).await?;
+    tab.invalidate();
+
+    if reload_after_restore {
+        tab.page.reload().await.map_err(|e| e.to_string())?;
+        let _ = wait_for_stable(&tab.page).await;
+        tab.invalidate();
+    }
+
+    Ok(())
+}
+
+async fn page_url_can_reload_state(page: &eoka::Page) -> bool {
+    page.url()
+        .await
+        .map(|url| state_url_can_reload(&url))
+        .unwrap_or(false)
+}
+
+fn state_url_can_reload(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+fn web_origin(url: &str) -> Option<String> {
+    let scheme_end = url.find("://")?;
+    let scheme = url[..scheme_end].to_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    if authority_end == 0 {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme,
+        rest[..authority_end].to_lowercase()
+    ))
+}
+
+fn same_web_origin(left: &str, right: &str) -> bool {
+    match (web_origin(left), web_origin(right)) {
+        (Some(left_origin), Some(right_origin)) => left_origin == right_origin,
+        _ => false,
+    }
+}
+
+fn read_saved_state_file(path: &str) -> Result<SavedState, String> {
+    let json = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    serde_json::from_str(&json).map_err(|e| format!("{path}: {e}"))
+}
+
+fn resolve_open_url_for_state(url: &str, saved: Option<&SavedState>) -> Result<String, String> {
+    if url.starts_with('/') && !url.starts_with("//") {
+        let saved = saved.ok_or_else(|| {
+            "Relative URLs require --load-state with a saved http(s) URL.".to_string()
+        })?;
+        let origin = web_origin(&saved.url).ok_or_else(|| {
+            "Relative URLs require --load-state with a saved http(s) URL.".to_string()
+        })?;
+        return Ok(format!("{origin}{url}"));
+    }
+    Ok(url.to_string())
+}
+
+fn state_should_prime_open(saved: &SavedState, url: &str) -> bool {
+    same_web_origin(&saved.url, url)
+        && (!saved.local_storage.is_empty() || !saved.session_storage.is_empty())
+}
+
+fn build_storage_seed_js(saved: &SavedState) -> Option<String> {
+    if saved.local_storage.is_empty() && saved.session_storage.is_empty() {
+        return None;
+    }
+
+    let origin = web_origin(&saved.url)?;
+    let local = serde_json::to_string(&saved.local_storage).ok()?;
+    let session = serde_json::to_string(&saved.session_storage).ok()?;
+    Some(format!(
+        "(() => {{\
+            if (location.origin !== {origin}) return;\
+            try {{ const d = {local}; for (const [k,v] of Object.entries(d)) localStorage.setItem(k,v); }} catch (_e) {{}}\
+            try {{ const d = {session}; for (const [k,v] of Object.entries(d)) sessionStorage.setItem(k,v); }} catch (_e) {{}}\
+        }})();",
+        origin = json_str(&origin)
+    ))
+}
+
 async fn format_runtime_eval_result(
     session: &CdpSession,
     result: &Value,
@@ -2073,6 +2247,35 @@ const RUNTIME_OBJECT_TO_TEXT_JS: &str = r#"function() {
   }
   return text;
 }"#;
+
+const CAPTCHA_INJECT_JS: &str = include_str!("../js/captcha_inject.js");
+
+fn build_captcha_inject_js(
+    token: &str,
+    captcha_type: &str,
+    callback: Option<&str>,
+) -> Result<String, String> {
+    let kind = normalize_captcha_inject_kind(captcha_type)?;
+    Ok(format!(
+        "{}({},{},{})",
+        CAPTCHA_INJECT_JS,
+        json_str(token),
+        json_str(kind),
+        json_str(callback.unwrap_or_default())
+    ))
+}
+
+fn normalize_captcha_inject_kind(kind: &str) -> Result<&'static str, String> {
+    match kind.to_lowercase().as_str() {
+        "" | "auto" => Ok("auto"),
+        "recaptcha" | "recaptcha_v2" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
+        "hcaptcha" => Ok("hcaptcha"),
+        "turnstile" => Ok("turnstile"),
+        other => Err(format!(
+            "Unsupported captcha injection type '{other}'. Use auto, recaptcha, hcaptcha, or turnstile."
+        )),
+    }
+}
 
 fn unserializable_runtime_value_text(value: &str) -> String {
     match value {
@@ -2241,6 +2444,107 @@ mod tests {
         .unwrap();
 
         assert_eq!(text, "abc...(truncated 20 chars)");
+    }
+
+    #[test]
+    fn captcha_inject_normalizes_supported_types() {
+        assert_eq!(normalize_captcha_inject_kind("auto").unwrap(), "auto");
+        assert_eq!(
+            normalize_captcha_inject_kind("recaptcha_v3").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("recaptcha_enterprise").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("hcaptcha").unwrap(),
+            "hcaptcha"
+        );
+        assert_eq!(
+            normalize_captcha_inject_kind("turnstile").unwrap(),
+            "turnstile"
+        );
+        assert!(normalize_captcha_inject_kind("amazon_waf").is_err());
+    }
+
+    #[test]
+    fn captcha_inject_js_escapes_token_and_callback() {
+        let js =
+            build_captcha_inject_js("tok\"en", "recaptcha_v2", Some("window.onCaptcha")).unwrap();
+
+        assert!(js.contains("\"tok\\\"en\""));
+        assert!(js.contains("\"recaptcha\""));
+        assert!(js.contains("\"window.onCaptcha\""));
+        assert!(js.contains("textarea[name=\"g-recaptcha-response\"]"));
+    }
+
+    fn saved_state_with_storage(url: &str) -> SavedState {
+        SavedState {
+            url: url.into(),
+            cookies: Vec::new(),
+            local_storage: HashMap::from([("auth".into(), "ok".into())]),
+            session_storage: HashMap::from([("flow".into(), "booking".into())]),
+            user_agent: String::new(),
+            saved_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn state_restore_reload_only_for_web_origins() {
+        assert!(state_url_can_reload("https://www.recreation.gov/"));
+        assert!(state_url_can_reload("http://127.0.0.1:3000/"));
+        assert!(!state_url_can_reload(""));
+        assert!(!state_url_can_reload("about:blank"));
+        assert!(!state_url_can_reload("data:text/html,hello"));
+    }
+
+    #[test]
+    fn atomic_open_state_resolves_relative_url_to_saved_origin() {
+        let saved = saved_state_with_storage("https://www.recreation.gov/");
+
+        assert_eq!(
+            resolve_open_url_for_state("/camping/campsites/71576", Some(&saved)).unwrap(),
+            "https://www.recreation.gov/camping/campsites/71576"
+        );
+        assert_eq!(
+            resolve_open_url_for_state("https://other.test/path", Some(&saved)).unwrap(),
+            "https://other.test/path"
+        );
+    }
+
+    #[test]
+    fn atomic_open_state_rejects_relative_url_without_saved_origin() {
+        let saved = saved_state_with_storage("about:blank");
+
+        assert!(resolve_open_url_for_state("/deep", None).is_err());
+        assert!(resolve_open_url_for_state("/deep", Some(&saved)).is_err());
+    }
+
+    #[test]
+    fn atomic_open_state_primes_only_same_origin_open() {
+        let saved = saved_state_with_storage("https://www.recreation.gov/cart");
+
+        assert!(state_should_prime_open(
+            &saved,
+            "https://www.recreation.gov/camping/campsites/71576"
+        ));
+        assert!(!state_should_prime_open(
+            &saved,
+            "https://www.example.com/camping/campsites/71576"
+        ));
+    }
+
+    #[test]
+    fn storage_seed_js_sets_saved_storage_before_navigation_scripts() {
+        let saved = saved_state_with_storage("https://www.recreation.gov/");
+        let js = build_storage_seed_js(&saved).unwrap();
+
+        assert!(js.contains("location.origin !== \"https://www.recreation.gov\""));
+        assert!(js.contains("localStorage.setItem(k,v)"));
+        assert!(js.contains("sessionStorage.setItem(k,v)"));
+        assert!(js.contains("\"auth\":\"ok\""));
+        assert!(js.contains("\"flow\":\"booking\""));
     }
 
     #[test]
