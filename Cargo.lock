@@ -465,6 +465,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "eoka-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "eoka",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
