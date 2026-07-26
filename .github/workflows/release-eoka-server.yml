@@ -43,10 +43,10 @@ jobs:
             os: ubuntu-latest
             asset: eoka-server-linux-amd64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: [self-hosted, macOS, ARM64]
             asset: eoka-server-darwin-amd64
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: [self-hosted, macOS, ARM64]
             asset: eoka-server-darwin-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest

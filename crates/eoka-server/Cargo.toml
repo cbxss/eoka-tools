@@ -6,8 +6,8 @@ license = "MIT"
 description = "Sidecar process exposing eoka browser automation over newline-delimited JSON-RPC (see PROTOCOL.md)"
 keywords = ["browser", "automation", "sidecar", "json-rpc"]
 categories = ["web-programming", "development-tools"]
-repository = "https://github.com/cbxss/eoka-tools"
-homepage = "https://github.com/cbxss/eoka-tools"
+repository = "https://github.com/shrimp-software/eoka-tools"
+homepage = "https://github.com/shrimp-software/eoka-tools"
 authors = ["cbxss"]
 
 [[bin]]

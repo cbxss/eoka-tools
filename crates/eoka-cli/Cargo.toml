@@ -4,7 +4,7 @@ version = "0.1.4"
 edition = "2021"
 license = "MIT"
 description = "Browser automation CLI for AI agents and pentesting"
-repository = "https://github.com/cbxss/eoka-tools"
+repository = "https://github.com/shrimp-software/eoka-tools"
 authors = ["cbxss"]
 
 [[bin]]

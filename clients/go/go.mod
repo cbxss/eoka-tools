@@ -1,3 +1,3 @@
-module github.com/cbxss/eoka-tools/clients/go
+module github.com/shrimp-software/eoka-tools/clients/go
 
 go 1.21

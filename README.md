@@ -70,7 +70,7 @@ eoka-runner automation.yaml
 cargo install eoka-agent eoka-runner
 
 # Or from source
-git clone https://github.com/cbxss/eoka-tools
+git clone https://github.com/shrimp-software/eoka-tools
 cd eoka-tools
 cargo install --path crates/eoka-agent
 cargo install --path crates/eoka-runner

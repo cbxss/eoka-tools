@@ -2,7 +2,7 @@
 
 Config-based browser automation. Define actions in YAML, execute deterministically.
 
-Part of the [eoka-tools](https://github.com/cbxss/eoka-tools) workspace.
+Part of the [eoka-tools](https://github.com/shrimp-software/eoka-tools) workspace.
 
 ## Quick Start
 
