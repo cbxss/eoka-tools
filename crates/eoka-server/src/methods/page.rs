@@ -7,10 +7,6 @@ use super::{parse_params, PageIdParams};
 use crate::protocol::ServerError;
 use crate::state::AppState;
 
-/// Builds a single-field JSON result object, moving `value` in directly
-/// instead of `json!({"key": value})`'s re-serialize-through-`to_value`
-/// behavior — avoids an extra deep copy of large payloads like page HTML or
-/// screenshot base64 data.
 fn single(key: &'static str, value: impl Into<Value>) -> Value {
     let mut map = Map::with_capacity(1);
     map.insert(key.to_string(), value.into());

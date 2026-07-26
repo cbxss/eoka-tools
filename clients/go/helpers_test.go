@@ -7,15 +7,8 @@ import (
 	"testing"
 )
 
-// fakeHandler answers one decoded request with either a result value (JSON
-// marshaled by the fake server) or an rpcError. Returning (nil, nil) yields
-// an empty {} result, matching PROTOCOL.md's "result is always an object".
 type fakeHandler func(id int64, method string, params json.RawMessage) (result any, rpcErr *rpcError)
 
-// newFakeTransport wires a *transport to a goroutine-driven fake server
-// that speaks the real NDJSON wire protocol over in-memory io.Pipe pairs —
-// no subprocess, no real eoka-server binary required. It exercises the same
-// line-framing and correlation code paths the real client uses.
 func newFakeTransport(t *testing.T, handle fakeHandler) *transport {
 	t.Helper()
 
@@ -34,16 +27,11 @@ func newFakeTransport(t *testing.T, handle fakeHandler) *transport {
 	return tr
 }
 
-// newFakeBrowser builds a Browser bound to a fake in-memory transport,
-// bypassing process spawning entirely, for testing the Browser/Page API
-// surface against canned responses.
 func newFakeBrowser(t *testing.T, handle fakeHandler) *Browser {
 	t.Helper()
 	return &Browser{t: newFakeTransport(t, handle)}
 }
 
-// runFakeServer reads NDJSON requests from r and writes NDJSON responses to
-// w, one line each way, exactly like the real eoka-server is expected to.
 func runFakeServer(r io.Reader, w io.Writer, handle fakeHandler) {
 	br := bufio.NewReaderSize(r, 64*1024)
 	for {

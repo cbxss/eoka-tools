@@ -16,9 +16,6 @@ enum ParsedLine {
 }
 
 fn parse_line(line: &str) -> ParsedLine {
-    // The happy path parses straight into `Request`, no intermediate `Value`
-    // or clone. Only on failure do we re-parse into a generic `Value` (the
-    // rare/error path) to try to recover an `id` for the error response.
     let request_err = match serde_json::from_str::<Request>(line) {
         Ok(req) => return ParsedLine::Request(req),
         Err(e) => e,
@@ -66,8 +63,6 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let line = match lines.next_line().await? {
             Some(line) => line,
-            // PROTOCOL.md: stdin EOF is the shutdown signal; exit non-zero
-            // since it wasn't a `browser.close`-initiated shutdown.
             None => {
                 tracing::info!("stdin closed, exiting");
                 anyhow::bail!("stdin closed before browser.close");

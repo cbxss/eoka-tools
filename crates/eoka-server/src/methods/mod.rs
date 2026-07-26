@@ -11,8 +11,6 @@ pub(crate) fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, Serv
     serde_json::from_value(params).map_err(|e| ServerError::invalid_params(e.to_string()))
 }
 
-/// Params shape shared by every method that takes only a `pageId`
-/// (`browser.close_tab`, `page.text`, `page.content`, `page.close`, ...).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PageIdParams {

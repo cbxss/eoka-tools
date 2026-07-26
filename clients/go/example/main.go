@@ -1,11 +1,3 @@
-// Command example demonstrates the eoka Go client end-to-end against a real
-// eoka-server binary and a real Chrome instance.
-//
-// This is NOT run as part of `go test` — it requires an eoka-server binary
-// (see EOKA_SERVER_BIN / eoka.WithServerPath in the package docs) and a
-// Chrome/Chromium install on PATH for eoka-server to launch. Run it with:
-//
-//	go run ./example
 package main
 
 import (
@@ -51,9 +43,6 @@ func run() error {
 	}
 	fmt.Printf("page title: %s\n", title)
 
-	// example.com has no form, but this shows the intended shape: fill a
-	// field and click a button by selector. Swap in real selectors for
-	// whatever page you're driving.
 	if ok, err := page.Exists(ctx, "input#user"); err == nil && ok {
 		if err := page.Fill(ctx, "input#user", "bob"); err != nil {
 			return fmt.Errorf("fill: %w", err)

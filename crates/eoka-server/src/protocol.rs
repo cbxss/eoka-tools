@@ -1,10 +1,6 @@
-//! Wire types for the eoka-server NDJSON protocol. See `PROTOCOL.md` at the
-//! workspace root for the full contract this module implements.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// One line of stdin, decoded per PROTOCOL.md's "Request" shape.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {
     pub id: Value,
@@ -13,7 +9,6 @@ pub struct Request {
     pub params: Value,
 }
 
-/// One line of stdout: exactly one of `result` / `error` is populated.
 #[derive(Debug, Serialize)]
 pub struct Response {
     id: Value,
@@ -50,8 +45,6 @@ struct ErrorBody {
     message: String,
 }
 
-/// Mirrors the error code table in PROTOCOL.md verbatim (variant names are
-/// serialized as-is, e.g. `ElementNotFound`).
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum ErrorCode {
     ElementNotFound,
@@ -65,7 +58,6 @@ pub enum ErrorCode {
     Internal,
 }
 
-/// Error carried through `dispatch` before being rendered into a `Response`.
 #[derive(Debug)]
 pub struct ServerError {
     pub code: ErrorCode,

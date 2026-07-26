@@ -59,9 +59,6 @@ pub async fn tabs(state: &AppState, _params: Value) -> Result<Value, ServerError
     Ok(json!({ "tabs": tabs }))
 }
 
-/// Shared by `browser.close_tab` and `page.close`, which are the same
-/// underlying operation (`Browser::close_tab` + dropping the page from
-/// state) exposed under two names in PROTOCOL.md.
 pub(crate) async fn close_tab_impl(state: &mut AppState, page_id: &str) -> Result<(), ServerError> {
     state.page(page_id)?;
     let browser = state.browser()?;

@@ -1,6 +1,3 @@
-//! In-process state for a single `eoka-server` session: at most one
-//! `Browser`, plus the pages opened on it, keyed by `Page::target_id()`.
-
 use std::collections::HashMap;
 
 use eoka::{Browser, Page};
@@ -31,10 +28,6 @@ impl AppState {
         self.browser.is_some()
     }
 
-    /// Every method other than `browser.launch` goes through this to reach
-    /// the browser. PROTOCOL.md's error table has no dedicated "not
-    /// launched" code, so an unlaunched browser is deliberately folded into
-    /// `Internal`.
     pub fn browser(&self) -> Result<&Browser, ServerError> {
         self.browser
             .as_ref()
@@ -59,10 +52,6 @@ impl AppState {
         self.pages.clear();
     }
 
-    /// Set by `browser.close` once the browser has actually shut down. The
-    /// transport loop checks this after every dispatched request instead of
-    /// string-matching on the method name, so any future terminal method
-    /// gets the same exit behavior for free.
     pub fn mark_shutdown(&mut self) {
         self.shutdown = true;
     }

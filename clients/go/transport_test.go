@@ -64,7 +64,7 @@ func TestTransportContextTimeout(t *testing.T) {
 	t.Cleanup(func() { close(block) })
 
 	tr := newFakeTransport(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
-		<-block // never respond before the test's context deadline
+		<-block
 		return map[string]any{}, nil
 	})
 
@@ -85,7 +85,7 @@ func TestTransportContextTimeout(t *testing.T) {
 }
 
 func TestTransportLargePayload(t *testing.T) {
-	const size = 200 * 1024 // well over bufio.Scanner's default 64KB max token size
+	const size = 200 * 1024
 	want := strings.Repeat("eoka-html-payload-", size/18+1)[:size]
 
 	tr := newFakeTransport(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
