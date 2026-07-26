@@ -11,7 +11,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   parse:
@@ -53,6 +53,8 @@ jobs:
             asset: eoka-server-windows-amd64.exe
             ext: .exe
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
