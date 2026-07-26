@@ -1,0 +1,162 @@
+package eoka
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"time"
+)
+
+const closeTimeout = 5 * time.Second
+
+var ErrServerBinaryNotFound = errors.New("eoka: eoka-server binary not found (set EOKA_SERVER_BIN, pass eoka.WithServerPath, or add eoka-server to PATH)")
+
+type Browser struct {
+	cmd *exec.Cmd
+	t   *transport
+}
+
+type TabInfo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type options struct {
+	headless   bool
+	serverPath string
+	stderr     io.Writer
+}
+
+type Option func(*options)
+
+func WithHeadless(headless bool) Option {
+	return func(o *options) { o.headless = headless }
+}
+
+func WithVisible() Option {
+	return WithHeadless(false)
+}
+
+func WithServerPath(path string) Option {
+	return func(o *options) { o.serverPath = path }
+}
+
+func WithStderr(w io.Writer) Option {
+	return func(o *options) { o.stderr = w }
+}
+
+func resolveServerPath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	if p := os.Getenv("EOKA_SERVER_BIN"); p != "" {
+		return p, nil
+	}
+	if p, err := exec.LookPath("eoka-server"); err == nil {
+		return p, nil
+	}
+	return "", ErrServerBinaryNotFound
+}
+
+func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
+	o := options{headless: true, stderr: io.Discard}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	binPath, err := resolveServerPath(o.serverPath)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(binPath)
+	cmd.Stderr = o.stderr
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("eoka: creating stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("eoka: creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("eoka: starting %s: %w", binPath, err)
+	}
+
+	t := newTransport(stdin, stdout)
+	go t.readLoop()
+
+	b := &Browser{cmd: cmd, t: t}
+
+	if err := t.call(ctx, "browser.launch", map[string]any{"headless": o.headless}, nil); err != nil {
+		t.shutdown()
+		b.killProcess()
+		_ = cmd.Wait()
+		return nil, err
+	}
+
+	return b, nil
+}
+
+func (b *Browser) NewPage(ctx context.Context, url string) (*Page, error) {
+	var urlParam any
+	if url != "" {
+		urlParam = url
+	}
+
+	var res struct {
+		PageID string `json:"pageId"`
+	}
+	if err := b.t.call(ctx, "browser.new_page", map[string]any{"url": urlParam}, &res); err != nil {
+		return nil, err
+	}
+	return &Page{id: res.PageID, b: b}, nil
+}
+
+func (b *Browser) Tabs(ctx context.Context) ([]TabInfo, error) {
+	var res struct {
+		Tabs []TabInfo `json:"tabs"`
+	}
+	err := b.t.call(ctx, "browser.tabs", map[string]any{}, &res)
+	return res.Tabs, err
+}
+
+func (b *Browser) CloseTab(ctx context.Context, pageID string) error {
+	return b.t.call(ctx, "browser.close_tab", map[string]any{"pageId": pageID}, nil)
+}
+
+func (b *Browser) Close(ctx context.Context) error {
+	callErr := b.t.call(ctx, "browser.close", map[string]any{}, nil)
+	t := time.NewTimer(closeTimeout)
+	defer t.Stop()
+
+	done := make(chan error, 1)
+	go func() { done <- b.cmd.Wait() }()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		b.killProcess()
+		<-done
+		if callErr == nil {
+			callErr = ctx.Err()
+		}
+	case <-t.C:
+		b.killProcess()
+		<-done
+	}
+
+	return callErr
+}
+
+func (b *Browser) killProcess() {
+	if b.cmd.Process != nil {
+		_ = b.cmd.Process.Kill()
+	}
+}
