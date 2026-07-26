@@ -1,0 +1,108 @@
+name: Release eoka-server
+
+on:
+  push:
+    tags:
+      - "eoka-server-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. eoka-server-v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  parse:
+    name: Parse tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.parse.outputs.tag }}
+    steps:
+      - id: parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#eoka-server-v}"
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: parse
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset: eoka-server-linux-amd64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            asset: eoka-server-darwin-amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset: eoka-server-darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset: eoka-server-windows-amd64.exe
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-eoka-server
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }} -p eoka-server
+
+      - name: Stage asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/eoka-server${{ matrix.ext }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [parse, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > checksums.txt
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.parse.outputs.tag }}
+          name: eoka-server v${{ needs.parse.outputs.version }}
+          generate_release_notes: true
+          files: dist/*
