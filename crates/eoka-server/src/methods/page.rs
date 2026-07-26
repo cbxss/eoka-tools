@@ -81,6 +81,13 @@ struct PressKeyParams {
     key: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreStateParams {
+    page_id: String,
+    state: eoka::BrowserState,
+}
+
 pub async fn goto(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: GotoParams = parse_params(params)?;
     state.page(&params.page_id)?.goto(&params.url).await?;
@@ -211,6 +218,23 @@ pub async fn evaluate(state: &AppState, params: Value) -> Result<Value, ServerEr
 pub async fn execute(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: JsParams = parse_params(params)?;
     state.page(&params.page_id)?.execute(&params.js).await?;
+    Ok(json!({}))
+}
+
+pub async fn capture_state(state: &AppState, params: Value) -> Result<Value, ServerError> {
+    let params: PageIdParams = parse_params(params)?;
+    let state = state.page(&params.page_id)?.capture_state().await?;
+    let state =
+        serde_json::to_value(state).map_err(|error| ServerError::internal(error.to_string()))?;
+    Ok(single("state", state))
+}
+
+pub async fn restore_state(state: &AppState, params: Value) -> Result<Value, ServerError> {
+    let params: RestoreStateParams = parse_params(params)?;
+    state
+        .page(&params.page_id)?
+        .restore_state(&params.state)
+        .await?;
     Ok(json!({}))
 }
 

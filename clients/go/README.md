@@ -27,7 +27,7 @@ locates the binary in this order:
 2. The `EOKA_SERVER_BIN` environment variable, if set.
 3. `eoka-server` on `PATH`.
 4. A prebuilt binary downloaded from this repo's GitHub Releases
-   (`eoka-server-v0.1.0`), cached under `os.UserCacheDir()/eoka/` and
+   (`eoka-server-v0.1.1`), cached under `os.UserCacheDir()/eoka/` and
    verified against the release's published sha256 checksums before use.
    Supported platforms: linux/amd64, darwin/amd64, darwin/arm64,
    windows/amd64. Pass `eoka.WithNoAutoDownload()` to disable this and get
@@ -63,6 +63,11 @@ if err := page.Click(ctx, "#submit"); err != nil {
 text, err := page.Text(ctx)
 png, err := page.Screenshot(ctx)
 ```
+
+`CaptureState` and `RestoreState` preserve a complete authenticated browser
+session. They include CDP cookies (including HttpOnly cookies), local storage,
+session storage, the user agent, and the current URL. The SDK returns the
+typed state; applications should persist it with owner-only permissions.
 
 See [`example/main.go`](example/main.go) for a full runnable program
 (`go run ./example`) — it requires a real `eoka-server` binary and Chrome,

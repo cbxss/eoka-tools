@@ -13,6 +13,25 @@ type Page struct {
 	b  *Browser
 }
 
+type SessionCookie struct {
+	Name     string   `json:"name"`
+	Value    string   `json:"value"`
+	Domain   string   `json:"domain"`
+	Path     string   `json:"path"`
+	Secure   bool     `json:"secure"`
+	HTTPOnly bool     `json:"http_only"`
+	SameSite *string  `json:"same_site"`
+	Expires  *float64 `json:"expires"`
+}
+
+type BrowserState struct {
+	Cookies        []SessionCookie   `json:"cookies"`
+	LocalStorage   map[string]string `json:"localStorage"`
+	SessionStorage map[string]string `json:"sessionStorage"`
+	UserAgent      string            `json:"userAgent"`
+	URL            string            `json:"url"`
+}
+
 func (p *Page) ID() string { return p.id }
 
 func (p *Page) call(ctx context.Context, method string, params map[string]any, result any) error {
@@ -145,6 +164,18 @@ func EvaluateAs[T any](ctx context.Context, page *Page, js string) (T, error) {
 
 func (p *Page) Execute(ctx context.Context, js string) error {
 	return p.call(ctx, "page.execute", map[string]any{"js": js}, nil)
+}
+
+func (p *Page) CaptureState(ctx context.Context) (BrowserState, error) {
+	var res struct {
+		State BrowserState `json:"state"`
+	}
+	err := p.call(ctx, "page.capture_state", nil, &res)
+	return res.State, err
+}
+
+func (p *Page) RestoreState(ctx context.Context, state BrowserState) error {
+	return p.call(ctx, "page.restore_state", map[string]any{"state": state}, nil)
 }
 
 func (p *Page) Screenshot(ctx context.Context) ([]byte, error) {

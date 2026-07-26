@@ -117,6 +117,8 @@ field. Element handles never cross the wire — everything is
 | `page.wait_for_text` | `{"pageId", "text", "timeoutMs"}` | `{}` |
 | `page.evaluate` | `{"pageId", "js"}` | `{"result": <any JSON value>}` |
 | `page.execute` | `{"pageId", "js"}` | `{}` |
+| `page.capture_state` | `{"pageId"}` | `{"state": {"cookies", "localStorage", "sessionStorage", "userAgent", "url"}}` |
+| `page.restore_state` | `{"pageId", "state": {"cookies", "localStorage", "sessionStorage", "userAgent", "url"}}` | `{}` — restores all cookies, including HttpOnly cookies, then reloads `state.url` |
 | `page.screenshot` | `{"pageId"}` | `{"dataBase64": string}` (PNG) |
 | `page.select` | `{"pageId", "selector", "value"}` | `{}` |
 | `page.hover` | `{"pageId", "selector"}` | `{}` |

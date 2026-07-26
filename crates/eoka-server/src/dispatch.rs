@@ -34,6 +34,8 @@ pub async fn dispatch(
         "page.wait_for_text" => page::wait_for_text(state, params).await,
         "page.evaluate" => page::evaluate(state, params).await,
         "page.execute" => page::execute(state, params).await,
+        "page.capture_state" => page::capture_state(state, params).await,
+        "page.restore_state" => page::restore_state(state, params).await,
         "page.screenshot" => page::screenshot(state, params).await,
         "page.select" => page::select(state, params).await,
         "page.hover" => page::hover(state, params).await,
