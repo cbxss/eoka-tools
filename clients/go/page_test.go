@@ -158,6 +158,43 @@ func TestPageEvaluate(t *testing.T) {
 	}
 }
 
+func TestPageState(t *testing.T) {
+	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
+		switch method {
+		case "page.capture_state":
+			return map[string]any{"state": map[string]any{
+				"cookies": []map[string]any{{
+					"name": "session", "value": "secret", "domain": ".example.com", "path": "/", "secure": true, "http_only": true,
+				}},
+				"localStorage":   map[string]string{"token": "value"},
+				"sessionStorage": map[string]string{"tab": "value"},
+				"userAgent":      "Mozilla/5.0",
+				"url":            "https://example.com/account",
+			}}, nil
+		case "page.restore_state":
+			var p struct {
+				State BrowserState `json:"state"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, &rpcError{Code: ErrCodeInvalidParams, Message: err.Error()}
+			}
+			if len(p.State.Cookies) != 1 || !p.State.Cookies[0].HTTPOnly || p.State.URL != "https://example.com/account" {
+				return nil, &rpcError{Code: ErrCodeInvalidParams, Message: "invalid state"}
+			}
+			return map[string]any{}, nil
+		}
+		return nil, &rpcError{Code: ErrCodeUnknownMethod, Message: method}
+	})
+
+	state, err := page.CaptureState(context.Background())
+	if err != nil || !state.Cookies[0].HTTPOnly || state.LocalStorage["token"] != "value" {
+		t.Fatalf("CaptureState: %#v, %v", state, err)
+	}
+	if err := page.RestoreState(context.Background(), state); err != nil {
+		t.Fatalf("RestoreState: %v", err)
+	}
+}
+
 func TestPageScreenshot(t *testing.T) {
 	want := []byte("\x89PNGfake-image-bytes")
 	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {

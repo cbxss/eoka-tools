@@ -13,11 +13,12 @@ import (
 	"strings"
 )
 
-const serverReleaseVersion = "0.1.0"
+const serverReleaseVersion = "0.1.1"
 
 const defaultReleaseBaseURL = "https://github.com/shrimp-software/eoka-tools/releases/download"
 
 var releaseBaseURL = defaultReleaseBaseURL
+var userCacheDir = os.UserCacheDir
 
 func assetSuffixFor(goos, goarch string) (string, error) {
 	switch goos {
@@ -78,7 +79,7 @@ func ensureServerBinary(ctx context.Context) (string, error) {
 	}
 	asset := "eoka-server-" + suffix
 
-	cacheDir, err := os.UserCacheDir()
+	cacheDir, err := userCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("eoka: locating user cache dir: %w", err)
 	}

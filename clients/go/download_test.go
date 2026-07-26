@@ -80,6 +80,13 @@ func withFakeReleaseServer(t *testing.T, srv *httptest.Server) {
 	t.Cleanup(func() { releaseBaseURL = prev })
 }
 
+func withCacheDir(t *testing.T, path string) {
+	t.Helper()
+	previous := userCacheDir
+	userCacheDir = func() (string, error) { return path, nil }
+	t.Cleanup(func() { userCacheDir = previous })
+}
+
 func TestEnsureServerBinaryDownloadsAndCaches(t *testing.T) {
 	suffix, err := assetSuffixFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -90,7 +97,7 @@ func TestEnsureServerBinaryDownloadsAndCaches(t *testing.T) {
 
 	srv, hits := newFakeReleaseServer(t, assetName, body)
 	withFakeReleaseServer(t, srv)
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	withCacheDir(t, t.TempDir())
 
 	ctx := context.Background()
 
@@ -148,13 +155,13 @@ func TestEnsureServerBinaryChecksumMismatch(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	withFakeReleaseServer(t, srv)
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	withCacheDir(t, t.TempDir())
 
 	if _, err := ensureServerBinary(context.Background()); err == nil {
 		t.Fatal("expected checksum mismatch error")
 	}
 
-	cacheDir, err := os.UserCacheDir()
+	cacheDir, err := userCacheDir()
 	if err != nil {
 		t.Fatalf("UserCacheDir: %v", err)
 	}

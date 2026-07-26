@@ -1,6 +1,6 @@
 [package]
 name = "eoka-server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Sidecar process exposing eoka browser automation over newline-delimited JSON-RPC (see PROTOCOL.md)"
@@ -15,7 +15,7 @@ name = "eoka-server"
 path = "src/main.rs"
 
 [dependencies]
-eoka = "0.5"
+eoka = "0.5.1"
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -147,6 +147,18 @@ func (p *Page) Execute(ctx context.Context, js string) error {
 	return p.call(ctx, "page.execute", map[string]any{"js": js}, nil)
 }
 
+func (p *Page) CaptureState(ctx context.Context) (BrowserState, error) {
+	var res struct {
+		State BrowserState `json:"state"`
+	}
+	err := p.call(ctx, "page.capture_state", nil, &res)
+	return res.State, err
+}
+
+func (p *Page) RestoreState(ctx context.Context, state BrowserState) error {
+	return p.call(ctx, "page.restore_state", map[string]any{"state": state}, nil)
+}
+
 func (p *Page) Screenshot(ctx context.Context) ([]byte, error) {
 	var res struct {
 		DataBase64 string `json:"dataBase64"`
