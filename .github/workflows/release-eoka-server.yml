@@ -32,7 +32,7 @@ jobs:
             echo "tag=$TAG"
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  build-hosted:
     name: Build ${{ matrix.target }}
     needs: parse
     strategy:
@@ -42,12 +42,6 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             asset: eoka-server-linux-amd64
-          - target: x86_64-apple-darwin
-            os: [self-hosted, macOS, ARM64]
-            asset: eoka-server-darwin-amd64
-          - target: aarch64-apple-darwin
-            os: [self-hosted, macOS, ARM64]
-            asset: eoka-server-darwin-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             asset: eoka-server-windows-amd64.exe
@@ -83,9 +77,54 @@ jobs:
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
+  build-macos:
+    name: Build ${{ matrix.target }}
+    needs: parse
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            asset: eoka-server-darwin-amd64
+          - target: aarch64-apple-darwin
+            asset: eoka-server-darwin-arm64
+    # Keep macOS releases on the isolated ephemeral Tart runner pool.
+    runs-on:
+      group: mac-pool
+      labels: ci-mac
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: ${{ matrix.target }}-eoka-server
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }} -p eoka-server
+
+      - name: Stage asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/eoka-server" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6c75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [parse, build]
+    needs: [parse, build-hosted, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
