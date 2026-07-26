@@ -2,7 +2,7 @@
 
 AI agent interaction layer for browser automation. Rust library + MCP server.
 
-Part of the [eoka-tools](https://github.com/cbxss/eoka-tools) workspace.
+Part of the [eoka-tools](https://github.com/shrimp-software/eoka-tools) workspace.
 
 ## Quick Start
 

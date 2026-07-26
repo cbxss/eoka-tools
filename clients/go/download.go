@@ -15,7 +15,7 @@ import (
 
 const serverReleaseVersion = "0.1.0"
 
-const defaultReleaseBaseURL = "https://github.com/cbxss/eoka-tools/releases/download"
+const defaultReleaseBaseURL = "https://github.com/shrimp-software/eoka-tools/releases/download"
 
 var releaseBaseURL = defaultReleaseBaseURL
 

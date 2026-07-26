@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	eoka "github.com/cbxss/eoka-tools/clients/go"
+	eoka "github.com/shrimp-software/eoka-tools/clients/go"
 )
 
 func main() {

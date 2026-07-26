@@ -9,13 +9,13 @@ newline-delimited JSON on stdin/stdout, per the contract in
 ## Install
 
 ```
-go get github.com/cbxss/eoka-tools/clients/go
+go get github.com/shrimp-software/eoka-tools/clients/go
 ```
 
 Import it as `eoka`:
 
 ```go
-import eoka "github.com/cbxss/eoka-tools/clients/go"
+import eoka "github.com/shrimp-software/eoka-tools/clients/go"
 ```
 
 ## Prerequisites
