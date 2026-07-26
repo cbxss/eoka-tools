@@ -20,15 +20,22 @@ import eoka "github.com/cbxss/eoka-tools/clients/go"
 
 ## Prerequisites
 
-You need an `eoka-server` binary (built from `crates/eoka-server` in this
-repo) and a Chrome/Chromium install available to it. The client locates the
-binary in this order:
+You need a Chrome/Chromium install and an `eoka-server` binary. The client
+locates the binary in this order:
 
 1. `eoka.WithServerPath("/path/to/eoka-server")` passed to `Launch`, if given.
 2. The `EOKA_SERVER_BIN` environment variable, if set.
 3. `eoka-server` on `PATH`.
+4. A prebuilt binary downloaded from this repo's GitHub Releases
+   (`eoka-server-v0.1.0`), cached under `os.UserCacheDir()/eoka/` and
+   verified against the release's published sha256 checksums before use.
+   Supported platforms: linux/amd64, darwin/amd64, darwin/arm64,
+   windows/amd64. Pass `eoka.WithNoAutoDownload()` to disable this and get
+   `eoka.ErrServerBinaryNotFound` instead if steps 1–3 don't resolve.
 
-If none resolve, `Launch` returns `eoka.ErrServerBinaryNotFound`.
+For any other platform, or to build from source, run
+`cargo build -p eoka-server --release` from this repo and point at the
+resulting binary via step 1 or 2 above.
 
 ## Usage
 

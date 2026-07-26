@@ -26,9 +26,10 @@ type TabInfo struct {
 }
 
 type options struct {
-	headless   bool
-	serverPath string
-	stderr     io.Writer
+	headless       bool
+	serverPath     string
+	stderr         io.Writer
+	noAutoDownload bool
 }
 
 type Option func(*options)
@@ -49,7 +50,11 @@ func WithStderr(w io.Writer) Option {
 	return func(o *options) { o.stderr = w }
 }
 
-func resolveServerPath(explicit string) (string, error) {
+func WithNoAutoDownload() Option {
+	return func(o *options) { o.noAutoDownload = true }
+}
+
+func resolveServerPath(ctx context.Context, explicit string, allowDownload bool) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
@@ -59,7 +64,10 @@ func resolveServerPath(explicit string) (string, error) {
 	if p, err := exec.LookPath("eoka-server"); err == nil {
 		return p, nil
 	}
-	return "", ErrServerBinaryNotFound
+	if !allowDownload {
+		return "", ErrServerBinaryNotFound
+	}
+	return ensureServerBinary(ctx)
 }
 
 func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
@@ -68,7 +76,7 @@ func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
 		opt(&o)
 	}
 
-	binPath, err := resolveServerPath(o.serverPath)
+	binPath, err := resolveServerPath(ctx, o.serverPath, !o.noAutoDownload)
 	if err != nil {
 		return nil, err
 	}
