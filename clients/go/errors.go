@@ -36,34 +36,9 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("eoka: %s: %s", e.Code, e.Message)
 }
 
-// IsElementNotFound reports whether err is an *Error with Code ElementNotFound.
-func IsElementNotFound(err error) bool { return hasCode(err, ErrCodeElementNotFound) }
-
-// IsElementNotVisible reports whether err is an *Error with Code ElementNotVisible.
-func IsElementNotVisible(err error) bool { return hasCode(err, ErrCodeElementNotVisible) }
-
-// IsTimeout reports whether err is an *Error with Code Timeout.
-func IsTimeout(err error) bool { return hasCode(err, ErrCodeTimeout) }
-
-// IsRetryExhausted reports whether err is an *Error with Code RetryExhausted.
-func IsRetryExhausted(err error) bool { return hasCode(err, ErrCodeRetryExhausted) }
-
-// IsCdpError reports whether err is an *Error with Code Cdp.
-func IsCdpError(err error) bool { return hasCode(err, ErrCodeCdp) }
-
-// IsInvalidPage reports whether err is an *Error with Code InvalidPage.
-func IsInvalidPage(err error) bool { return hasCode(err, ErrCodeInvalidPage) }
-
-// IsInvalidParams reports whether err is an *Error with Code InvalidParams.
-func IsInvalidParams(err error) bool { return hasCode(err, ErrCodeInvalidParams) }
-
-// IsUnknownMethod reports whether err is an *Error with Code UnknownMethod.
-func IsUnknownMethod(err error) bool { return hasCode(err, ErrCodeUnknownMethod) }
-
-// IsInternalError reports whether err is an *Error with Code Internal.
-func IsInternalError(err error) bool { return hasCode(err, ErrCodeInternal) }
-
-func hasCode(err error, code string) bool {
+// HasCode reports whether err is an *Error with the given Code. Compare
+// against the ErrCode* constants, e.g. HasCode(err, eoka.ErrCodeElementNotFound).
+func HasCode(err error, code string) bool {
 	var e *Error
 	if errors.As(err, &e) {
 		return e.Code == code

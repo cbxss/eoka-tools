@@ -16,6 +16,14 @@ enum ParsedLine {
 }
 
 fn parse_line(line: &str) -> ParsedLine {
+    // The happy path parses straight into `Request`, no intermediate `Value`
+    // or clone. Only on failure do we re-parse into a generic `Value` (the
+    // rare/error path) to try to recover an `id` for the error response.
+    let request_err = match serde_json::from_str::<Request>(line) {
+        Ok(req) => return ParsedLine::Request(req),
+        Err(e) => e,
+    };
+
     let value: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
@@ -23,18 +31,16 @@ fn parse_line(line: &str) -> ParsedLine {
             return ParsedLine::Skip;
         }
     };
-    match serde_json::from_value::<Request>(value.clone()) {
-        Ok(req) => ParsedLine::Request(req),
-        Err(e) => match value.get("id").cloned() {
-            Some(id) => ParsedLine::Malformed {
-                id,
-                error: ServerError::invalid_params(e.to_string()),
-            },
-            None => {
-                tracing::warn!(error = %e, line, "request has no id, skipping");
-                ParsedLine::Skip
-            }
+
+    match value.get("id").cloned() {
+        Some(id) => ParsedLine::Malformed {
+            id,
+            error: ServerError::invalid_params(request_err.to_string()),
         },
+        None => {
+            tracing::warn!(error = %request_err, line, "request has no id, skipping");
+            ParsedLine::Skip
+        }
     }
 }
 
@@ -46,7 +52,7 @@ async fn write_response(stdout: &mut io::Stdout, response: &Response) -> anyhow:
     Ok(())
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -81,16 +87,14 @@ async fn main() -> anyhow::Result<()> {
             ParsedLine::Request(req) => req,
         };
 
-        let is_close = request.method == "browser.close";
         let response = match dispatch::dispatch(&mut state, &request.method, request.params).await {
             Ok(result) => Response::ok(request.id, result),
             Err(error) => Response::err(request.id, error),
         };
-        let succeeded = !response.is_error();
 
         write_response(&mut stdout, &response).await?;
 
-        if is_close && succeeded {
+        if state.should_shutdown() {
             break;
         }
     }

@@ -42,10 +42,6 @@ impl Response {
             }),
         }
     }
-
-    pub fn is_error(&self) -> bool {
-        self.error.is_some()
-    }
 }
 
 #[derive(Debug, Serialize)]

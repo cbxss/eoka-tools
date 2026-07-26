@@ -49,14 +49,15 @@ type transport struct {
 }
 
 // newTransport wires a transport to the given request writer and response
-// reader. The reader is buffered generously (bufio.Reader.ReadString has no
-// fixed max token size, unlike bufio.Scanner's default 64KB limit) so large
-// payloads such as page.content HTML or page.screenshot base64 PNGs are
-// never truncated.
+// reader. bufio.Reader.ReadString has no fixed max token size (unlike
+// bufio.Scanner's default 64KB limit), so large payloads such as
+// page.content HTML or page.screenshot base64 PNGs are never truncated
+// regardless of buffer size; the size below is just the per-read chunk,
+// sized up from bufio's 4KB default since those payloads are common here.
 func newTransport(w io.WriteCloser, r io.Reader) *transport {
 	return &transport{
 		w:       w,
-		r:       bufio.NewReaderSize(r, 64*1024),
+		r:       bufio.NewReaderSize(r, 256*1024),
 		pending: make(map[int64]chan *rpcResponse),
 	}
 }

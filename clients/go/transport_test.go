@@ -51,11 +51,11 @@ func TestTransportErrorMapping(t *testing.T) {
 	if typed.Code != ErrCodeElementNotFound {
 		t.Fatalf("unexpected code: %s", typed.Code)
 	}
-	if !IsElementNotFound(err) {
-		t.Fatal("IsElementNotFound(err) = false, want true")
+	if !HasCode(err, ErrCodeElementNotFound) {
+		t.Fatal("HasCode(err, ErrCodeElementNotFound) = false, want true")
 	}
-	if IsTimeout(err) {
-		t.Fatal("IsTimeout(err) = true, want false")
+	if HasCode(err, ErrCodeTimeout) {
+		t.Fatal("HasCode(err, ErrCodeTimeout) = true, want false")
 	}
 }
 

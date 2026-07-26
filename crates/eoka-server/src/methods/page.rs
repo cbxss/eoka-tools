@@ -1,16 +1,20 @@
 use base64::Engine;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::browser::close_tab_impl;
-use super::parse_params;
+use super::{parse_params, PageIdParams};
 use crate::protocol::ServerError;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PageIdParams {
-    page_id: String,
+/// Builds a single-field JSON result object, moving `value` in directly
+/// instead of `json!({"key": value})`'s re-serialize-through-`to_value`
+/// behavior — avoids an extra deep copy of large payloads like page HTML or
+/// screenshot base64 data.
+fn single(key: &'static str, value: impl Into<Value>) -> Value {
+    let mut map = Map::with_capacity(1);
+    map.insert(key.to_string(), value.into());
+    Value::Object(map)
 }
 
 #[derive(Deserialize)]
@@ -76,14 +80,6 @@ struct JsParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SelectParams {
-    page_id: String,
-    selector: String,
-    value: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct PressKeyParams {
     page_id: String,
     key: String,
@@ -140,25 +136,25 @@ pub async fn type_into(state: &AppState, params: Value) -> Result<Value, ServerE
 pub async fn text(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: PageIdParams = parse_params(params)?;
     let text = state.page(&params.page_id)?.text().await?;
-    Ok(json!({ "text": text }))
+    Ok(single("text", text))
 }
 
 pub async fn content(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: PageIdParams = parse_params(params)?;
     let html = state.page(&params.page_id)?.content().await?;
-    Ok(json!({ "html": html }))
+    Ok(single("html", html))
 }
 
 pub async fn title(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: PageIdParams = parse_params(params)?;
     let title = state.page(&params.page_id)?.title().await?;
-    Ok(json!({ "title": title }))
+    Ok(single("title", title))
 }
 
 pub async fn url(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: PageIdParams = parse_params(params)?;
     let url = state.page(&params.page_id)?.url().await?;
-    Ok(json!({ "url": url }))
+    Ok(single("url", url))
 }
 
 pub async fn get_text(state: &AppState, params: Value) -> Result<Value, ServerError> {
@@ -166,7 +162,7 @@ pub async fn get_text(state: &AppState, params: Value) -> Result<Value, ServerEr
     let page = state.page(&params.page_id)?;
     let element = page.find(&params.selector).await?;
     let text = element.text().await?;
-    Ok(json!({ "text": text }))
+    Ok(single("text", text))
 }
 
 pub async fn get_attribute(state: &AppState, params: Value) -> Result<Value, ServerError> {
@@ -174,7 +170,7 @@ pub async fn get_attribute(state: &AppState, params: Value) -> Result<Value, Ser
     let page = state.page(&params.page_id)?;
     let element = page.find(&params.selector).await?;
     let value = element.get_attribute(&params.name).await?;
-    Ok(json!({ "value": value }))
+    Ok(single("value", value))
 }
 
 pub async fn exists(state: &AppState, params: Value) -> Result<Value, ServerError> {
@@ -213,7 +209,7 @@ pub async fn wait_for_text(state: &AppState, params: Value) -> Result<Value, Ser
 pub async fn evaluate(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: JsParams = parse_params(params)?;
     let result: Value = state.page(&params.page_id)?.evaluate(&params.js).await?;
-    Ok(json!({ "result": result }))
+    Ok(single("result", result))
 }
 
 pub async fn execute(state: &AppState, params: Value) -> Result<Value, ServerError> {
@@ -226,11 +222,11 @@ pub async fn screenshot(state: &AppState, params: Value) -> Result<Value, Server
     let params: PageIdParams = parse_params(params)?;
     let png = state.page(&params.page_id)?.screenshot().await?;
     let data_base64 = base64::engine::general_purpose::STANDARD.encode(png);
-    Ok(json!({ "dataBase64": data_base64 }))
+    Ok(single("dataBase64", data_base64))
 }
 
 pub async fn select(state: &AppState, params: Value) -> Result<Value, ServerError> {
-    let params: SelectParams = parse_params(params)?;
+    let params: FillParams = parse_params(params)?;
     state
         .page(&params.page_id)?
         .select(&params.selector, &params.value)

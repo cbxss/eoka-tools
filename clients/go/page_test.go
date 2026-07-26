@@ -179,7 +179,7 @@ func TestPageErrorPropagation(t *testing.T) {
 	})
 
 	err := page.Click(context.Background(), "#hidden")
-	if !IsElementNotVisible(err) {
+	if !HasCode(err, ErrCodeElementNotVisible) {
 		t.Fatalf("expected ElementNotVisible, got %v", err)
 	}
 }

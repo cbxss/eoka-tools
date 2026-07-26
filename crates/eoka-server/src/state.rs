@@ -11,6 +11,7 @@ use crate::protocol::ServerError;
 pub struct AppState {
     browser: Option<Browser>,
     pages: HashMap<String, Page>,
+    shutdown: bool,
 }
 
 impl AppState {
@@ -56,5 +57,17 @@ impl AppState {
 
     pub fn clear_pages(&mut self) {
         self.pages.clear();
+    }
+
+    /// Set by `browser.close` once the browser has actually shut down. The
+    /// transport loop checks this after every dispatched request instead of
+    /// string-matching on the method name, so any future terminal method
+    /// gets the same exit behavior for free.
+    pub fn mark_shutdown(&mut self) {
+        self.shutdown = true;
+    }
+
+    pub fn should_shutdown(&self) -> bool {
+        self.shutdown
     }
 }

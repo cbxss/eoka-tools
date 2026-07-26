@@ -70,7 +70,7 @@ func TestBrowserNewPageTabsCloseTab(t *testing.T) {
 	if err := b.CloseTab(ctx, "PAGE1"); err != nil {
 		t.Fatalf("CloseTab: %v", err)
 	}
-	if err := b.CloseTab(ctx, "NOPE"); !IsInvalidPage(err) {
+	if err := b.CloseTab(ctx, "NOPE"); !HasCode(err, ErrCodeInvalidPage) {
 		t.Fatalf("expected InvalidPage error, got %v", err)
 	}
 }

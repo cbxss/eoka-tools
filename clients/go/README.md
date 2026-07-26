@@ -70,7 +70,7 @@ matching PROTOCOL.md's error table (`ElementNotFound`, `ElementNotVisible`,
 
 ```go
 err := page.Click(ctx, "#missing")
-if eoka.IsElementNotFound(err) {
+if eoka.HasCode(err, eoka.ErrCodeElementNotFound) {
     // ...
 }
 

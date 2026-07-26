@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use eoka::Browser;
 
-use super::parse_params;
+use super::{parse_params, PageIdParams};
 use crate::protocol::ServerError;
 use crate::state::AppState;
 
@@ -59,12 +59,6 @@ pub async fn tabs(state: &AppState, _params: Value) -> Result<Value, ServerError
     Ok(json!({ "tabs": tabs }))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PageIdParams {
-    page_id: String,
-}
-
 /// Shared by `browser.close_tab` and `page.close`, which are the same
 /// underlying operation (`Browser::close_tab` + dropping the page from
 /// state) exposed under two names in PROTOCOL.md.
@@ -88,5 +82,6 @@ pub async fn close(state: &mut AppState, _params: Value) -> Result<Value, Server
         .ok_or_else(|| ServerError::internal("browser not launched"))?;
     state.clear_pages();
     browser.close().await?;
+    state.mark_shutdown();
     Ok(json!({}))
 }
