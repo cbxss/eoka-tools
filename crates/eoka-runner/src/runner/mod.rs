@@ -30,11 +30,19 @@ pub struct Runner {
 }
 
 impl Runner {
-    /// Create a new runner with browser config.
     pub async fn new(config: &BrowserConfig) -> Result<Self> {
+        let proxy = config
+            .proxy
+            .as_deref()
+            .map(eoka_proxy::parse)
+            .transpose()
+            .map_err(|error| crate::Error::Config(error.to_string()))?;
         let stealth = eoka::StealthConfig {
             headless: config.headless,
-            proxy: config.proxy.clone(),
+            proxy: proxy.as_ref().map(|proxy| proxy.server.clone()),
+            proxy_username: proxy.as_ref().and_then(|proxy| proxy.username.clone()),
+            proxy_password: proxy.as_ref().and_then(|proxy| proxy.password.clone()),
+            cdp_timeout: if proxy.is_some() { 90 } else { 30 },
             user_agent: config.user_agent.clone(),
             viewport_width: config.viewport.as_ref().map(|v| v.width).unwrap_or(1280),
             viewport_height: config.viewport.as_ref().map(|v| v.height).unwrap_or(720),
@@ -42,8 +50,9 @@ impl Runner {
         };
 
         debug!(
-            "Launching browser (headless: {}, proxy: {:?})",
-            config.headless, config.proxy
+            "Launching browser (headless: {}, proxy: {})",
+            config.headless,
+            proxy.is_some()
         );
         let browser = Browser::launch_with_config(stealth).await?;
         let page = browser.new_page("about:blank").await?;

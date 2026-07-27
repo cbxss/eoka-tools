@@ -400,13 +400,14 @@ dependencies = [
 
 [[package]]
 name = "eoka-agent"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64",
  "dirs",
  "eoka",
  "eoka-captcha",
+ "eoka-proxy",
  "regex",
  "reqwest",
  "rmcp",
@@ -430,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "base64",
@@ -438,6 +439,7 @@ dependencies = [
  "eoka",
  "eoka-agent",
  "eoka-captcha",
+ "eoka-proxy",
  "serde",
  "serde_json",
  "tokio",
@@ -458,13 +460,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "eoka-proxy"
+version = "0.1.0"
+dependencies = [
+ "percent-encoding",
+ "url",
+]
+
+[[package]]
 name = "eoka-runner"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "clap",
  "eoka",
  "eoka-email",
+ "eoka-proxy",
  "regex",
  "serde",
  "serde_json",
@@ -477,12 +488,13 @@ dependencies = [
 
 [[package]]
 name = "eoka-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64",
  "eoka",
  "eoka-captcha",
+ "eoka-proxy",
  "serde",
  "serde_json",
  "tokio",

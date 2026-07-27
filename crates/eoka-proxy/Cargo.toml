@@ -1,0 +1,13 @@
+[package]
+name = "eoka-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Proxy URL parsing for Eoka browser launchers"
+repository = "https://github.com/shrimp-software/eoka-tools"
+homepage = "https://github.com/shrimp-software/eoka-tools"
+authors = ["cbxss"]
+
+[dependencies]
+percent-encoding = "2"
+url = "2"

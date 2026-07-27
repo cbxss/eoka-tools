@@ -89,7 +89,7 @@ field. Element handles never cross the wire — everything is
 
 | method | params | result |
 |---|---|---|
-| `browser.launch` | `{"headless": bool}` (default `true` if omitted) | `{}` |
+| `browser.launch` | `{"headless": bool, "userAgent"?: string, "proxy"?: {"server": "socks5://host:port", "username"?: string, "password"?: string}}` | `{}` |
 | `browser.new_page` | `{"url": string \| null}` (navigates if given, else `about:blank`) | `{"pageId": string}` |
 | `browser.tabs` | `{}` | `{"tabs": [{"id": string, "title": string, "url": string}]}` |
 | `browser.close_tab` | `{"pageId": string}` | `{}` |

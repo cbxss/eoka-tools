@@ -37,7 +37,7 @@ jobs:
           UA="eoka-tools-publish (${{ github.repository }})"
 
           # Stable publish order: leaf deps first so dependents resolve.
-          for crate in captcha eoka-runner eoka-email eoka-agent eoka-cli; do
+          for crate in captcha eoka-proxy eoka-runner eoka-email eoka-agent eoka-cli; do
             manifest="crates/${crate}/Cargo.toml"
             [ -f "$manifest" ] || continue
 

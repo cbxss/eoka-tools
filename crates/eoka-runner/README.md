@@ -77,7 +77,7 @@ params:
 
 browser:
   headless: false
-  proxy: "http://user:pass@host:port"  # optional
+  proxy: "socks5://user:pass@host:port"  # optional
   user_agent: "Custom UA"               # optional
   viewport:                             # optional
     width: 1920
