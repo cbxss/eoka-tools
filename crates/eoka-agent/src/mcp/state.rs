@@ -46,55 +46,14 @@ impl BrowserState {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        // Parse proxy: EOKA_PROXY_FILE (one per line, random) > EOKA_PROXY (single)
-        // Format: host:port:username:password
-        let proxy_line = if let Ok(path) = std::env::var("EOKA_PROXY_FILE") {
-            match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    let lines: Vec<&str> = contents
-                        .lines()
-                        .map(|l| l.trim())
-                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                        .collect();
-                    if lines.is_empty() {
-                        eprintln!("[eoka-agent] proxy file is empty: {}", path);
-                        None
-                    } else {
-                        use std::time::SystemTime;
-                        let idx = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .map(|d| d.as_nanos() as usize % lines.len())
-                            .unwrap_or(0);
-                        Some(lines[idx].to_string())
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[eoka-agent] failed to read proxy file {}: {}", path, e);
-                    None
-                }
-            }
-        } else {
-            std::env::var("EOKA_PROXY").ok()
-        };
+        let proxy = parse_proxy_env()?
+            .map(|value| {
+                eoka_proxy::parse(&value).map_err(|error| eoka::Error::Launch(error.to_string()))
+            })
+            .transpose()?;
 
-        let (proxy, proxy_username, proxy_password) = if let Some(proxy_str) = proxy_line {
-            let parts: Vec<&str> = proxy_str.splitn(4, ':').collect();
-            if parts.len() == 4 {
-                (
-                    Some(format!("http://{}:{}", parts[0], parts[1])),
-                    Some(parts[2].to_string()),
-                    Some(parts[3].to_string()),
-                )
-            } else if parts.len() == 2 {
-                (
-                    Some(format!("http://{}:{}", parts[0], parts[1])),
-                    None,
-                    None,
-                )
-            } else {
-                eprintln!("[eoka-agent] invalid proxy format, expected host:port:user:pass");
-                (None, None, None)
-            }
+        let (proxy, proxy_username, proxy_password) = if let Some(proxy) = proxy {
+            (Some(proxy.server), proxy.username, proxy.password)
         } else {
             (None, None, None)
         };
@@ -103,7 +62,6 @@ impl BrowserState {
             eprintln!("[eoka-agent] using proxy: {}", p);
         }
 
-        // When using a proxy, increase CDP timeout (proxies are slower)
         let cdp_timeout = if proxy.is_some() { 90 } else { 30 };
 
         eprintln!(
@@ -225,5 +183,29 @@ impl BrowserState {
 
     pub async fn close(self) -> eoka::Result<()> {
         self.browser.close().await
+    }
+}
+
+fn parse_proxy_env() -> eoka::Result<Option<String>> {
+    if let Ok(path) = std::env::var("EOKA_PROXY_FILE") {
+        let contents = std::fs::read_to_string(path)?;
+        let lines: Vec<&str> = contents
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        if lines.is_empty() {
+            return Err(eoka::Error::Launch(
+                "proxy file does not contain a proxy".to_owned(),
+            ));
+        }
+        use std::time::SystemTime;
+        let index = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as usize % lines.len())
+            .unwrap_or(0);
+        Ok(Some(lines[index].to_owned()))
+    } else {
+        Ok(std::env::var("EOKA_PROXY").ok())
     }
 }

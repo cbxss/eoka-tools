@@ -311,7 +311,7 @@ Caveats:
 | Variable | Description |
 |----------|-------------|
 | `EOKA_HEADLESS` | `false` or `0` to show browser window |
-| `EOKA_PROXY` | Proxy: `host:port` or `host:port:user:pass` |
+| `EOKA_PROXY` | Proxy URL: `socks5://user:pass@host:port` or `http://user:pass@host:port`; legacy `host:port[:user:pass]` is supported |
 | `EOKA_PROXY_FILE` | File with proxies (one per line, random selection) |
 | `EOKA_PATCH_BINARY` | `true` to apply stealth binary patches |
 | `EOKA_CHROME_ARGS` | Extra Chrome flags, colon-separated (e.g. `--use-fake-ui-for-media-stream:--allow-insecure-localhost`) |

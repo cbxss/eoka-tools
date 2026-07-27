@@ -45,7 +45,6 @@ pub struct BrowserState {
 }
 
 impl BrowserState {
-    /// Launch a fresh Chrome.
     pub async fn launched(
         headless: bool,
         copy_profile_from: Option<&std::path::Path>,
@@ -55,17 +54,19 @@ impl BrowserState {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let proxy_line = parse_proxy_env();
+        let proxy = parse_proxy_env()?
+            .map(|value| {
+                eoka_proxy::parse(&value).map_err(|error| eoka::Error::Launch(error.to_string()))
+            })
+            .transpose()?;
 
-        let (proxy, proxy_username, proxy_password) = match proxy_line {
-            Some(proxy_str) => parse_proxy_string(&proxy_str),
+        let (proxy, proxy_username, proxy_password) = match proxy {
+            Some(proxy) => (Some(proxy.server), proxy.username, proxy.password),
             None => (None, None, None),
         };
 
         let cdp_timeout = if proxy.is_some() { 90 } else { 30 };
 
-        // EOKA_CHROME_ARGS: colon-separated extra Chrome flags
-        // e.g. EOKA_CHROME_ARGS="--use-fake-ui-for-media-stream:--allow-insecure-localhost"
         let mut extra_args: Vec<String> = std::env::var("EOKA_CHROME_ARGS")
             .unwrap_or_default()
             .split(':')
@@ -73,8 +74,6 @@ impl BrowserState {
             .map(|s| s.to_string())
             .collect();
 
-        // --from-profile: clone the user's profile to a tempdir, point Chrome at it.
-        // Chrome refuses two instances on the same dir, so we always copy.
         if let Some(src) = copy_profile_from {
             let dst = clone_profile_dir(src).map_err(eoka::Error::Io)?;
             extra_args.push(format!("--user-data-dir={}", dst.display()));
@@ -227,45 +226,26 @@ impl BrowserState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Proxy env parsing
-// ---------------------------------------------------------------------------
-
-fn parse_proxy_env() -> Option<String> {
+fn parse_proxy_env() -> eoka::Result<Option<String>> {
     if let Ok(path) = std::env::var("EOKA_PROXY_FILE") {
-        let contents = std::fs::read_to_string(&path).ok()?;
+        let contents = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = contents
             .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect();
         if lines.is_empty() {
-            return None;
+            return Err(eoka::Error::Launch(
+                "proxy file does not contain a proxy".to_owned(),
+            ));
         }
         use std::time::SystemTime;
         let idx = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as usize % lines.len())
             .unwrap_or(0);
-        Some(lines[idx].to_string())
+        Ok(Some(lines[idx].to_string()))
     } else {
-        std::env::var("EOKA_PROXY").ok()
-    }
-}
-
-fn parse_proxy_string(s: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let parts: Vec<&str> = s.splitn(4, ':').collect();
-    match parts.len() {
-        4 => (
-            Some(format!("http://{}:{}", parts[0], parts[1])),
-            Some(parts[2].to_string()),
-            Some(parts[3].to_string()),
-        ),
-        2 => (
-            Some(format!("http://{}:{}", parts[0], parts[1])),
-            None,
-            None,
-        ),
-        _ => (None, None, None),
+        Ok(std::env::var("EOKA_PROXY").ok())
     }
 }

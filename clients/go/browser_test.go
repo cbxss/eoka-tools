@@ -3,8 +3,39 @@ package eoka
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestLaunchParamsIncludeRedactedProxyFields(t *testing.T) {
+	params, err := (options{headless: true, proxy: "socks5://name%40example:pass%3Aword@127.0.0.1:1080"}).launchParams()
+	if err != nil {
+		t.Fatalf("launchParams: %v", err)
+	}
+	proxy, ok := params["proxy"].(map[string]any)
+	if !ok {
+		t.Fatalf("proxy params missing: %#v", params)
+	}
+	if got, want := proxy["server"], "socks5://127.0.0.1:1080"; got != want {
+		t.Fatalf("server = %v, want %v", got, want)
+	}
+	if got, want := proxy["username"], "name@example"; got != want {
+		t.Fatalf("username = %v, want %v", got, want)
+	}
+	if got, want := proxy["password"], "pass:word"; got != want {
+		t.Fatalf("password = %v, want %v", got, want)
+	}
+}
+
+func TestLaunchParamsRejectInvalidProxy(t *testing.T) {
+	_, err := (options{proxy: "https://127.0.0.1:1080"}).launchParams()
+	if err == nil {
+		t.Fatal("launchParams succeeded for an unsupported proxy")
+	}
+	if got := err.Error(); strings.Contains(got, "127.0.0.1") {
+		t.Fatalf("proxy error leaked input: %q", got)
+	}
+}
 
 func TestBrowserNewPageTabsCloseTab(t *testing.T) {
 	var lastNewPageURL any

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"time"
@@ -28,6 +30,7 @@ type TabInfo struct {
 type options struct {
 	headless       bool
 	userAgent      string
+	proxy          string
 	serverPath     string
 	stderr         io.Writer
 	noAutoDownload bool
@@ -39,10 +42,12 @@ func WithHeadless(headless bool) Option {
 	return func(o *options) { o.headless = headless }
 }
 
-// WithUserAgent starts the browser with a specific, coherent browser identity.
-// Use this when a persisted login session must retain the same fingerprint.
 func WithUserAgent(userAgent string) Option {
 	return func(o *options) { o.userAgent = userAgent }
+}
+
+func WithProxy(proxyURL string) Option {
+	return func(o *options) { o.proxy = proxyURL }
 }
 
 func WithVisible() Option {
@@ -82,6 +87,10 @@ func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	launchParams, err := o.launchParams()
+	if err != nil {
+		return nil, err
+	}
 
 	binPath, err := resolveServerPath(ctx, o.serverPath, !o.noAutoDownload)
 	if err != nil {
@@ -109,10 +118,6 @@ func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
 
 	b := &Browser{cmd: cmd, t: t}
 
-	launchParams := map[string]any{"headless": o.headless}
-	if o.userAgent != "" {
-		launchParams["userAgent"] = o.userAgent
-	}
 	if err := t.call(ctx, "browser.launch", launchParams, nil); err != nil {
 		t.shutdown()
 		b.killProcess()
@@ -121,6 +126,59 @@ func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
 	}
 
 	return b, nil
+}
+
+func (o options) launchParams() (map[string]any, error) {
+	params := map[string]any{"headless": o.headless}
+	if o.userAgent != "" {
+		params["userAgent"] = o.userAgent
+	}
+	if o.proxy == "" {
+		return params, nil
+	}
+	proxy, err := parseProxy(o.proxy)
+	if err != nil {
+		return nil, err
+	}
+	params["proxy"] = map[string]any{
+		"server":   proxy.server,
+		"username": proxy.username,
+		"password": proxy.password,
+	}
+	return params, nil
+}
+
+type proxyConfig struct {
+	server   string
+	username string
+	password string
+}
+
+func parseProxy(value string) (proxyConfig, error) {
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "socks5" && parsed.Scheme != "http") {
+		return proxyConfig{}, errors.New("eoka: proxy must use socks5:// or http://")
+	}
+	if parsed.Hostname() == "" || parsed.Port() == "" {
+		return proxyConfig{}, errors.New("eoka: proxy must include host and port")
+	}
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return proxyConfig{}, errors.New("eoka: proxy cannot include a path, query, or fragment")
+	}
+	username := ""
+	password := ""
+	if parsed.User != nil {
+		username = parsed.User.Username()
+		password, _ = parsed.User.Password()
+	}
+	if (username == "") != (password == "") {
+		return proxyConfig{}, errors.New("eoka: proxy credentials require both username and password")
+	}
+	return proxyConfig{
+		server:   parsed.Scheme + "://" + net.JoinHostPort(parsed.Hostname(), parsed.Port()),
+		username: username,
+		password: password,
+	}, nil
 }
 
 func (b *Browser) NewPage(ctx context.Context, url string) (*Page, error) {

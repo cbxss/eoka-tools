@@ -108,7 +108,6 @@ pub struct BrowserConfig {
     #[serde(default)]
     pub headless: bool,
 
-    /// Proxy URL (e.g., "http://user:pass@host:port").
     pub proxy: Option<String>,
 
     /// Custom user agent.
