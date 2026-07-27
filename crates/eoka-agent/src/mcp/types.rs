@@ -168,7 +168,7 @@ pub struct SolveCaptchaRequest {
     #[schemars(description = "Anti-captcha.com API key")]
     pub api_key: String,
     #[schemars(
-        description = "Captcha type: 'hcaptcha', 'recaptcha_v2', 'recaptcha_v3', or 'amazon_waf'"
+        description = "Captcha type: 'hcaptcha', 'recaptcha_v2', 'recaptcha_v2_enterprise', 'recaptcha_v3', or 'amazon_waf'"
     )]
     pub captcha_type: String,
     #[schemars(description = "Website/page URL")]
@@ -179,6 +179,14 @@ pub struct SolveCaptchaRequest {
     pub page_action: Option<String>,
     #[schemars(description = "Minimum score (for reCAPTCHA v3, default 0.3)")]
     pub min_score: Option<f32>,
+    #[schemars(
+        description = "Optional object passed to grecaptcha.enterprise.render for reCAPTCHA v2 Enterprise"
+    )]
+    pub enterprise_payload: Option<serde_json::Value>,
+    #[schemars(
+        description = "Optional reCAPTCHA script domain: www.google.com or www.recaptcha.net"
+    )]
+    pub api_domain: Option<String>,
     #[schemars(description = "AWS WAF iv value from window.gokuProps (required for amazon_waf)")]
     pub iv: Option<String>,
     #[schemars(

@@ -27,6 +27,7 @@ type TabInfo struct {
 
 type options struct {
 	headless       bool
+	userAgent      string
 	serverPath     string
 	stderr         io.Writer
 	noAutoDownload bool
@@ -36,6 +37,12 @@ type Option func(*options)
 
 func WithHeadless(headless bool) Option {
 	return func(o *options) { o.headless = headless }
+}
+
+// WithUserAgent starts the browser with a specific, coherent browser identity.
+// Use this when a persisted login session must retain the same fingerprint.
+func WithUserAgent(userAgent string) Option {
+	return func(o *options) { o.userAgent = userAgent }
 }
 
 func WithVisible() Option {
@@ -102,7 +109,11 @@ func Launch(ctx context.Context, opts ...Option) (*Browser, error) {
 
 	b := &Browser{cmd: cmd, t: t}
 
-	if err := t.call(ctx, "browser.launch", map[string]any{"headless": o.headless}, nil); err != nil {
+	launchParams := map[string]any{"headless": o.headless}
+	if o.userAgent != "" {
+		launchParams["userAgent"] = o.userAgent
+	}
+	if err := t.call(ctx, "browser.launch", launchParams, nil); err != nil {
 		t.shutdown()
 		b.killProcess()
 		_ = cmd.Wait()

@@ -172,23 +172,17 @@ pub async fn fill_with_retry(
     act_with_retry(tab, target_str, viewport_only, Action::Fill(text)).await
 }
 
-/// Wait for document.readyState to reach "interactive" or "complete".
+/// Give a just-navigated document a brief chance to install.
+///
+/// Do not poll `document.readyState` here. Some SPAs keep their document in a
+/// loading state while streaming or refreshing long-lived resources; probing
+/// it through CDP can then consume the full command timeout and block the
+/// daemon. Commands that need a usable element already resolve and retry their
+/// selector, which is the meaningful readiness condition.
 pub async fn wait_for_stable(page: &Page) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    let max_wait = std::time::Duration::from_secs(10);
-    loop {
-        let ready: String = page
-            .evaluate_sync("document.readyState || 'loading'")
-            .await
-            .unwrap_or_else(|_| "loading".to_string());
-        if ready == "interactive" || ready == "complete" {
-            return Ok(());
-        }
-        if start.elapsed() > max_wait {
-            return Err("Page did not reach interactive state within 10s".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    let _ = page;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
 }
 
 /// Get title without blocking on busy JS thread.

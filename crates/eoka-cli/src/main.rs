@@ -213,6 +213,8 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
         api_key,
         page_action,
         min_score,
+        enterprise_payload,
+        api_domain,
         iv,
         context,
         captcha_script,
@@ -231,6 +233,23 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
     let solution = match captcha_type.to_lowercase().as_str() {
         "hcaptcha" => solver.solve_hcaptcha(website_url, website_key).await,
         "recaptcha_v2" => solver.solve_recaptcha_v2(website_url, website_key).await,
+        "recaptcha_v2_enterprise" => {
+            let enterprise_payload = enterprise_payload
+                .as_deref()
+                .map(|payload| {
+                    serde_json::from_str(payload)
+                        .map_err(|error| format!("invalid --enterprise-payload JSON: {error}"))
+                })
+                .transpose()?;
+            solver
+                .solve_recaptcha_v2_enterprise(
+                    website_url,
+                    website_key,
+                    enterprise_payload,
+                    api_domain.as_deref(),
+                )
+                .await
+        }
         "recaptcha_v3" => solver.solve_recaptcha_v3(website_url, website_key, page_action.as_deref().unwrap_or("submit"), min_score.unwrap_or(0.3)).await,
         "amazon_waf" => solver.solve_amazon_waf(
             website_url, website_key,
@@ -238,7 +257,7 @@ async fn solve_captcha(action: &CaptchaAction) -> Result<serde_json::Value, Stri
             context.as_deref().ok_or("amazon_waf requires --context")?,
             captcha_script.as_deref(), challenge_script.as_deref(),
         ).await,
-        _ => return Err(format!("Unknown CAPTCHA type '{captcha_type}'. Use hcaptcha, recaptcha_v2, recaptcha_v3, or amazon_waf.")),
+        _ => return Err(format!("Unknown CAPTCHA type '{captcha_type}'. Use hcaptcha, recaptcha_v2, recaptcha_v2_enterprise, recaptcha_v3, or amazon_waf.")),
     }.map_err(|e| e.to_string())?;
     Ok(json!({ "token": solution.token(), "user_agent": solution.user_agent }))
 }
@@ -254,7 +273,7 @@ fn captcha_solution_token(value: &Value) -> Result<&str, String> {
 fn captcha_inject_kind_from_solve(captcha_type: &str) -> Result<&'static str, String> {
     match captcha_type.to_lowercase().as_str() {
         "hcaptcha" => Ok("hcaptcha"),
-        "recaptcha" | "recaptcha_v2" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
+        "recaptcha" | "recaptcha_v2" | "recaptcha_v2_enterprise" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
         other => Err(format!(
             "--inject is not supported for captcha type '{other}'. Use hcaptcha, recaptcha_v2, or recaptcha_v3."
         )),
@@ -1116,6 +1135,10 @@ mod tests {
         );
         assert_eq!(
             captcha_inject_kind_from_solve("recaptcha_v3").unwrap(),
+            "recaptcha"
+        );
+        assert_eq!(
+            captcha_inject_kind_from_solve("recaptcha_v2_enterprise").unwrap(),
             "recaptcha"
         );
         assert_eq!(

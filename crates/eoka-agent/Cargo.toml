@@ -1,6 +1,6 @@
 [package]
 name = "eoka-agent"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "MIT"
 description = "AI agent interaction layer for browser automation — MCP server, observe/act loop"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 eoka = "0.5"
-captcha = { package = "eoka-captcha", version = "0.1.0", path = "../captcha" }
+captcha = { package = "eoka-captcha", version = "0.1.1", path = "../captcha" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

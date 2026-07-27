@@ -12,6 +12,7 @@ use crate::state::AppState;
 struct LaunchParams {
     #[serde(default = "default_headless")]
     headless: bool,
+    user_agent: Option<String>,
 }
 
 fn default_headless() -> bool {
@@ -25,6 +26,7 @@ pub async fn launch(state: &mut AppState, params: Value) -> Result<Value, Server
     let params: LaunchParams = parse_params(params)?;
     let browser = Browser::launch_with(|config| {
         config.headless = params.headless;
+        config.user_agent = params.user_agent;
     })
     .await?;
     state.set_browser(browser);

@@ -4,13 +4,25 @@
     const created = [];
     const callbacks = [];
     const errors = [];
+    const deliveredCallbacks = window.__eokaCaptchaDeliveredCallbacks ||
+        (window.__eokaCaptchaDeliveredCallbacks = new Set());
 
     function wants(name) {
         return requested === 'auto' || requested === name;
     }
 
     function setValue(el, value) {
-        el.value = value;
+        const prototype = el instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : el instanceof HTMLInputElement
+                ? HTMLInputElement.prototype
+                : Object.getPrototypeOf(el);
+        const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+        if (setter) {
+            setter.call(el, value);
+        } else {
+            el.value = value;
+        }
         el.textContent = value;
         for (const eventName of ['input', 'change']) {
             el.dispatchEvent(new Event(eventName, { bubbles: true }));
@@ -49,6 +61,9 @@
     }
 
     function call(fn, path) {
+        const key = `${token}:${path}`;
+        if (deliveredCallbacks.has(key)) return;
+        deliveredCallbacks.add(key);
         try {
             fn(token);
             callbacks.push(path);
@@ -83,7 +98,11 @@
         if (seen.has(root)) return;
         seen.add(root);
 
-        for (const key of Object.keys(root)) {
+        const keys = new Set([
+            ...Object.keys(root),
+            ...Object.getOwnPropertyNames(root),
+        ]);
+        for (const key of keys) {
             let value;
             try {
                 value = root[key];
@@ -102,6 +121,18 @@
 
     if (wants('recaptcha') && window.___grecaptcha_cfg?.clients) {
         walkCallbacks(window.___grecaptcha_cfg.clients, '___grecaptcha_cfg.clients', new WeakSet(), 0);
+    }
+    if (wants('recaptcha')) {
+        for (const el of document.querySelectorAll('[data-callback]')) {
+            const expression = el.getAttribute('data-callback');
+            if (!expression) continue;
+            try {
+                const fn = Function(`return (${expression})`)();
+                if (typeof fn === 'function') call(fn, expression);
+            } catch (error) {
+                errors.push(`${expression}: ${error && error.message ? error.message : String(error)}`);
+            }
+        }
     }
     if (wants('hcaptcha') && window.___hcaptcha_cfg?.clients) {
         walkCallbacks(window.___hcaptcha_cfg.clients, '___hcaptcha_cfg.clients', new WeakSet(), 0);
