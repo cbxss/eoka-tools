@@ -27,7 +27,7 @@ locates the binary in this order:
 2. The `EOKA_SERVER_BIN` environment variable, if set.
 3. `eoka-server` on `PATH`.
 4. A prebuilt binary downloaded from this repo's GitHub Releases
-   (`eoka-server-v0.1.1`), cached under `os.UserCacheDir()/eoka/` and
+   (`eoka-server-v0.1.2`), cached under `os.UserCacheDir()/eoka/` and
    verified against the release's published sha256 checksums before use.
    Supported platforms: linux/amd64, darwin/amd64, darwin/arm64,
    windows/amd64. Pass `eoka.WithNoAutoDownload()` to disable this and get
