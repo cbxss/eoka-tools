@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 
 const API_BASE: &str = "https://api.anti-captcha.com";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const RETRY_ATTEMPTS: usize = 3;
+const SOLVE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug)]
 pub struct CaptchaError(String);
@@ -40,6 +43,17 @@ enum CaptchaTask {
         website_url: String,
         #[serde(rename = "websiteKey")]
         website_key: String,
+    },
+    #[serde(rename = "RecaptchaV2EnterpriseTaskProxyless")]
+    ReCaptchaV2Enterprise {
+        #[serde(rename = "websiteURL")]
+        website_url: String,
+        #[serde(rename = "websiteKey")]
+        website_key: String,
+        #[serde(rename = "enterprisePayload", skip_serializing_if = "Option::is_none")]
+        enterprise_payload: Option<Value>,
+        #[serde(rename = "apiDomain", skip_serializing_if = "Option::is_none")]
+        api_domain: Option<String>,
     },
     #[serde(rename = "RecaptchaV3TaskProxyless")]
     ReCaptchaV3 {
@@ -128,8 +142,15 @@ pub struct AntiCaptcha {
 }
 impl AntiCaptcha {
     pub fn new(api_key: impl Into<String>) -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         Self {
             client: reqwest::Client::builder()
+                .default_headers(headers)
+                .http1_only()
                 .connect_timeout(CONNECT_TIMEOUT)
                 .timeout(REQUEST_TIMEOUT)
                 .build()
@@ -150,6 +171,38 @@ impl AntiCaptcha {
         self.solve(CaptchaTask::ReCaptchaV2 {
             website_url: url.into(),
             website_key: key.into(),
+        })
+        .await
+    }
+
+    pub async fn solve_recaptcha_v2_enterprise(
+        &self,
+        url: &str,
+        key: &str,
+        enterprise_payload: Option<Value>,
+        api_domain: Option<&str>,
+    ) -> Result<CaptchaSolution> {
+        self.validate_page(url, key)?;
+        if enterprise_payload
+            .as_ref()
+            .is_some_and(|payload| !payload.is_object())
+        {
+            return Err(CaptchaError(
+                "enterprise payload must be a JSON object".into(),
+            ));
+        }
+        if let Some(api_domain) = api_domain {
+            if api_domain != "www.google.com" && api_domain != "www.recaptcha.net" {
+                return Err(CaptchaError(
+                    "api domain must be www.google.com or www.recaptcha.net".into(),
+                ));
+            }
+        }
+        self.solve(CaptchaTask::ReCaptchaV2Enterprise {
+            website_url: url.into(),
+            website_key: key.into(),
+            enterprise_payload,
+            api_domain: api_domain.map(str::to_owned),
         })
         .await
     }
@@ -208,17 +261,14 @@ impl AntiCaptcha {
 
     async fn solve(&self, task: CaptchaTask) -> Result<CaptchaSolution> {
         let response = self
-            .client
-            .post(format!("{API_BASE}/createTask"))
-            .json(&CreateTaskRequest {
-                client_key: self.api_key.clone(),
-                task,
-            })
-            .send()
-            .await
-            .map_err(|e| CaptchaError(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| CaptchaError(e.to_string()))?;
+            .post_json_with_retry(
+                "createTask",
+                &CreateTaskRequest {
+                    client_key: self.api_key.clone(),
+                    task,
+                },
+            )
+            .await?;
         let created: CreateTaskResponse = response
             .json()
             .await
@@ -233,20 +283,18 @@ impl AntiCaptcha {
         let task_id = created
             .task_id
             .ok_or_else(|| CaptchaError("createTask returned no task ID".into()))?;
-        for _ in 0..150 {
+        let deadline = tokio::time::Instant::now() + SOLVE_TIMEOUT;
+        loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
             let response = self
-                .client
-                .post(format!("{API_BASE}/getTaskResult"))
-                .json(&GetResultRequest {
-                    client_key: self.api_key.clone(),
-                    task_id,
-                })
-                .send()
-                .await
-                .map_err(|e| CaptchaError(e.to_string()))?
-                .error_for_status()
-                .map_err(|e| CaptchaError(e.to_string()))?;
+                .post_json_with_retry(
+                    "getTaskResult",
+                    &GetResultRequest {
+                        client_key: self.api_key.clone(),
+                        task_id,
+                    },
+                )
+                .await?;
             let result: GetResultResponse = response
                 .json()
                 .await
@@ -268,11 +316,46 @@ impl AntiCaptcha {
                     .then_some(solution)
                     .ok_or_else(|| CaptchaError("task returned an empty solution".into()));
             }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
         }
         Err(CaptchaError(
-            "CAPTCHA solving timed out after 5 minutes".into(),
+            "CAPTCHA solving timed out after 10 minutes".into(),
         ))
     }
+
+    async fn post_json_with_retry<T: Serialize + ?Sized>(
+        &self,
+        operation: &str,
+        body: &T,
+    ) -> Result<reqwest::Response> {
+        for attempt in 0..=RETRY_ATTEMPTS {
+            let result = self
+                .client
+                .post(format!("{API_BASE}/{operation}"))
+                .json(body)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status);
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if retryable(&error) && attempt < RETRY_ATTEMPTS => {
+                    tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                }
+                Err(error) => return Err(CaptchaError(format!("{operation} failed: {error}"))),
+            }
+        }
+        unreachable!("retry loop always returns")
+    }
+}
+
+fn retryable(error: &reqwest::Error) -> bool {
+    error.is_connect()
+        || error.is_timeout()
+        || error
+            .status()
+            .is_some_and(|status| status.is_server_error())
 }
 
 fn required(name: &str, value: &str) -> Result<()> {
@@ -323,6 +406,21 @@ mod tests {
         assert_eq!(value["type"], "AmazonTaskProxyless");
         assert_eq!(value["websiteKey"], "key");
         assert!(value.get("captchaScript").is_none());
+    }
+
+    #[test]
+    fn serializes_recaptcha_v2_enterprise_task() {
+        let task = CaptchaTask::ReCaptchaV2Enterprise {
+            website_url: "https://example.test".into(),
+            website_key: "key".into(),
+            enterprise_payload: Some(serde_json::json!({ "s": "token" })),
+            api_domain: Some("www.google.com".into()),
+        };
+        let value = serde_json::to_value(task).unwrap();
+        assert_eq!(value["type"], "RecaptchaV2EnterpriseTaskProxyless");
+        assert_eq!(value["websiteKey"], "key");
+        assert_eq!(value["enterprisePayload"]["s"], "token");
+        assert_eq!(value["apiDomain"], "www.google.com");
     }
 
     #[test]

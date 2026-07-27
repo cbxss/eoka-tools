@@ -13,6 +13,48 @@ type Page struct {
 	b  *Browser
 }
 
+// CaptchaOptions describes a CAPTCHA challenge to solve in the current browser
+// session. The API key and resulting token remain inside the local Eoka server
+// process; callers receive only injection metadata.
+type CaptchaOptions struct {
+	APIKey            string          `json:"-"`
+	Type              string          `json:"-"`
+	WebsiteURL        string          `json:"-"`
+	WebsiteKey        string          `json:"-"`
+	EnterprisePayload json.RawMessage `json:"-"`
+	APIDomain         string          `json:"-"`
+	Callback          string          `json:"-"`
+}
+
+// CaptchaInjection reports how Eoka applied a solved CAPTCHA token. It never
+// contains the token itself.
+type CaptchaInjection struct {
+	Kind         string   `json:"kind"`
+	UpdatedCount int      `json:"updated_count"`
+	Created      []string `json:"created"`
+	Callbacks    []string `json:"callbacks"`
+	Errors       []string `json:"errors"`
+}
+
+// FetchOptions configures a request executed from the page's browser context.
+// Body is sent verbatim; JSON callers should marshal it before calling Fetch.
+type FetchOptions struct {
+	Method   string
+	Headers  map[string]string
+	Body     string
+	Redirect string
+}
+
+// FetchResponse is the result of a browser-context request. Body is returned
+// verbatim so callers can decode the API format they requested.
+type FetchResponse struct {
+	URL     string            `json:"url"`
+	Status  int               `json:"status"`
+	OK      bool              `json:"ok"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+}
+
 func (p *Page) ID() string { return p.id }
 
 func (p *Page) call(ctx context.Context, method string, params map[string]any, result any) error {
@@ -31,8 +73,21 @@ func (p *Page) Click(ctx context.Context, selector string) error {
 	return p.call(ctx, "page.click", map[string]any{"selector": selector}, nil)
 }
 
+// ClickText finds an interactive element by visible text and invokes Eoka's
+// semantic element click. This is appropriate for modal continuation controls
+// that a site handles through its element listener rather than pointer input.
+func (p *Page) ClickText(ctx context.Context, text string) error {
+	return p.call(ctx, "page.click_text", map[string]any{"text": text}, nil)
+}
+
 func (p *Page) HumanClick(ctx context.Context, selector string) error {
 	return p.call(ctx, "page.human_click", map[string]any{"selector": selector}, nil)
+}
+
+// HumanClickText finds an interactive element by visible text and clicks it
+// with Eoka's human-like pointer input.
+func (p *Page) HumanClickText(ctx context.Context, text string) error {
+	return p.call(ctx, "page.human_click_text", map[string]any{"text": text}, nil)
 }
 
 func (p *Page) Fill(ctx context.Context, selector, value string) error {
@@ -145,6 +200,57 @@ func EvaluateAs[T any](ctx context.Context, page *Page, js string) (T, error) {
 
 func (p *Page) Execute(ctx context.Context, js string) error {
 	return p.call(ctx, "page.execute", map[string]any{"js": js}, nil)
+}
+
+// Fetch performs a request in this page's real browser context. It retains the
+// page's cookies, browser fingerprint, and same-origin behavior; it is not an
+// external HTTP client.
+func (p *Page) Fetch(ctx context.Context, url string, options FetchOptions) (FetchResponse, error) {
+	params := map[string]any{"url": url}
+	if options.Method != "" {
+		params["method"] = options.Method
+	}
+	if len(options.Headers) != 0 {
+		params["headers"] = options.Headers
+	}
+	if options.Body != "" {
+		params["body"] = options.Body
+	}
+	if options.Redirect != "" {
+		params["redirect"] = options.Redirect
+	}
+	var response FetchResponse
+	err := p.call(ctx, "page.fetch", params, &response)
+	return response, err
+}
+
+// SolveCaptcha solves a supported CAPTCHA and injects the result into this
+// page. It currently supports recaptcha_v2_enterprise.
+func (p *Page) SolveCaptcha(ctx context.Context, options CaptchaOptions) (CaptchaInjection, error) {
+	params := map[string]any{
+		"apiKey":      options.APIKey,
+		"captchaType": options.Type,
+		"websiteURL":  options.WebsiteURL,
+		"websiteKey":  options.WebsiteKey,
+	}
+	if len(options.EnterprisePayload) != 0 {
+		var payload any
+		if err := json.Unmarshal(options.EnterprisePayload, &payload); err != nil {
+			return CaptchaInjection{}, fmt.Errorf("eoka: decoding enterprise payload: %w", err)
+		}
+		params["enterprisePayload"] = payload
+	}
+	if options.APIDomain != "" {
+		params["apiDomain"] = options.APIDomain
+	}
+	if options.Callback != "" {
+		params["callback"] = options.Callback
+	}
+	var result struct {
+		Injection CaptchaInjection `json:"injection"`
+	}
+	err := p.call(ctx, "page.solve_captcha", params, &result)
+	return result.Injection, err
 }
 
 func (p *Page) CaptureState(ctx context.Context) (BrowserState, error) {

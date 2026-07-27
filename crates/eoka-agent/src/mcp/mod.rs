@@ -1016,6 +1016,14 @@ impl EokaServer {
         let solution = match req.0.captcha_type.to_lowercase().as_str() {
             "hcaptcha" => solver.solve_hcaptcha(&req.0.website_url, &req.0.website_key).await,
             "recaptcha_v2" => solver.solve_recaptcha_v2(&req.0.website_url, &req.0.website_key).await,
+            "recaptcha_v2_enterprise" => solver
+                .solve_recaptcha_v2_enterprise(
+                    &req.0.website_url,
+                    &req.0.website_key,
+                    req.0.enterprise_payload,
+                    req.0.api_domain.as_deref(),
+                )
+                .await,
             "recaptcha_v3" => {
                 let page_action = req.0.page_action.unwrap_or_else(|| "submit".to_string());
                 let min_score = req.0.min_score.unwrap_or(0.3);
@@ -1038,7 +1046,7 @@ impl EokaServer {
             }
             _ => {
                 return Err(internal(format!(
-                    "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', 'recaptcha_v3', or 'amazon_waf'",
+                    "Unknown captcha type: {}. Use 'hcaptcha', 'recaptcha_v2', 'recaptcha_v2_enterprise', 'recaptcha_v3', or 'amazon_waf'",
                     req.0.captcha_type
                 )))
             }

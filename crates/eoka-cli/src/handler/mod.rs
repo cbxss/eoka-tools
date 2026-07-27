@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use base64::Engine;
+use captcha::{build_captcha_inject_js, parse_captcha_inject_kind};
 use eoka::cdp::{transport::CdpMessage, Session as CdpSession};
 use eoka_agent::{annotate, observe, snapshot};
 use serde_json::{json, Value};
@@ -791,7 +792,8 @@ impl Handler {
         let captcha_type = args["captcha_type"].as_str().unwrap_or("auto");
         let callback = args["callback"].as_str();
         let click_after = args["click_after"].as_str().map(str::to_string);
-        let js = build_captcha_inject_js(token, captcha_type, callback)?;
+        let kind = parse_captcha_inject_kind(captcha_type).map_err(|error| error.to_string())?;
+        let js = build_captcha_inject_js(token, kind, callback);
         let result: String = {
             let tab = self.require_tab()?;
             tab.page.evaluate(&js).await.map_err(|e| e.to_string())?
@@ -2248,35 +2250,6 @@ const RUNTIME_OBJECT_TO_TEXT_JS: &str = r#"function() {
   return text;
 }"#;
 
-const CAPTCHA_INJECT_JS: &str = include_str!("../js/captcha_inject.js");
-
-fn build_captcha_inject_js(
-    token: &str,
-    captcha_type: &str,
-    callback: Option<&str>,
-) -> Result<String, String> {
-    let kind = normalize_captcha_inject_kind(captcha_type)?;
-    Ok(format!(
-        "{}({},{},{})",
-        CAPTCHA_INJECT_JS,
-        json_str(token),
-        json_str(kind),
-        json_str(callback.unwrap_or_default())
-    ))
-}
-
-fn normalize_captcha_inject_kind(kind: &str) -> Result<&'static str, String> {
-    match kind.to_lowercase().as_str() {
-        "" | "auto" => Ok("auto"),
-        "recaptcha" | "recaptcha_v2" | "recaptcha_v3" | "recaptcha_enterprise" => Ok("recaptcha"),
-        "hcaptcha" => Ok("hcaptcha"),
-        "turnstile" => Ok("turnstile"),
-        other => Err(format!(
-            "Unsupported captcha injection type '{other}'. Use auto, recaptcha, hcaptcha, or turnstile."
-        )),
-    }
-}
-
 fn unserializable_runtime_value_text(value: &str) -> String {
     match value {
         "NaN" | "Infinity" | "-Infinity" => "null".into(),
@@ -2444,39 +2417,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(text, "abc...(truncated 20 chars)");
-    }
-
-    #[test]
-    fn captcha_inject_normalizes_supported_types() {
-        assert_eq!(normalize_captcha_inject_kind("auto").unwrap(), "auto");
-        assert_eq!(
-            normalize_captcha_inject_kind("recaptcha_v3").unwrap(),
-            "recaptcha"
-        );
-        assert_eq!(
-            normalize_captcha_inject_kind("recaptcha_enterprise").unwrap(),
-            "recaptcha"
-        );
-        assert_eq!(
-            normalize_captcha_inject_kind("hcaptcha").unwrap(),
-            "hcaptcha"
-        );
-        assert_eq!(
-            normalize_captcha_inject_kind("turnstile").unwrap(),
-            "turnstile"
-        );
-        assert!(normalize_captcha_inject_kind("amazon_waf").is_err());
-    }
-
-    #[test]
-    fn captcha_inject_js_escapes_token_and_callback() {
-        let js =
-            build_captcha_inject_js("tok\"en", "recaptcha_v2", Some("window.onCaptcha")).unwrap();
-
-        assert!(js.contains("\"tok\\\"en\""));
-        assert!(js.contains("\"recaptcha\""));
-        assert!(js.contains("\"window.onCaptcha\""));
-        assert!(js.contains("textarea[name=\"g-recaptcha-response\"]"));
     }
 
     fn saved_state_with_storage(url: &str) -> SavedState {

@@ -381,9 +381,9 @@ dependencies = [
 
 [[package]]
 name = "eoka"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c66427c79fae88239a6d4d835088bc61f437cb61745b8caf9195b7b2287209a"
+checksum = "791953fbc7e3380fec4f626dee7b1215802f68fdbd87db4c10a27fc72a4d0e26"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-agent"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "base64",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-captcha"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -477,11 +477,12 @@ dependencies = [
 
 [[package]]
 name = "eoka-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64",
  "eoka",
+ "eoka-captcha",
  "serde",
  "serde_json",
  "tokio",

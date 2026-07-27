@@ -432,7 +432,7 @@ pub enum Command {
 pub enum CaptchaAction {
     /// Solve hCaptcha, reCAPTCHA, or an AWS WAF challenge with Anti-Captcha.
     Solve {
-        /// hcaptcha, recaptcha_v2, recaptcha_v3, or amazon_waf
+        /// hcaptcha, recaptcha_v2, recaptcha_v2_enterprise, recaptcha_v3, or amazon_waf
         #[arg(long)]
         captcha_type: String,
         #[arg(long)]
@@ -446,6 +446,12 @@ pub enum CaptchaAction {
         page_action: Option<String>,
         #[arg(long)]
         min_score: Option<f32>,
+        /// JSON object passed to grecaptcha.enterprise.render (Enterprise v2 only).
+        #[arg(long)]
+        enterprise_payload: Option<String>,
+        /// reCAPTCHA script domain: www.google.com or www.recaptcha.net (Enterprise v2 only).
+        #[arg(long)]
+        api_domain: Option<String>,
         /// Required for amazon_waf; obtain from window.gokuProps.
         #[arg(long)]
         iv: Option<String>,

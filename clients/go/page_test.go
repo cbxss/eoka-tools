@@ -158,6 +158,40 @@ func TestPageEvaluate(t *testing.T) {
 	}
 }
 
+func TestPageFetch(t *testing.T) {
+	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
+		if method != "page.fetch" {
+			return nil, &rpcError{Code: ErrCodeUnknownMethod, Message: method}
+		}
+		var request struct {
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    string            `json:"body"`
+		}
+		if err := json.Unmarshal(params, &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.URL != "https://example.com/api" || request.Method != "POST" || request.Headers["Accept"] != "application/json" || request.Body != `{"ok":true}` {
+			t.Fatalf("unexpected fetch request: %+v", request)
+		}
+		return map[string]any{
+			"url": "https://example.com/api", "status": 201, "ok": true,
+			"headers": map[string]string{"content-type": "application/json"}, "body": `{"id":1}`,
+		}, nil
+	})
+
+	response, err := page.Fetch(context.Background(), "https://example.com/api", FetchOptions{
+		Method: "POST", Headers: map[string]string{"Accept": "application/json"}, Body: `{"ok":true}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Status != 201 || response.Body != `{"id":1}` {
+		t.Fatalf("unexpected fetch response: %+v", response)
+	}
+}
+
 func TestPageState(t *testing.T) {
 	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
 		switch method {

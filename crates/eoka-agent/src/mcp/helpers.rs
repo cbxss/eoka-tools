@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use eoka::Page;
 use rmcp::model::{CallToolResult, Content, ErrorData};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use eoka_agent::{observe, target, InteractiveElement, Target};
 
@@ -288,9 +288,13 @@ pub(crate) async fn ensure_console_capture(tab: &mut TabState) -> Result<(), Err
 pub struct SavedState {
     pub url: String,
     pub cookies: Vec<SavedCookie>,
+    #[serde(alias = "localStorage")]
     pub local_storage: HashMap<String, String>,
+    #[serde(alias = "sessionStorage")]
     pub session_storage: HashMap<String, String>,
+    #[serde(alias = "userAgent")]
     pub user_agent: String,
+    #[serde(default, alias = "savedAt")]
     pub saved_at: String,
 }
 
@@ -300,10 +304,20 @@ pub struct SavedCookie {
     pub value: String,
     pub domain: String,
     pub path: String,
+    #[serde(default, deserialize_with = "expiry_or_zero")]
     pub expires: f64,
+    #[serde(alias = "httpOnly")]
     pub http_only: bool,
     pub secure: bool,
+    #[serde(alias = "sameSite")]
     pub same_site: Option<String>,
+}
+
+fn expiry_or_zero<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0))
 }
 
 impl From<eoka::SessionCookie> for SavedCookie {
