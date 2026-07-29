@@ -42,6 +42,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             asset: eoka-server-linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            asset: eoka-server-linux-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             asset: eoka-server-windows-amd64.exe

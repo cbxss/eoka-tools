@@ -20,7 +20,7 @@ func TestAssetSuffixFor(t *testing.T) {
 		wantErr      bool
 	}{
 		{"linux", "amd64", "linux-amd64", false},
-		{"linux", "arm64", "", true},
+		{"linux", "arm64", "linux-arm64", false},
 		{"darwin", "amd64", "darwin-amd64", false},
 		{"darwin", "arm64", "darwin-arm64", false},
 		{"windows", "amd64", "windows-amd64.exe", false},
