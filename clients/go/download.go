@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const serverReleaseVersion = "0.1.3"
+const serverReleaseVersion = "0.1.4"
 
 const defaultReleaseBaseURL = "https://github.com/shrimp-software/eoka-tools/releases/download"
 
@@ -23,10 +23,10 @@ var userCacheDir = os.UserCacheDir
 func assetSuffixFor(goos, goarch string) (string, error) {
 	switch goos {
 	case "linux":
-		if goarch != "amd64" {
+		if goarch != "amd64" && goarch != "arm64" {
 			return "", fmt.Errorf("eoka: no prebuilt eoka-server binary for linux/%s", goarch)
 		}
-		return "linux-amd64", nil
+		return "linux-" + goarch, nil
 	case "darwin":
 		if goarch != "amd64" && goarch != "arm64" {
 			return "", fmt.Errorf("eoka: no prebuilt eoka-server binary for darwin/%s", goarch)
