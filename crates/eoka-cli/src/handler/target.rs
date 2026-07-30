@@ -1,9 +1,7 @@
-//! Target resolution and action retry logic.
-
 use std::collections::HashMap;
 
 use eoka::Page;
-use eoka_agent::{observe, target, Target};
+use eoka_mcp::{observe, target, Target};
 use serde_json::json;
 
 use super::state::TabState;
@@ -13,10 +11,8 @@ pub struct ResolvedTarget {
     pub desc: String,
 }
 
-/// Shared selector-generation JS (used by ref resolution).
 const SELECTOR_JS: &str = include_str!("../js/selector.js");
 
-/// Resolve a snapshot ref (@eN) to a CSS selector via CDP.
 async fn resolve_ref(
     page: &Page,
     snapshot_refs: &HashMap<String, i64>,
@@ -60,7 +56,6 @@ async fn resolve_ref(
         .ok_or_else(|| stale("selector returned null"))
 }
 
-/// Resolve target string to a selector + description.
 pub async fn resolve_target(tab: &TabState, target_str: &str) -> Result<ResolvedTarget, String> {
     match Target::parse(target_str) {
         Target::Index(idx) => {
@@ -107,7 +102,6 @@ fn is_stale_element_error(msg: &str) -> bool {
     NEEDLES.iter().any(|n| msg.contains(n))
 }
 
-/// Auto-observe if target is an index and element cache is empty.
 pub async fn auto_observe_if_needed(
     tab: &mut TabState,
     target_str: &str,
@@ -172,27 +166,18 @@ pub async fn fill_with_retry(
     act_with_retry(tab, target_str, viewport_only, Action::Fill(text)).await
 }
 
-/// Give a just-navigated document a brief chance to install.
-///
-/// Do not poll `document.readyState` here. Some SPAs keep their document in a
-/// loading state while streaming or refreshing long-lived resources; probing
-/// it through CDP can then consume the full command timeout and block the
-/// daemon. Commands that need a usable element already resolve and retry their
-/// selector, which is the meaningful readiness condition.
 pub async fn wait_for_stable(page: &Page) -> Result<(), String> {
     let _ = page;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     Ok(())
 }
 
-/// Get title without blocking on busy JS thread.
 pub async fn title_nonblocking(page: &Page) -> String {
     page.evaluate_sync("document.title || ''")
         .await
         .unwrap_or_default()
 }
 
-/// JSON-serialize a string value (for embedding in JS). Never fails on &str.
 pub fn json_str(s: &str) -> String {
     serde_json::to_string(s).expect("string serialization is infallible")
 }

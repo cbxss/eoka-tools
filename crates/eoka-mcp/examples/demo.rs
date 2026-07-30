@@ -1,23 +1,18 @@
-//! Demo: observe, annotated screenshot, fill, click, extract, keyboard.
-
-use eoka_agent::Session;
+use eoka_mcp::Session;
 
 #[tokio::main]
-async fn main() -> eoka::Result<()> {
+async fn main() -> eoka_server::eoka::Result<()> {
     let mut agent = Session::launch().await?;
 
-    // --- Form interaction ---
     agent.goto("https://httpbin.org/forms/post").await?;
 
     agent.observe().await?;
     println!("=== Form elements ===\n{}", agent.element_list());
 
-    // Annotated screenshot
     let png = agent.screenshot().await?;
     std::fs::write("demo_form.png", &png)?;
     println!("Saved demo_form.png");
 
-    // Fill by index
     agent.observe().await?; // re-observe after screenshot cleared elements
     agent.fill(0, "Agent Smith").await?;
     agent.observe().await?;
@@ -25,21 +20,17 @@ async fn main() -> eoka::Result<()> {
     agent.observe().await?;
     agent.fill(2, "agent@example.com").await?;
 
-    // Click radio button
     agent.observe().await?;
     agent.click(4).await?; // Medium
 
-    // Check a checkbox
     agent.observe().await?;
     agent.click(6).await?; // Bacon
 
-    // Submit via keyboard
     agent.observe().await?;
     agent.submit(12).await?;
     agent.wait(1000).await;
     println!("\nAfter submit — URL: {}", agent.url().await?);
 
-    // --- Extract structured data ---
     agent.goto("https://news.ycombinator.com").await?;
     agent.wait(1000).await;
 
@@ -51,7 +42,6 @@ async fn main() -> eoka::Result<()> {
         println!("  {}. {}", i + 1, t);
     }
 
-    // Observe after navigation
     agent.observe().await?;
     println!("\n=== HN elements: {} ===", agent.len());
 

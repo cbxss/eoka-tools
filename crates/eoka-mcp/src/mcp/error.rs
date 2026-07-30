@@ -5,7 +5,6 @@ use rmcp::model::ErrorCode;
 use serde_json::Value;
 use std::fmt;
 
-/// Typed error for MCP tool handlers.
 #[derive(Debug)]
 pub enum AgentError {
     Internal(String),
@@ -48,22 +47,18 @@ impl From<AgentError> for ErrorData {
     }
 }
 
-/// Shorthand: create an `ErrorData::internal_error` from anything that implements Display.
-/// Also logs transport errors to stderr.
 pub fn internal(e: impl fmt::Display) -> ErrorData {
     let msg = e.to_string();
     if is_transport_error_msg(&msg) {
-        eprintln!("[eoka-agent] transport error: {}", msg);
+        eprintln!("[eoka-mcp] transport error: {}", msg);
     }
     ErrorData::internal_error(msg, None::<Value>)
 }
 
-/// Shorthand: create an `ErrorData::invalid_params`.
 pub fn invalid(msg: impl Into<String>) -> ErrorData {
     ErrorData::invalid_params(msg.into(), None::<Value>)
 }
 
-/// Check if an error message indicates a broken connection that requires session reset.
 pub fn is_transport_error_msg(msg: &str) -> bool {
     let m = msg.as_bytes();
     const NEEDLES: &[&str] = &[
@@ -90,7 +85,7 @@ mod tests {
         assert!(is_transport_error_msg("WebSocket Error: connection reset"));
         assert!(is_transport_error_msg("request timed out after 30s"));
         assert!(is_transport_error_msg("broken pipe"));
-        assert!(is_transport_error_msg("BROKEN PIPE")); // case-insensitive
+        assert!(is_transport_error_msg("BROKEN PIPE"));
         assert!(is_transport_error_msg("reset by peer"));
         assert!(is_transport_error_msg("transport error occurred"));
         assert!(is_transport_error_msg("connection closed unexpectedly"));
@@ -103,7 +98,6 @@ mod tests {
         assert!(!is_transport_error_msg("invalid selector"));
         assert!(!is_transport_error_msg(""));
         assert!(!is_transport_error_msg("No browser open"));
-        // These were false positives with the old broad needles:
         assert!(!is_transport_error_msg("connection refused by target"));
         assert!(!is_transport_error_msg("WebSocket connection to devtools"));
         assert!(!is_transport_error_msg("transport layer initialized"));

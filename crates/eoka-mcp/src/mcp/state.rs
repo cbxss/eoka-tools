@@ -1,15 +1,15 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use eoka::{Browser, Page, StealthConfig, TabInfo};
-use eoka_agent::{InteractiveElement, ObserveConfig};
+use eoka_mcp::{InteractiveElement, ObserveConfig};
+use eoka_server::eoka::{Browser, Page, TabInfo};
+use eoka_server::{dispatch::dispatch, state::AppState};
+use serde_json::json;
 
-/// State for a single tab.
 pub(crate) struct TabState {
     pub page: Page,
     pub elements: Vec<InteractiveElement>,
-    /// Snapshot ref label → backend_node_id (from accessibility tree snapshot)
     pub snapshot_refs: HashMap<String, i64>,
-    /// Whether console capture JS has been injected via addScriptToEvaluateOnNewDocument.
     pub console_injected: bool,
 }
 
@@ -23,32 +23,27 @@ impl TabState {
         }
     }
 
-    /// Clear all cached state (elements + snapshot refs). Call on navigation.
     pub fn invalidate(&mut self) {
         self.elements.clear();
         self.snapshot_refs.clear();
     }
 }
 
-/// Multi-tab browser state.
 pub(crate) struct BrowserState {
-    pub browser: Browser,
+    pub server: AppState,
+    pub browser: Arc<Browser>,
     pub tabs: HashMap<String, TabState>,
     pub current_tab_id: Option<String>,
     pub config: ObserveConfig,
-    /// Set to true when a transport error is detected; triggers relaunch on next call.
     pub unhealthy: bool,
 }
 
 impl BrowserState {
-    pub async fn new(headless: bool) -> eoka::Result<Self> {
-        let patch_binary = std::env::var("EOKA_PATCH_BINARY")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
-
+    pub async fn new(headless: bool) -> eoka_server::eoka::Result<Self> {
         let proxy = parse_proxy_env()?
             .map(|value| {
-                eoka_proxy::parse(&value).map_err(|error| eoka::Error::Launch(error.to_string()))
+                eoka_proxy::parse(&value)
+                    .map_err(|error| eoka_server::eoka::Error::Launch(error.to_string()))
             })
             .transpose()?;
 
@@ -59,28 +54,35 @@ impl BrowserState {
         };
 
         if let Some(ref p) = proxy {
-            eprintln!("[eoka-agent] using proxy: {}", p);
+            eprintln!("[eoka-mcp] using proxy: {}", p);
         }
 
         let cdp_timeout = if proxy.is_some() { 90 } else { 30 };
 
         eprintln!(
-            "[eoka-agent] launching browser (headless={}, cdp_timeout={}s, proxy={})",
+            "[eoka-mcp] launching browser (headless={}, cdp_timeout={}s, proxy={})",
             headless,
             cdp_timeout,
             proxy.is_some()
         );
-        let config = StealthConfig {
-            headless,
-            patch_binary,
-            proxy,
-            proxy_username,
-            proxy_password,
-            cdp_timeout,
-            ..Default::default()
-        };
-        let browser = Browser::launch_with_config(config).await?;
+        let mut server = AppState::new();
+        let params = json!({
+            "headless": headless,
+            "proxy": proxy.map(|server| json!({
+                "server": server,
+                "username": proxy_username,
+                "password": proxy_password,
+            })),
+        });
+        dispatch(&mut server, "browser.launch", params)
+            .await
+            .map_err(|error| eoka_server::eoka::Error::Launch(error.message))?;
+        let browser = server
+            .browser()
+            .map_err(|error| eoka_server::eoka::Error::Launch(error.message))?
+            .clone();
         Ok(Self {
+            server,
             browser,
             tabs: HashMap::new(),
             current_tab_id: None,
@@ -89,21 +91,21 @@ impl BrowserState {
         })
     }
 
-    /// Get or create the current tab, navigating to URL.
-    pub async fn ensure_tab(&mut self, url: &str) -> eoka::Result<&mut TabState> {
+    pub async fn ensure_tab(&mut self, url: &str) -> eoka_server::eoka::Result<&mut TabState> {
         let tab_id = if let Some(existing_id) = &self.current_tab_id {
-            // Navigate current tab
             if let Some(tab) = self.tabs.get_mut(existing_id) {
                 tab.invalidate();
-                tab.page.goto(url).await?;
+                dispatch(
+                    &mut self.server,
+                    "page.goto",
+                    json!({ "pageId": existing_id, "url": url }),
+                )
+                .await
+                .map_err(|error| eoka_server::eoka::Error::cdp_msg(error.message))?;
             }
             existing_id.clone()
         } else {
-            // Create first tab
-            let page = self.browser.new_page(url).await?;
-            let new_id = page.target_id().to_string();
-            self.tabs.insert(new_id.clone(), TabState::new(page));
-            self.current_tab_id = Some(new_id.clone());
+            let (new_id, _) = self.new_tab(Some(url)).await?;
             new_id
         };
         Ok(self.tabs.get_mut(&tab_id).unwrap())
@@ -121,12 +123,22 @@ impl BrowserState {
             .and_then(|id| self.tabs.get_mut(id))
     }
 
-    pub async fn new_tab(&mut self, url: Option<&str>) -> eoka::Result<(String, &mut TabState)> {
-        let page = match url {
-            Some(u) => self.browser.new_page(u).await?,
-            None => self.browser.new_blank_page().await?,
-        };
-        let tab_id = page.target_id().to_string();
+    pub async fn new_tab(
+        &mut self,
+        url: Option<&str>,
+    ) -> eoka_server::eoka::Result<(String, &mut TabState)> {
+        let result = dispatch(&mut self.server, "browser.new_page", json!({ "url": url }))
+            .await
+            .map_err(|error| eoka_server::eoka::Error::cdp_msg(error.message))?;
+        let tab_id = result["pageId"]
+            .as_str()
+            .ok_or_else(|| eoka_server::eoka::Error::cdp_msg("server omitted pageId"))?
+            .to_owned();
+        let page = self
+            .server
+            .page(&tab_id)
+            .map_err(|error| eoka_server::eoka::Error::cdp_msg(error.message))?
+            .clone();
         self.tabs.insert(tab_id.clone(), TabState::new(page));
         self.browser.activate_tab(&tab_id).await?;
         self.current_tab_id = Some(tab_id.clone());
@@ -138,12 +150,10 @@ impl BrowserState {
         ))
     }
 
-    /// Switch to a tab by ID. If the tab is not yet tracked (e.g., a popup opened by
-    /// window.open()), automatically attaches to it and adds it to tracked tabs.
-    pub async fn switch_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
+    pub async fn switch_tab(&mut self, tab_id: &str) -> eoka_server::eoka::Result<()> {
         if !self.tabs.contains_key(tab_id) {
-            // Try to attach to an unmanaged target (popup, new window, etc.)
             let page = self.browser.attach_page(tab_id).await?;
+            self.server.insert_page(tab_id.to_string(), page.clone());
             self.tabs.insert(tab_id.to_string(), TabState::new(page));
         }
         self.browser.activate_tab(tab_id).await?;
@@ -151,21 +161,28 @@ impl BrowserState {
         Ok(())
     }
 
-    pub async fn close_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
+    pub async fn close_tab(&mut self, tab_id: &str) -> eoka_server::eoka::Result<()> {
         if self.tabs.len() <= 1 {
-            return Err(eoka::Error::cdp_msg("Cannot close the last tab"));
+            return Err(eoka_server::eoka::Error::cdp_msg(
+                "Cannot close the last tab",
+            ));
         }
         if !self.tabs.contains_key(tab_id) {
-            return Err(eoka::Error::ElementNotFound(format!(
+            return Err(eoka_server::eoka::Error::ElementNotFound(format!(
                 "Tab {} not found",
                 tab_id
             )));
         }
 
-        self.browser.close_tab(tab_id).await?;
+        dispatch(
+            &mut self.server,
+            "browser.close_tab",
+            json!({ "pageId": tab_id }),
+        )
+        .await
+        .map_err(|error| eoka_server::eoka::Error::cdp_msg(error.message))?;
         self.tabs.remove(tab_id);
 
-        // If we closed the current tab, switch to another
         if self.current_tab_id.as_deref() == Some(tab_id) {
             if let Some(new_id) = self.tabs.keys().next().cloned() {
                 self.current_tab_id = Some(new_id.clone());
@@ -177,16 +194,25 @@ impl BrowserState {
         Ok(())
     }
 
-    pub async fn list_tabs(&self) -> eoka::Result<Vec<TabInfo>> {
+    pub async fn list_tabs(&self) -> eoka_server::eoka::Result<Vec<TabInfo>> {
         self.browser.tabs().await
     }
 
-    pub async fn close(self) -> eoka::Result<()> {
-        self.browser.close().await
+    pub async fn close(self) -> eoka_server::eoka::Result<()> {
+        let BrowserState {
+            mut server,
+            browser,
+            ..
+        } = self;
+        drop(browser);
+        dispatch(&mut server, "browser.close", json!({}))
+            .await
+            .map_err(|error| eoka_server::eoka::Error::cdp_msg(error.message))?;
+        Ok(())
     }
 }
 
-fn parse_proxy_env() -> eoka::Result<Option<String>> {
+fn parse_proxy_env() -> eoka_server::eoka::Result<Option<String>> {
     if let Ok(path) = std::env::var("EOKA_PROXY_FILE") {
         let contents = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = contents
@@ -195,7 +221,7 @@ fn parse_proxy_env() -> eoka::Result<Option<String>> {
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect();
         if lines.is_empty() {
-            return Err(eoka::Error::Launch(
+            return Err(eoka_server::eoka::Error::Launch(
                 "proxy file does not contain a proxy".to_owned(),
             ));
         }

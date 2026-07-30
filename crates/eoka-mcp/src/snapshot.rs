@@ -1,15 +1,9 @@
-//! Accessibility tree snapshots via CDP `Accessibility.getFullAXTree`.
-
 use std::collections::HashMap;
 use std::fmt::Write;
 
 use anyhow::Result;
-use eoka::Page;
+use eoka_server::eoka::Page;
 use serde::{Deserialize, Serialize};
-
-// ---------------------------------------------------------------------------
-// CDP types
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,11 +57,6 @@ struct AXProperty {
     value: AXValue,
 }
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-/// A reference to an element in the accessibility tree snapshot.
 #[derive(Debug, Clone)]
 pub struct SnapshotRef {
     pub ref_label: String,
@@ -76,16 +65,11 @@ pub struct SnapshotRef {
     pub name: String,
 }
 
-/// Result of an accessibility tree snapshot.
 #[derive(Debug)]
 pub struct SnapshotResult {
     pub tree_text: String,
     pub refs: Vec<SnapshotRef>,
 }
-
-// ---------------------------------------------------------------------------
-// Filtering
-// ---------------------------------------------------------------------------
 
 const NOISE_ROLES: &[&str] = &[
     "generic",
@@ -107,10 +91,6 @@ fn should_skip(role: &str, name: &str, ignored: bool, include_all: bool) -> bool
     }
     role == "StaticText" && name.is_empty()
 }
-
-// ---------------------------------------------------------------------------
-// Property extraction
-// ---------------------------------------------------------------------------
 
 fn opt_str(v: &Option<AXValue>) -> &str {
     v.as_ref().map(|av| av.as_str()).unwrap_or("")
@@ -150,10 +130,6 @@ fn format_props(node: &AXNode, out: &mut String) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tree walk
-// ---------------------------------------------------------------------------
-
 struct Walker<'a> {
     nodes_by_id: HashMap<&'a str, &'a AXNode>,
     children_of: HashMap<&'a str, Vec<&'a str>>,
@@ -187,7 +163,6 @@ impl<'a> Walker<'a> {
     }
 
     fn emit_node(&mut self, node: &AXNode, role: &str, name: &str, depth: usize) {
-        // Ref assignment
         let ref_label = match node.backend_dom_node_id {
             Some(id) if id > 0 => {
                 self.ref_counter += 1;
@@ -203,7 +178,6 @@ impl<'a> Walker<'a> {
             _ => None,
         };
 
-        // Build line: "  @e1 button "Submit" disabled"
         for _ in 0..depth {
             self.output.push_str("  ");
         }
@@ -219,16 +193,7 @@ impl<'a> Walker<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Take an accessibility tree snapshot of the page.
-///
-/// `include_all` — if true, include noise roles (generic, none, StaticText, etc.)
 pub async fn snapshot(page: &Page, include_all: bool) -> Result<SnapshotResult> {
-    // Enable DOM domain and fetch document so CDP populates backendDOMNodeId in AX nodes.
-    // Without this, getFullAXTree returns nodes with backendDOMNodeId = null.
     let _ = page
         .session()
         .send::<_, serde_json::Value>("DOM.enable", &serde_json::json!({}))

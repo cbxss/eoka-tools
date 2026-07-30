@@ -1,37 +1,23 @@
-//! Live element targeting - resolves elements at action time via JS.
-
-use eoka::{Page, Result};
+use eoka_server::eoka::{Page, Result};
 use serde::Deserialize;
 
-/// Target selector - either an index, a snapshot ref, or a live pattern.
 #[derive(Debug, Clone)]
 pub enum Target {
-    /// Element index from cached observe list
     Index(usize),
-    /// Snapshot ref (e.g. `@e1`) from accessibility tree snapshot
     Ref(String),
-    /// Live pattern resolved via JS at action time
     Live(LivePattern),
 }
 
-/// Live targeting patterns - all resolved via JS injection.
 #[derive(Debug, Clone)]
 pub enum LivePattern {
-    /// `text:Submit` - find by visible text
     Text(String),
-    /// `placeholder:Enter code` - find by placeholder
     Placeholder(String),
-    /// `role:button` - find by tag/ARIA role
     Role(String),
-    /// `css:form button` - direct CSS selector
     Css(String),
-    /// `id:submit-btn` - find by ID
     Id(String),
 }
 
 impl Target {
-    /// Parse target string. Numbers and observe labels become Index,
-    /// @eN becomes Ref, everything else is Live.
     pub fn parse(s: &str) -> Self {
         let s = s.trim();
 
@@ -41,8 +27,6 @@ impl Target {
             .unwrap_or(s)
             .trim();
 
-        // Numbers are indices. Accept the bracketed form printed by observe,
-        // e.g. `[38]`, so users can copy/paste observed targets directly.
         let index = index
             .strip_prefix('[')
             .and_then(|v| v.strip_suffix(']'))
@@ -52,18 +36,15 @@ impl Target {
             return Target::Index(idx);
         }
 
-        // Snapshot refs: @e1, @e42, etc.
         if s.starts_with('@') {
             return Target::Ref(s.to_string());
         }
 
-        // Everything else is a live pattern
         Target::Live(LivePattern::parse(s))
     }
 }
 
 impl LivePattern {
-    /// Parse a live pattern. Unprefixed strings default to text search.
     pub fn parse(s: &str) -> Self {
         if let Some(v) = s.strip_prefix("text:") {
             return LivePattern::Text(v.into());
@@ -80,7 +61,6 @@ impl LivePattern {
         if let Some(v) = s.strip_prefix("id:") {
             return LivePattern::Id(v.into());
         }
-        // Default: treat as text search
         LivePattern::Text(s.into())
     }
 
@@ -95,7 +75,6 @@ impl LivePattern {
     }
 }
 
-/// Bounding box.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct BBox {
     pub x: f64,
@@ -104,7 +83,6 @@ pub struct BBox {
     pub height: f64,
 }
 
-/// Result from live resolution.
 #[derive(Debug, Deserialize)]
 pub struct Resolved {
     pub selector: String,
@@ -119,7 +97,6 @@ pub struct Resolved {
 
 const RESOLVE_JS: &str = include_str!("js/resolve.js");
 
-/// Resolve a live pattern to element info via JS.
 pub async fn resolve(page: &Page, pattern: &LivePattern) -> Result<Resolved> {
     let (t, v) = pattern.as_js_args();
     let js = format!(
@@ -152,7 +129,6 @@ mod tests {
         assert!(matches!(Target::parse("@e1"), Target::Ref(ref s) if s == "@e1"));
         assert!(matches!(Target::parse("@e42"), Target::Ref(ref s) if s == "@e42"));
         assert!(matches!(Target::parse("  @e5  "), Target::Ref(ref s) if s == "@e5"));
-        // @ without e is still a ref (generic)
         assert!(matches!(Target::parse("@foo"), Target::Ref(ref s) if s == "@foo"));
     }
 
@@ -182,7 +158,6 @@ mod tests {
 
     #[test]
     fn parse_live_unprefixed() {
-        // Unprefixed non-numeric defaults to text search
         assert!(matches!(
             Target::parse("Submit"),
             Target::Live(LivePattern::Text(_))

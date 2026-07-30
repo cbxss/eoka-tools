@@ -1,29 +1,29 @@
 [package]
-name = "eoka-agent"
-version = "0.1.9"
+name = "eoka-mcp"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "AI agent interaction layer for browser automation — MCP server, observe/act loop"
+description = "MCP server and Rust session API for browser automation"
 keywords = ["browser", "automation", "ai-agent", "mcp", "llm"]
 categories = ["web-programming", "development-tools"]
 repository = "https://github.com/shrimp-software/eoka-tools"
 homepage = "https://github.com/shrimp-software/eoka-tools"
-documentation = "https://docs.rs/eoka-agent"
+documentation = "https://docs.rs/eoka-mcp"
 readme = "README.md"
 authors = ["cbxss"]
 
 [[bin]]
-name = "eoka-agent"
+name = "eoka-mcp"
 path = "src/main.rs"
 
 [dependencies]
-eoka = "0.5"
+eoka-server = { path = "../eoka-server", version = "0.1.8" }
 eoka-proxy = { path = "../eoka-proxy", version = "0.1.0" }
 captcha = { package = "eoka-captcha", version = "0.1.1", path = "../captcha" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-rmcp = { version = "0.13", features = ["server", "transport-io"] }
+rmcp = { version = "3.0.1", features = ["server", "transport-io"] }
 schemars = "1.0"
 anyhow = "1"
 base64 = "0.22"

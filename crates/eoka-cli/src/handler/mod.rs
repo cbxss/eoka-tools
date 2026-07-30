@@ -1,5 +1,3 @@
-//! Command handler — maps CLI commands to eoka browser operations.
-
 pub mod intercept;
 mod persist;
 pub mod profile;
@@ -12,7 +10,7 @@ use std::fmt::Write as FmtWrite;
 use base64::Engine;
 use captcha::{build_captcha_inject_js, parse_captcha_inject_kind};
 use eoka::cdp::{transport::CdpMessage, Session as CdpSession};
-use eoka_agent::{annotate, observe, snapshot};
+use eoka_mcp::{annotate, observe, snapshot};
 use serde_json::{json, Value};
 
 use crate::launch_spec::LaunchSpec;
@@ -24,10 +22,6 @@ use target::{
     auto_observe_if_needed, click_with_retry, fill_with_retry, json_str, resolve_target,
     title_nonblocking, wait_for_stable,
 };
-
-// ---------------------------------------------------------------------------
-// Handler
-// ---------------------------------------------------------------------------
 
 pub struct Handler {
     state: Option<BrowserState>,
@@ -66,9 +60,6 @@ impl Handler {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                // If --clone-state-from was set, capture from the live Chrome,
-                // open a blank tab, restore. The state is loaded into the launched
-                // browser before any user command runs.
                 if let Some(source) = clone_state_from {
                     let saved = persist::clone_state_from_source(source).await?;
                     let url = saved.url.clone();
@@ -84,9 +75,6 @@ impl Handler {
             }
         };
 
-        // In live mode, auto-attach to the most recent user tab so the first
-        // command (snapshot, click, etc.) operates on what the user is looking
-        // at rather than refusing with "no tab open".
         if state.is_live && state.current_tab_id.is_none() {
             if let Ok(tabs) = state.browser.tabs().await {
                 if let Some(t) = tabs.into_iter().find(|t| !t.url.starts_with("devtools://")) {
@@ -196,15 +184,12 @@ impl Handler {
         }
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────
-
     fn arg_str<'a>(&self, args: &'a Value, key: &str) -> Result<&'a str, String> {
         args[key]
             .as_str()
             .ok_or_else(|| format!("Missing '{}'", key))
     }
 
-    /// Get tab + viewport_only config together (avoids repeated boilerplate).
     fn tab_with_config(&mut self) -> Result<(&mut TabState, bool), String> {
         let state = self.require_state_mut()?;
         let vp = state.config.viewport_only;
@@ -213,8 +198,6 @@ impl Handler {
             .ok_or("No tab open. Use 'open' first.")?;
         Ok((tab, vp))
     }
-
-    // ── Navigation ──────────────────────────────────────────────────────
 
     async fn cmd_open(&mut self, args: &Value) -> Result<Response, String> {
         let requested_url = self.arg_str(args, "url")?.to_string();
@@ -235,7 +218,6 @@ impl Handler {
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         let user_agent = args["user_agent"].as_str();
         let bypass_csp = args["bypass_csp"].as_bool().unwrap_or(false);
-        // --inject-js: inject a script via addScriptToEvaluateOnNewDocument before navigation
         let inject_js = args["inject_js"].as_str();
         let has_extras = headers.is_some()
             || user_agent.is_some()
@@ -248,8 +230,6 @@ impl Handler {
         let result = async {
             let state = self.require_state_mut()?;
 
-            // In live mode, never navigate the user's currently-attached tab.
-            // Always pop a fresh tab in their browser.
             if state.is_live {
                 state.new_tab(None).await.map_err(|e| e.to_string())?;
             }
@@ -327,7 +307,6 @@ impl Handler {
                         .await;
                 }
                 if headers.is_some() {
-                    // Best-effort clear; if it fails the browser is likely broken
                     let _ = tab.page.clear_extra_headers().await;
                 }
                 nav_result.map_err(|e| e.to_string())?;
@@ -388,8 +367,6 @@ impl Handler {
         Ok(Response::ok_text(format!("Reloaded: {}", url)))
     }
 
-    // ── Observation ─────────────────────────────────────────────────────
-
     async fn cmd_snapshot(&mut self, args: &Value) -> Result<Response, String> {
         self.ensure_browser().await?;
         let include_all = args["all"].as_bool().unwrap_or(false);
@@ -429,7 +406,7 @@ impl Handler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let filter_fn: fn(&&eoka_agent::InteractiveElement) -> bool = match filter {
+        let filter_fn: fn(&&eoka_mcp::InteractiveElement) -> bool = match filter {
             Some("inputs") => |e| {
                 matches!(
                     e.tag.as_str(),
@@ -533,8 +510,6 @@ impl Handler {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Mobile viewports get touch input so gesture-driven UIs (RN-web
-        // PanResponder, carousels) behave like a real device. Best-effort.
         let _ = session
             .send::<_, Value>(
                 "Emulation.setTouchEmulationEnabled",
@@ -595,8 +570,6 @@ impl Handler {
             Ok(Response::ok_text(out))
         }
     }
-
-    // ── Actions ─────────────────────────────────────────────────────────
 
     async fn cmd_click(&mut self, args: &Value) -> Result<Response, String> {
         self.ensure_browser().await?;
@@ -741,8 +714,6 @@ impl Handler {
         Ok(Response::ok_text(format!("Scrolled {}", target_str)))
     }
 
-    // ── JavaScript ──────────────────────────────────────────────────────
-
     async fn cmd_eval(&mut self, args: &Value) -> Result<Response, String> {
         let code = resolve_js(args)?;
         let max_size = args["max_size"].as_u64().map(|v| v as usize);
@@ -819,8 +790,6 @@ impl Handler {
         Ok(Response::ok(parsed))
     }
 
-    // ── Network ─────────────────────────────────────────────────────────
-
     async fn cmd_fetch(&mut self, args: &Value) -> Result<Response, String> {
         let url = self.arg_str(args, "url")?;
         let method = args["method"].as_str().unwrap_or("GET");
@@ -877,8 +846,6 @@ impl Handler {
         }
         Ok(Response::ok(parsed))
     }
-
-    // ── Cookies ─────────────────────────────────────────────────────────
 
     async fn cmd_cookies(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
@@ -959,8 +926,6 @@ impl Handler {
         Ok(Response::ok_text("Cleared all cookies"))
     }
 
-    // ── Storage ─────────────────────────────────────────────────────────
-
     async fn cmd_storage(&mut self, args: &Value) -> Result<Response, String> {
         let key = args["key"].as_str();
         let session = args["session_storage"].as_bool().unwrap_or(false);
@@ -1020,8 +985,6 @@ impl Handler {
         Ok(Response::ok(parsed))
     }
 
-    // ── State save/load ─────────────────────────────────────────────────
-
     async fn cmd_save_state(&mut self, args: &Value) -> Result<Response, String> {
         let path = self.arg_str(args, "path")?;
         let tab = self.require_tab()?;
@@ -1071,8 +1034,6 @@ impl Handler {
         )))
     }
 
-    // ── Headers ─────────────────────────────────────────────────────────
-
     async fn cmd_headers(&mut self, args: &Value) -> Result<Response, String> {
         let raw = &args["headers_json"];
         let headers: HashMap<String, String> = if let Some(s) = raw.as_str() {
@@ -1091,8 +1052,6 @@ impl Handler {
             headers.len()
         )))
     }
-
-    // ── Console / Errors ────────────────────────────────────────────────
 
     async fn cmd_console(&mut self, args: &Value) -> Result<Response, String> {
         let clear = args["clear"].as_bool().unwrap_or(false);
@@ -1144,8 +1103,6 @@ impl Handler {
         let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
     }
-
-    // ── Tabs ────────────────────────────────────────────────────────────
 
     async fn cmd_tab_list(&mut self) -> Result<Response, String> {
         let state = self.state.as_ref().ok_or("No browser open.")?;
@@ -1242,7 +1199,6 @@ impl Handler {
             )));
         }
 
-        // No --to: load directly into the active session.
         self.ensure_browser().await?;
         let state = self.require_state_mut()?;
         let url = saved.url.clone();
@@ -1277,8 +1233,6 @@ impl Handler {
         self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!("Closed tab [{}]", tab_id)))
     }
-
-    // ── Wait ────────────────────────────────────────────────────────────
 
     async fn cmd_wait(&mut self, args: &Value) -> Result<Response, String> {
         if let Some(ms) = args["ms"].as_u64() {
@@ -1316,11 +1270,9 @@ impl Handler {
         result
     }
 
-    // ── SPA ─────────────────────────────────────────────────────────────
-
     async fn cmd_spa_info(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        let info = eoka_agent::spa::detect_router(&tab.page)
+        let info = eoka_mcp::spa::detect_router(&tab.page)
             .await
             .map_err(|e: eoka::Error| e.to_string())?;
         Ok(Response::ok(json!({
@@ -1335,10 +1287,10 @@ impl Handler {
         let drain = self.start_fetch_drain();
         let result = async {
             let tab = self.require_tab_mut()?;
-            let info = eoka_agent::spa::detect_router(&tab.page)
+            let info = eoka_mcp::spa::detect_router(&tab.page)
                 .await
                 .map_err(|e: eoka::Error| e.to_string())?;
-            eoka_agent::spa::spa_navigate(&tab.page, &info.router_type, path)
+            eoka_mcp::spa::spa_navigate(&tab.page, &info.router_type, path)
                 .await
                 .map_err(|e: eoka::Error| e.to_string())?;
             let _ = wait_for_stable(&tab.page).await;
@@ -1350,8 +1302,6 @@ impl Handler {
         let url = result?;
         Ok(Response::ok_text(format!("SPA navigated to: {}", url)))
     }
-
-    // ── Fake Camera ──────────────────────────────────────────────────────
 
     async fn cmd_fake_camera(&mut self, args: &Value) -> Result<Response, String> {
         let file_path = self.arg_str(args, "file")?;
@@ -1377,7 +1327,6 @@ impl Handler {
         self.ensure_browser().await?;
         let tab = self.require_tab_mut()?;
 
-        // Register for all future navigations
         tab.page
             .session()
             .send::<_, Value>(
@@ -1387,10 +1336,8 @@ impl Handler {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Inject into current page too
         let _: String = tab.page.evaluate_sync(&js).await.unwrap_or_default();
 
-        // Grant camera permission
         let _ = tab
             .page
             .session()
@@ -1407,8 +1354,6 @@ impl Handler {
             loop_video
         )))
     }
-
-    // ── WASM ────────────────────────────────────────────────────────────
 
     async fn cmd_wasm_info(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
@@ -1430,7 +1375,6 @@ impl Handler {
         let tab = self.require_tab()?;
         let mem_expr = wasm_memory_expr(memory);
 
-        // Read in 64KB chunks to avoid CDP message size issues
         let chunk_size = 65536;
         let mut hex_output = String::new();
         let mut offset = 0;
@@ -1464,7 +1408,6 @@ impl Handler {
             offset += chunk_len;
         }
 
-        // Format as hex dump
         let mut formatted = String::new();
         let bytes_per_line = 16;
         for (i, chunk) in hex_output.as_bytes().chunks(bytes_per_line * 2).enumerate() {
@@ -1490,7 +1433,6 @@ impl Handler {
         let hex = self.arg_str(args, "hex")?;
         let memory = args["memory"].as_str();
 
-        // Normalize hex: remove spaces, ensure even length
         let hex_clean: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
         if !hex_clean.len().is_multiple_of(2) {
             return Err("Hex string must have even length".into());
@@ -1612,8 +1554,6 @@ impl Handler {
             ))),
         }
     }
-
-    // ── Intercept ───────────────────────────────────────────────────────
 
     async fn disable_fetch_session(&mut self, session: &CdpSession) {
         let session_id = session.session_id().to_string();
@@ -1754,7 +1694,6 @@ impl Handler {
     }
 
     async fn cmd_intercept_list(&mut self) -> Result<Response, String> {
-        // Drain any pending Fetch events before listing
         self.drain_fetch_events().await;
         Ok(Response::ok(self.intercept.list_json()))
     }
@@ -1777,7 +1716,6 @@ impl Handler {
     }
 
     async fn cmd_intercept_log(&mut self, args: &Value) -> Result<Response, String> {
-        // Drain pending events first
         self.drain_fetch_events().await;
         let clear = args["clear"].as_bool().unwrap_or(false);
         let result = self.intercept.log_json();
@@ -1787,7 +1725,6 @@ impl Handler {
         Ok(Response::ok(result))
     }
 
-    /// Drain pending Fetch.requestPaused CDP events and process them.
     async fn drain_fetch_events(&mut self) {
         if !self.intercept.enabled {
             return;
@@ -1815,8 +1752,6 @@ impl Handler {
         }
     }
 
-    // ── Close ───────────────────────────────────────────────────────────
-
     async fn cmd_close(&mut self) -> Result<Response, String> {
         self.disable_all_fetch_sessions().await;
         if let Some(state) = self.state.take() {
@@ -1825,10 +1760,6 @@ impl Handler {
         Ok(Response::ok_text("Browser closed"))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
 
 struct FetchPausedEvent {
     session_id: Option<String>,
@@ -2294,7 +2225,6 @@ fn resolve_js(args: &Value) -> Result<String, String> {
     }
 }
 
-/// Parse an address string (supports 0x hex prefix or decimal).
 fn parse_addr(s: &str) -> Result<usize, String> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
@@ -2305,18 +2235,15 @@ fn parse_addr(s: &str) -> Result<usize, String> {
     }
 }
 
-/// Build JS expression to access WASM memory. Auto-detects if not specified.
 fn wasm_memory_expr(memory: Option<&str>) -> String {
     match memory {
         Some(expr) => expr.to_string(),
         None => {
-            // Auto-detect: try common paths
             r#"(window.__ft?.mem || window.Module?.wasmMemory || window.Module?.HEAPU8?.buffer && {buffer: window.Module.HEAPU8.buffer} || (() => { for (const k of Object.keys(window)) { try { if (window[k] instanceof WebAssembly.Memory) return window[k]; } catch(e){} } return null; })())"#.to_string()
         }
     }
 }
 
-/// Convert hex string to JS byte array literal: "deadbeef" → "0xde,0xad,0xbe,0xef"
 fn hex_to_byte_array(hex: &str) -> String {
     hex.as_bytes()
         .chunks(2)

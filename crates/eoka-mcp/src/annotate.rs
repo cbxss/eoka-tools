@@ -1,18 +1,14 @@
-//! Screenshot annotation — injects numbered labels over interactive elements.
-
-use eoka::{Page, Result};
+use eoka_server::eoka::{Page, Result};
 
 use crate::InteractiveElement;
 
 const ANNOTATE_JS: &str = include_str!("js/annotate.js");
 
-/// Inject numbered overlay labels, take screenshot, remove overlays.
 pub async fn annotated_screenshot(page: &Page, elements: &[InteractiveElement]) -> Result<Vec<u8>> {
     if elements.is_empty() {
         return page.screenshot().await;
     }
 
-    // Build element data as JSON — avoids all escaping issues
     let elem_data: Vec<serde_json::Value> = elements
         .iter()
         .map(|el| {

@@ -1,17 +1,13 @@
-//! Browser and tab state management.
-
 use std::collections::HashMap;
 
 use eoka::{Browser, Page, StealthConfig};
-use eoka_agent::{InteractiveElement, ObserveConfig};
+use eoka_mcp::{InteractiveElement, ObserveConfig};
 
 use super::profile::clone_profile_dir;
 
-/// State for a single tab.
 pub struct TabState {
     pub page: Page,
     pub elements: Vec<InteractiveElement>,
-    /// Snapshot ref label → backend_node_id (from accessibility tree snapshot).
     pub snapshot_refs: HashMap<String, i64>,
     pub console_injected: bool,
 }
@@ -26,21 +22,17 @@ impl TabState {
         }
     }
 
-    /// Clear all cached state. Call on navigation.
     pub fn invalidate(&mut self) {
         self.elements.clear();
         self.snapshot_refs.clear();
     }
 }
 
-/// Multi-tab browser state.
 pub struct BrowserState {
     pub browser: Browser,
     pub tabs: HashMap<String, TabState>,
     pub current_tab_id: Option<String>,
     pub config: ObserveConfig,
-    /// True when attached to a Chrome we don't own. Affects `open` semantics
-    /// (don't navigate user's current tab) and `close` (disconnect, don't kill).
     pub is_live: bool,
 }
 
@@ -115,7 +107,6 @@ impl BrowserState {
         })
     }
 
-    /// Connect to an already-running Chrome at `ws_url`.
     pub async fn connected(ws_url: &str) -> eoka::Result<Self> {
         eprintln!("[eoka] connecting to {}", ws_url);
         let browser = Browser::connect(ws_url).await?;
@@ -128,7 +119,6 @@ impl BrowserState {
         })
     }
 
-    /// Get or create the current tab, navigating to URL.
     pub async fn ensure_tab(&mut self, url: &str) -> eoka::Result<&mut TabState> {
         if let Some(existing_id) = self.current_tab_id.clone() {
             if let Some(tab) = self.tabs.get_mut(&existing_id) {
@@ -160,7 +150,6 @@ impl BrowserState {
             .and_then(|id| self.tabs.get_mut(id))
     }
 
-    /// Create a blank tab, set it current, return its page for further setup.
     pub async fn ensure_blank_tab(&mut self) -> eoka::Result<&mut TabState> {
         let page = self.browser.new_blank_page().await?;
         let id = page.target_id().to_string();
@@ -178,7 +167,6 @@ impl BrowserState {
         self.tabs.insert(tab_id.clone(), TabState::new(page));
         self.browser.activate_tab(&tab_id).await?;
         self.current_tab_id = Some(tab_id.clone());
-        // Safe: we just inserted with this key
         let tab = self.tabs.get_mut(&tab_id).expect("just inserted");
         Ok((tab_id, tab))
     }
@@ -193,8 +181,6 @@ impl BrowserState {
         Ok(())
     }
 
-    /// Attach to a tab that already exists in the browser, without injecting
-    /// any scripts. Used in live mode so the user's tabs aren't polluted.
     pub async fn attach_existing_tab(&mut self, tab_id: &str) -> eoka::Result<()> {
         if !self.tabs.contains_key(tab_id) {
             let page = self.browser.attach_page(tab_id).await?;
