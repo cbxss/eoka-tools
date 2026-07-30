@@ -126,6 +126,7 @@ struct SolveCaptchaParams {
     page_id: String,
     api_key: String,
     captcha_type: String,
+    captcha_mode: String,
     #[serde(rename = "websiteURL", alias = "websiteUrl")]
     website_url: String,
     website_key: String,
@@ -390,6 +391,11 @@ pub async fn press_key(state: &AppState, params: Value) -> Result<Value, ServerE
 /// both sensitive and only useful in the browser session that requested it.
 pub async fn solve_captcha(state: &AppState, params: Value) -> Result<Value, ServerError> {
     let params: SolveCaptchaParams = parse_params(params)?;
+    if params.captcha_mode != "anti_captcha_proxyless" {
+        return Err(ServerError::invalid_params(
+            "captchaMode must explicitly be anti_captcha_proxyless; proxy-backed and manual modes belong to the caller",
+        ));
+    }
     let solution = match params.captcha_type.as_str() {
         "recaptcha_v2_enterprise" => {
             AntiCaptcha::new(params.api_key)
@@ -412,6 +418,7 @@ pub async fn solve_captcha(state: &AppState, params: Value) -> Result<Value, Ser
     let token = solution
         .token()
         .ok_or_else(|| ServerError::internal("captcha solver returned no token"))?;
+    let solver_user_agent = solution.user_agent.clone();
     let script = build_captcha_inject_js(
         token,
         CaptchaInjectionKind::Recaptcha,
@@ -436,6 +443,11 @@ pub async fn solve_captcha(state: &AppState, params: Value) -> Result<Value, Ser
         {
             result = settled;
         }
+    }
+    // Preserve non-secret solver metadata for callers that need to diagnose
+    // identity consistency. The CAPTCHA token never leaves this process.
+    if let Some(user_agent) = solver_user_agent {
+        result["solverUserAgent"] = Value::String(user_agent);
     }
     Ok(single("injection", result))
 }

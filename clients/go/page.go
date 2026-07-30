@@ -17,7 +17,11 @@ type Page struct {
 // session. The API key and resulting token remain inside the local Eoka server
 // process; callers receive only injection metadata.
 type CaptchaOptions struct {
-	APIKey            string          `json:"-"`
+	APIKey string `json:"-"`
+	// Mode is deliberately required by the server. Explicitly choosing
+	// anti_captcha_proxyless prevents a caller from overlooking that the
+	// solver runs from a different network than the browser.
+	Mode              string          `json:"-"`
 	Type              string          `json:"-"`
 	WebsiteURL        string          `json:"-"`
 	WebsiteKey        string          `json:"-"`
@@ -29,11 +33,12 @@ type CaptchaOptions struct {
 // CaptchaInjection reports how Eoka applied a solved CAPTCHA token. It never
 // contains the token itself.
 type CaptchaInjection struct {
-	Kind         string   `json:"kind"`
-	UpdatedCount int      `json:"updated_count"`
-	Created      []string `json:"created"`
-	Callbacks    []string `json:"callbacks"`
-	Errors       []string `json:"errors"`
+	Kind            string   `json:"kind"`
+	UpdatedCount    int      `json:"updated_count"`
+	Created         []string `json:"created"`
+	Callbacks       []string `json:"callbacks"`
+	Errors          []string `json:"errors"`
+	SolverUserAgent string   `json:"solverUserAgent"`
 }
 
 // FetchOptions configures a request executed from the page's browser context.
@@ -229,6 +234,7 @@ func (p *Page) Fetch(ctx context.Context, url string, options FetchOptions) (Fet
 func (p *Page) SolveCaptcha(ctx context.Context, options CaptchaOptions) (CaptchaInjection, error) {
 	params := map[string]any{
 		"apiKey":      options.APIKey,
+		"captchaMode": options.Mode,
 		"captchaType": options.Type,
 		"websiteURL":  options.WebsiteURL,
 		"websiteKey":  options.WebsiteKey,
