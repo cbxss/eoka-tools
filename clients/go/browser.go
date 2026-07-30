@@ -30,6 +30,9 @@ type TabInfo struct {
 type options struct {
 	headless       bool
 	userAgent      string
+	timezone       string
+	viewportWidth  int
+	viewportHeight int
 	proxy          string
 	serverPath     string
 	stderr         io.Writer
@@ -44,6 +47,22 @@ func WithHeadless(headless bool) Option {
 
 func WithUserAgent(userAgent string) Option {
 	return func(o *options) { o.userAgent = userAgent }
+}
+
+// WithTimezone sets the browser's IANA timezone, for example
+// "America/Los_Angeles". Keep it coherent with the network used by the
+// browser instead of accepting a randomized stealth default.
+func WithTimezone(timezone string) Option {
+	return func(o *options) { o.timezone = timezone }
+}
+
+// WithViewport sets the browser viewport and virtual screen dimensions. Both
+// values must be positive; invalid dimensions are rejected before launch.
+func WithViewport(width, height int) Option {
+	return func(o *options) {
+		o.viewportWidth = width
+		o.viewportHeight = height
+	}
 }
 
 func WithProxy(proxyURL string) Option {
@@ -132,6 +151,16 @@ func (o options) launchParams() (map[string]any, error) {
 	params := map[string]any{"headless": o.headless}
 	if o.userAgent != "" {
 		params["userAgent"] = o.userAgent
+	}
+	if o.timezone != "" {
+		params["timezone"] = o.timezone
+	}
+	if o.viewportWidth != 0 || o.viewportHeight != 0 {
+		if o.viewportWidth <= 0 || o.viewportHeight <= 0 {
+			return nil, fmt.Errorf("eoka: viewport dimensions must be positive")
+		}
+		params["viewportWidth"] = o.viewportWidth
+		params["viewportHeight"] = o.viewportHeight
 	}
 	if o.proxy == "" {
 		return params, nil

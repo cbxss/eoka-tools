@@ -14,6 +14,9 @@ struct LaunchParams {
     #[serde(default = "default_headless")]
     headless: bool,
     user_agent: Option<String>,
+    timezone: Option<String>,
+    viewport_width: Option<u32>,
+    viewport_height: Option<u32>,
     proxy: Option<ProxyParams>,
 }
 
@@ -33,10 +36,29 @@ pub async fn launch(state: &mut AppState, params: Value) -> Result<Value, Server
         return Err(ServerError::internal("browser already launched"));
     }
     let params: LaunchParams = parse_params(params)?;
+    if params.viewport_width.is_some() != params.viewport_height.is_some() {
+        return Err(ServerError::invalid_params(
+            "viewportWidth and viewportHeight must be provided together",
+        ));
+    }
+    if params.viewport_width.is_some_and(|width| width == 0)
+        || params.viewport_height.is_some_and(|height| height == 0)
+    {
+        return Err(ServerError::invalid_params(
+            "viewport dimensions must be positive",
+        ));
+    }
     let proxy = resolve_proxy(params.proxy)?;
     let browser = Browser::launch_with(|config| {
         config.headless = params.headless;
         config.user_agent = params.user_agent;
+        config.timezone = params.timezone;
+        if let Some(width) = params.viewport_width {
+            config.viewport_width = width;
+        }
+        if let Some(height) = params.viewport_height {
+            config.viewport_height = height;
+        }
         if let Some(proxy) = proxy {
             config.proxy = Some(proxy.server);
             config.proxy_username = proxy.username;

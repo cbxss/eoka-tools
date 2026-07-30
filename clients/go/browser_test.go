@@ -37,6 +37,34 @@ func TestLaunchParamsRejectInvalidProxy(t *testing.T) {
 	}
 }
 
+func TestLaunchParamsIncludeTimezoneAndViewport(t *testing.T) {
+	params, err := (options{
+		headless:       true,
+		timezone:       "America/Los_Angeles",
+		viewportWidth:  1920,
+		viewportHeight: 1080,
+	}).launchParams()
+	if err != nil {
+		t.Fatalf("launchParams: %v", err)
+	}
+	if got, want := params["timezone"], "America/Los_Angeles"; got != want {
+		t.Fatalf("timezone = %v, want %v", got, want)
+	}
+	if got, want := params["viewportWidth"], 1920; got != want {
+		t.Fatalf("viewportWidth = %v, want %v", got, want)
+	}
+	if got, want := params["viewportHeight"], 1080; got != want {
+		t.Fatalf("viewportHeight = %v, want %v", got, want)
+	}
+}
+
+func TestLaunchParamsRejectIncompleteViewport(t *testing.T) {
+	_, err := (options{viewportWidth: 1920}).launchParams()
+	if err == nil || !strings.Contains(err.Error(), "viewport") {
+		t.Fatalf("launchParams error = %v, want viewport validation error", err)
+	}
+}
+
 func TestBrowserNewPageTabsCloseTab(t *testing.T) {
 	var lastNewPageURL any
 	haveURL := false
