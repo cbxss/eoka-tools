@@ -412,6 +412,7 @@ pub async fn solve_captcha(state: &AppState, params: Value) -> Result<Value, Ser
     let token = solution
         .token()
         .ok_or_else(|| ServerError::internal("captcha solver returned no token"))?;
+    let solver_user_agent = solution.user_agent.clone();
     let script = build_captcha_inject_js(
         token,
         CaptchaInjectionKind::Recaptcha,
@@ -436,6 +437,11 @@ pub async fn solve_captcha(state: &AppState, params: Value) -> Result<Value, Ser
         {
             result = settled;
         }
+    }
+    // Preserve non-secret solver metadata for callers that need to diagnose
+    // identity consistency. The CAPTCHA token never leaves this process.
+    if let Some(user_agent) = solver_user_agent {
+        result["solverUserAgent"] = Value::String(user_agent);
     }
     Ok(single("injection", result))
 }

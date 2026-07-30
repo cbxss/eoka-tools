@@ -29,11 +29,12 @@ type CaptchaOptions struct {
 // CaptchaInjection reports how Eoka applied a solved CAPTCHA token. It never
 // contains the token itself.
 type CaptchaInjection struct {
-	Kind         string   `json:"kind"`
-	UpdatedCount int      `json:"updated_count"`
-	Created      []string `json:"created"`
-	Callbacks    []string `json:"callbacks"`
-	Errors       []string `json:"errors"`
+	Kind            string   `json:"kind"`
+	UpdatedCount    int      `json:"updated_count"`
+	Created         []string `json:"created"`
+	Callbacks       []string `json:"callbacks"`
+	Errors          []string `json:"errors"`
+	SolverUserAgent string   `json:"solverUserAgent"`
 }
 
 // FetchOptions configures a request executed from the page's browser context.

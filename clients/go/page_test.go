@@ -192,6 +192,32 @@ func TestPageFetch(t *testing.T) {
 	}
 }
 
+func TestPageSolveCaptchaReturnsSolverUserAgent(t *testing.T) {
+	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
+		if method != "page.solve_captcha" {
+			return nil, &rpcError{Code: ErrCodeUnknownMethod, Message: method}
+		}
+		return map[string]any{"injection": map[string]any{
+			"kind":            "recaptcha",
+			"updated_count":   1,
+			"solverUserAgent": "Mozilla/5.0 solver",
+		}}, nil
+	})
+
+	injection, err := page.SolveCaptcha(context.Background(), CaptchaOptions{
+		APIKey:     "test-key",
+		Type:       "recaptcha_v2_enterprise",
+		WebsiteURL: "https://example.com/login",
+		WebsiteKey: "site-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if injection.SolverUserAgent != "Mozilla/5.0 solver" {
+		t.Fatalf("solver UA = %q", injection.SolverUserAgent)
+	}
+}
+
 func TestPageState(t *testing.T) {
 	page := newFakePage(t, func(id int64, method string, params json.RawMessage) (any, *rpcError) {
 		switch method {
