@@ -91,10 +91,8 @@ jobs:
             asset: eoka-server-darwin-amd64
           - target: aarch64-apple-darwin
             asset: eoka-server-darwin-arm64
-    # Keep macOS releases on the isolated ephemeral Tart runner pool.
-    runs-on:
-      group: mac-pool
-      labels: ci-mac
+    # Use GitHub-hosted macOS runners so releases do not depend on a local pool.
+    runs-on: macos-latest
     permissions:
       contents: read
     steps:
