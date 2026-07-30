@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 
 use eoka::Browser;
 use eoka_proxy::ProxyConfig;
@@ -17,6 +18,7 @@ struct LaunchParams {
     timezone: Option<String>,
     viewport_width: Option<u32>,
     viewport_height: Option<u32>,
+    user_data_dir: Option<String>,
     proxy: Option<ProxyParams>,
 }
 
@@ -48,11 +50,19 @@ pub async fn launch(state: &mut AppState, params: Value) -> Result<Value, Server
             "viewport dimensions must be positive",
         ));
     }
+    if let Some(path) = params.user_data_dir.as_deref() {
+        if !Path::new(path).is_absolute() {
+            return Err(ServerError::invalid_params(
+                "userDataDir must be an absolute path",
+            ));
+        }
+    }
     let proxy = resolve_proxy(params.proxy)?;
     let browser = Browser::launch_with(|config| {
         config.headless = params.headless;
         config.user_agent = params.user_agent;
         config.timezone = params.timezone;
+        config.user_data_dir = params.user_data_dir;
         if let Some(width) = params.viewport_width {
             config.viewport_width = width;
         }

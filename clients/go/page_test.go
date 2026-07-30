@@ -206,6 +206,7 @@ func TestPageSolveCaptchaReturnsSolverUserAgent(t *testing.T) {
 
 	injection, err := page.SolveCaptcha(context.Background(), CaptchaOptions{
 		APIKey:     "test-key",
+		Mode:       "anti_captcha_proxyless",
 		Type:       "recaptcha_v2_enterprise",
 		WebsiteURL: "https://example.com/login",
 		WebsiteKey: "site-key",

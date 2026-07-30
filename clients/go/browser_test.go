@@ -58,6 +58,16 @@ func TestLaunchParamsIncludeTimezoneAndViewport(t *testing.T) {
 	}
 }
 
+func TestLaunchParamsIncludeUserDataDir(t *testing.T) {
+	params, err := (options{headless: true, userDataDir: "/private/profile"}).launchParams()
+	if err != nil {
+		t.Fatalf("launchParams: %v", err)
+	}
+	if got, want := params["userDataDir"], "/private/profile"; got != want {
+		t.Fatalf("userDataDir = %v, want %v", got, want)
+	}
+}
+
 func TestLaunchParamsRejectIncompleteViewport(t *testing.T) {
 	_, err := (options{viewportWidth: 1920}).launchParams()
 	if err == nil || !strings.Contains(err.Error(), "viewport") {

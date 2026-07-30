@@ -34,6 +34,7 @@ type options struct {
 	viewportWidth  int
 	viewportHeight int
 	proxy          string
+	userDataDir    string
 	serverPath     string
 	stderr         io.Writer
 	noAutoDownload bool
@@ -67,6 +68,13 @@ func WithViewport(width, height int) Option {
 
 func WithProxy(proxyURL string) Option {
 	return func(o *options) { o.proxy = proxyURL }
+}
+
+// WithUserDataDir keeps a dedicated Chromium profile between launches. Use a
+// private, single-purpose directory; it contains browser state in addition to
+// any session file the caller manages separately.
+func WithUserDataDir(path string) Option {
+	return func(o *options) { o.userDataDir = path }
 }
 
 func WithVisible() Option {
@@ -154,6 +162,9 @@ func (o options) launchParams() (map[string]any, error) {
 	}
 	if o.timezone != "" {
 		params["timezone"] = o.timezone
+	}
+	if o.userDataDir != "" {
+		params["userDataDir"] = o.userDataDir
 	}
 	if o.viewportWidth != 0 || o.viewportHeight != 0 {
 		if o.viewportWidth <= 0 || o.viewportHeight <= 0 {

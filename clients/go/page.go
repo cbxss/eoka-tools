@@ -18,6 +18,10 @@ type Page struct {
 // process; callers receive only injection metadata.
 type CaptchaOptions struct {
 	APIKey            string          `json:"-"`
+	// Mode is deliberately required by the server. Explicitly choosing
+	// anti_captcha_proxyless prevents a caller from overlooking that the
+	// solver runs from a different network than the browser.
+	Mode              string          `json:"-"`
 	Type              string          `json:"-"`
 	WebsiteURL        string          `json:"-"`
 	WebsiteKey        string          `json:"-"`
@@ -230,6 +234,7 @@ func (p *Page) Fetch(ctx context.Context, url string, options FetchOptions) (Fet
 func (p *Page) SolveCaptcha(ctx context.Context, options CaptchaOptions) (CaptchaInjection, error) {
 	params := map[string]any{
 		"apiKey":      options.APIKey,
+		"captchaMode": options.Mode,
 		"captchaType": options.Type,
 		"websiteURL":  options.WebsiteURL,
 		"websiteKey":  options.WebsiteKey,
