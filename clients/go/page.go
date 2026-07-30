@@ -17,7 +17,7 @@ type Page struct {
 // session. The API key and resulting token remain inside the local Eoka server
 // process; callers receive only injection metadata.
 type CaptchaOptions struct {
-	APIKey            string          `json:"-"`
+	APIKey string `json:"-"`
 	// Mode is deliberately required by the server. Explicitly choosing
 	// anti_captcha_proxyless prevents a caller from overlooking that the
 	// solver runs from a different network than the browser.
