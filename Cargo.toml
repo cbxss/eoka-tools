@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-default-members = ["crates/eoka-agent", "crates/eoka-server"]
+default-members = ["crates/eoka-mcp", "crates/eoka-server"]
 
 [workspace.package]
 edition = "2021"

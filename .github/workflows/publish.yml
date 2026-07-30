@@ -37,7 +37,7 @@ jobs:
           UA="eoka-tools-publish (${{ github.repository }})"
 
           # Stable publish order: leaf deps first so dependents resolve.
-          for crate in captcha eoka-proxy eoka-runner eoka-email eoka-agent eoka-cli; do
+          for crate in captcha eoka-proxy eoka-runner eoka-email eoka-server eoka-mcp eoka-cli; do
             manifest="crates/${crate}/Cargo.toml"
             [ -f "$manifest" ] || continue
 
@@ -56,6 +56,20 @@ jobs:
 
             echo "Publishing ${package_name} ${version}"
             cargo publish --manifest-path "$manifest" --token "$CARGO_REGISTRY_TOKEN"
+
+            published=false
+            for attempt in $(seq 1 30); do
+              http_status=$(curl -sS -o /dev/null -w "%{http_code}" -A "$UA" "$api_url" || echo 000)
+              if [ "$http_status" = "200" ]; then
+                published=true
+                break
+              fi
+              sleep 5
+            done
+            if [ "$published" != true ]; then
+              echo "${package_name} ${version} did not become available on crates.io"
+              exit 1
+            fi
 
             if git rev-parse "$tag" >/dev/null 2>&1; then
               echo "Tag ${tag} already exists — skip tag push"

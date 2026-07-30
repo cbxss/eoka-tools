@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use eoka::{Browser, Page};
 
@@ -6,7 +7,7 @@ use crate::protocol::ServerError;
 
 #[derive(Default)]
 pub struct AppState {
-    browser: Option<Browser>,
+    browser: Option<Arc<Browser>>,
     pages: HashMap<String, Page>,
     shutdown: bool,
 }
@@ -17,10 +18,10 @@ impl AppState {
     }
 
     pub fn set_browser(&mut self, browser: Browser) {
-        self.browser = Some(browser);
+        self.browser = Some(Arc::new(browser));
     }
 
-    pub fn take_browser(&mut self) -> Option<Browser> {
+    pub fn take_browser(&mut self) -> Option<Arc<Browser>> {
         self.browser.take()
     }
 
@@ -28,7 +29,7 @@ impl AppState {
         self.browser.is_some()
     }
 
-    pub fn browser(&self) -> Result<&Browser, ServerError> {
+    pub fn browser(&self) -> Result<&Arc<Browser>, ServerError> {
         self.browser
             .as_ref()
             .ok_or_else(|| ServerError::internal("browser not launched; call browser.launch first"))

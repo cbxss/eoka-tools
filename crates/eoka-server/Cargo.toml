@@ -1,6 +1,6 @@
 [package]
 name = "eoka-server"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "MIT"
 description = "Sidecar process exposing eoka browser automation over newline-delimited JSON-RPC (see PROTOCOL.md)"

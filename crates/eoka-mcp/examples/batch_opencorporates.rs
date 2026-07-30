@@ -1,6 +1,4 @@
-/// Batch OpenCorporates shell company lookup with CAPTCHA solving
-/// Usage: cargo run --example batch_opencorporates --release
-use eoka::Browser;
+use eoka_server::eoka::Browser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
@@ -43,7 +41,6 @@ impl AntiCaptchaSolver {
         website_url: &str,
         website_key: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        // Create task
         let create_resp = self
             .client
             .post("https://api.anti-captcha.com/createTask")
@@ -72,7 +69,6 @@ impl AntiCaptchaSolver {
             .as_u64()
             .ok_or("No task ID returned")?;
 
-        // Poll for result
         for attempt in 0..300 {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -126,7 +122,6 @@ impl AntiCaptchaSolver {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load API key
     let config_path = dirs::home_dir()
         .ok_or("Cannot find home directory")?
         .join(".anti-captcha-config");
@@ -147,7 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🔑 API Key: {}...", &api_key[..16.min(api_key.len())]);
 
-    // Load entities
     let entities_path = Path::new("shell_companies.json");
     if !entities_path.exists() {
         return Err("shell_companies.json not found. Run: bash extract_entities.sh".into());
@@ -158,7 +152,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📋 Loaded {} entities\n", entities.len());
 
-    // Initialize
     let solver = AntiCaptchaSolver::new(api_key);
 
     println!("🌐 Launching stealth browser...");
@@ -190,18 +183,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Rate limit
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    // Close browser
     browser.close().await?;
 
-    // Save results
     let output_json = serde_json::to_string_pretty(&results)?;
     fs::write("opencorporates_results.json", output_json)?;
 
-    // Summary
     let active = results.iter().filter(|r| r.status == "ACTIVE").count();
     let dissolved = results.iter().filter(|r| r.status == "DISSOLVED").count();
     let not_found = results.iter().filter(|r| r.status == "NOT_FOUND").count();
@@ -235,7 +224,6 @@ async fn search_entity(
     page.goto(&url).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    // Check for CAPTCHA
     let sitekey: Option<String> = page
         .evaluate(
             r#"
@@ -257,7 +245,6 @@ async fn search_entity(
             Ok(token) => {
                 println!("   ✓ CAPTCHA solved");
 
-                // Inject and submit
                 let _: serde_json::Value = page
                     .evaluate(&format!(
                         r#"
@@ -277,7 +264,6 @@ async fn search_entity(
         }
     }
 
-    // Parse results - just return basic info for now
     let result = EntityResult {
         company: company.to_string(),
         state: state.to_string(),

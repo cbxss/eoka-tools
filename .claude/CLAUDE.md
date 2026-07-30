@@ -1,4 +1,4 @@
-# eoka-agent
+# eoka-mcp
 
 AI agent interaction layer for eoka browser automation. Rust crate in eoka-tools workspace.
 
@@ -114,16 +114,16 @@ The server maintains `BrowserState` with:
 
 ```sh
 # Add to Claude Code
-claude mcp add eoka-agent -- cargo run --manifest-path /Users/cbass/Code/eoka-tools/crates/eoka-agent/Cargo.toml
+claude mcp add eoka-mcp -- cargo run --manifest-path /Users/cbass/Code/eoka-tools/crates/eoka-mcp/Cargo.toml
 
 # Or after cargo install
-claude mcp add eoka-agent -- eoka-agent
+claude mcp add eoka-mcp -- eoka-mcp
 ```
 
 ## Build & run
 
 ```sh
-cargo build -p eoka-agent
-cargo run -p eoka-agent --example demo
-cargo run -p eoka-agent  # start MCP server
+cargo build -p eoka-mcp
+cargo run -p eoka-mcp --example demo
+cargo run -p eoka-mcp  # start MCP server
 ```

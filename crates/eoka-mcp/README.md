@@ -1,13 +1,13 @@
-# eoka-agent
+# eoka-mcp
 
-AI agent interaction layer for browser automation. Rust library + MCP server.
+Stdio MCP server and Rust session API for browser automation. The MCP binary supports MCP `2026-07-28` with stateless `server/discover` requests and remains compatible with legacy stdio clients. It owns browser lifecycle through the shared eoka-server runtime; the Rust Session API remains a direct in-process interface.
 
 Part of the [eoka-tools](https://github.com/shrimp-software/eoka-tools) workspace.
 
 ## Quick Start
 
 ```rust
-use eoka_agent::Session;
+use eoka_mcp::Session;
 
 let mut session = Session::launch().await?;
 session.goto("https://example.com").await?;
@@ -32,8 +32,8 @@ session.close().await?;
 ## MCP Server
 
 ```sh
-cargo install eoka-agent
-claude mcp add eoka-agent -- eoka-agent
+cargo install eoka-mcp
+claude mcp add eoka -- eoka-mcp
 ```
 
 Includes CAPTCHA tools. For AWS WAF, provide `website_key`, `iv`, and `context` from `window.gokuProps`; use the returned `token` as the `aws-waf-token` cookie and retain the returned `user_agent`.

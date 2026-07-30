@@ -1,15 +1,10 @@
-//! Browser-specific CAPTCHA detection helpers.
-//!
-//! Solver integrations live in the `captcha` crate so the CLI and MCP
-//! server can share them without coupling the browser core to a provider.
-
 #[derive(Debug, Clone)]
 pub struct CaptchaInfo {
     pub captcha_type: String,
     pub sitekey: String,
 }
 
-pub async fn detect_captcha_on_page(page: &eoka::Page) -> Option<CaptchaInfo> {
+pub async fn detect_captcha_on_page(page: &eoka_server::eoka::Page) -> Option<CaptchaInfo> {
     let hcaptcha_script = r#"
         (() => document.querySelector('[data-sitekey]')?.getAttribute('data-sitekey') || null)()
     "#;

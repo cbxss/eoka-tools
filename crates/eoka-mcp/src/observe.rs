@@ -1,6 +1,4 @@
-//! DOM enumeration — finds all interactive elements on the page.
-
-use eoka::{Page, Result};
+use eoka_server::eoka::{Page, Result};
 use serde::Deserialize;
 
 use crate::InteractiveElement;
@@ -21,10 +19,8 @@ struct RawElement {
     height: f64,
 }
 
-/// JavaScript that enumerates all interactive elements on the page.
 const OBSERVE_JS: &str = include_str!("js/observe.js");
 
-/// Parse raw JSON from observe script into InteractiveElement list.
 pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<InteractiveElement>, String> {
     let raw: Vec<RawElement> =
         serde_json::from_str(json_str).map_err(|e| format!("observe parse error: {}", e))?;
@@ -55,7 +51,7 @@ pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<Interactive
                 } else {
                     Some(r.value)
                 },
-                bbox: eoka::BoundingBox {
+                bbox: eoka_server::eoka::BoundingBox {
                     x: r.x,
                     y: r.y,
                     width: r.width,
@@ -67,7 +63,6 @@ pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<Interactive
         .collect())
 }
 
-/// Run the observe script and return parsed interactive elements.
 pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<InteractiveElement>> {
     let js = format!(
         "var __eoka_viewport_only = {}; {}",
@@ -75,7 +70,7 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
     );
     let json_str: String = page.evaluate(&js).await?;
 
-    parse_raw_elements(&json_str).map_err(eoka::Error::cdp_msg)
+    parse_raw_elements(&json_str).map_err(eoka_server::eoka::Error::cdp_msg)
 }
 
 #[cfg(test)]

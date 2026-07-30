@@ -1,15 +1,9 @@
-//! Integration tests for eoka-agent
-//!
-//! These tests require Chrome to be installed and available.
-//! Run with: cargo test --test integration -- --ignored
-
 use std::collections::HashMap;
 
-use eoka_agent::{target, LivePattern, ObserveConfig, Session};
+use eoka_mcp::{target, LivePattern, ObserveConfig, Session};
 
-/// Check if Chrome is available
 fn chrome_available() -> bool {
-    eoka::stealth::patcher::find_chrome().is_ok()
+    eoka_server::eoka::stealth::patcher::find_chrome().is_ok()
 }
 
 #[tokio::test]
@@ -25,7 +19,6 @@ async fn test_observe_empty_page() {
 
     let elements = agent.observe().await.expect("Failed to observe");
 
-    // Empty page should have no interactive elements
     assert!(elements.is_empty());
 
     agent.close().await.expect("Failed to close");
@@ -55,19 +48,16 @@ async fn test_observe_populated_page() {
 
     let elements = agent.observe().await.expect("Failed to observe");
 
-    // Should find button, input, link, select (at least 4 elements)
     assert!(
         elements.len() >= 4,
         "Expected at least 4 elements, got {}",
         elements.len()
     );
 
-    // Check element list formatting
     let list = agent.element_list();
     assert!(list.contains("<button>"), "list: {}", list);
     assert!(list.contains("<input>"), "list: {}", list);
     assert!(list.contains("<a>"), "list: {}", list);
-    // select has type="select" so it's displayed as <select type="select">
     assert!(list.contains("<select "), "list: {}", list);
     assert!(list.contains("Click Me"), "list: {}", list);
     assert!(
@@ -99,11 +89,9 @@ async fn test_click() {
 
     agent.observe().await.expect("Failed to observe");
 
-    // Click the button by index
     agent.click(0).await.expect("Failed to click");
     agent.wait(100).await;
 
-    // Re-observe and check the text changed
     agent.observe().await.expect("Failed to observe");
     let list = agent.element_list();
     assert!(list.contains("Clicked!"));
@@ -131,10 +119,8 @@ async fn test_fill() {
 
     agent.observe().await.expect("Failed to observe");
 
-    // Fill the input
     agent.fill(0, "Hello World").await.expect("Failed to fill");
 
-    // Re-observe and check the value
     agent.observe().await.expect("Failed to observe");
     let el = agent.get(0).expect("Element not found");
     assert_eq!(el.value.as_deref(), Some("Hello World"));
@@ -163,9 +149,8 @@ async fn test_screenshot() {
 
     let png = agent.screenshot().await.expect("Failed to take screenshot");
 
-    // Check PNG magic bytes
     assert!(png.len() > 100);
-    assert_eq!(&png[0..4], &[0x89, 0x50, 0x4E, 0x47]); // PNG signature
+    assert_eq!(&png[0..4], &[0x89, 0x50, 0x4E, 0x47]);
 
     agent.close().await.expect("Failed to close");
 }
@@ -180,7 +165,6 @@ async fn test_observe_diff() {
 
     let mut agent = Session::launch().await.expect("Failed to launch");
 
-    // Initial page with one button
     agent
         .goto(r#"data:text/html,<button id="btn1">Button 1</button>"#)
         .await
@@ -189,7 +173,6 @@ async fn test_observe_diff() {
     agent.observe().await.expect("Failed to observe");
     assert_eq!(agent.len(), 1);
 
-    // Add another button via JS
     agent
         .exec(
             r#"
@@ -202,14 +185,12 @@ async fn test_observe_diff() {
         .await
         .expect("Failed to execute JS");
 
-    // Observe diff
     let diff = agent.observe_diff().await.expect("Failed to observe_diff");
 
     assert_eq!(diff.added.len(), 1);
     assert_eq!(diff.removed, 0);
     assert_eq!(diff.total, 2);
 
-    // Check Display impl
     let display = diff.to_string();
     assert!(display.contains("+1 added"));
     assert!(display.contains("(2 total)"));
@@ -239,11 +220,9 @@ async fn test_find_by_text() {
 
     agent.observe().await.expect("Failed to observe");
 
-    // Find first element containing "Submit"
     let idx = agent.find_by_text("submit").expect("Should find element");
     assert_eq!(idx, 0);
 
-    // Find all elements containing "Submit"
     let indices = agent.find_all_by_text("submit");
     assert_eq!(indices.len(), 2);
     assert_eq!(indices, vec![0, 2]);
@@ -300,7 +279,6 @@ async fn test_viewport_only_config() {
         return;
     }
 
-    // With viewport_only = true (default)
     let mut agent = Session::launch().await.expect("Failed to launch");
     agent
         .goto(
@@ -317,7 +295,6 @@ async fn test_viewport_only_config() {
     assert_eq!(agent.len(), 1);
     assert!(agent.element_list().contains("Visible"));
 
-    // With viewport_only = false
     agent.set_observe_config(ObserveConfig {
         viewport_only: false,
     });
@@ -351,22 +328,18 @@ async fn test_select_dropdown() {
 
     agent.observe().await.expect("Failed to observe");
 
-    // Get options
     let options = agent.options(0).await.expect("Failed to get options");
     assert_eq!(options.len(), 3);
     assert_eq!(options[0], ("r".to_string(), "Red".to_string()));
 
-    // Select by value
     agent.select(0, "g").await.expect("Failed to select");
 
-    // Verify selection via JS
     let selected: String = agent
         .eval("document.getElementById('color').value")
         .await
         .expect("Failed to evaluate");
     assert_eq!(selected, "g");
 
-    // Select by text
     agent.observe().await.expect("re-observe after select");
     agent.select(0, "Blue").await.expect("Failed to select");
     let selected: String = agent
@@ -388,7 +361,6 @@ async fn test_stale_element_detection() {
 
     let mut agent = Session::launch().await.expect("Failed to launch");
 
-    // Page with a button that removes itself when clicked
     agent
         .goto(
             r#"data:text/html,
@@ -402,13 +374,11 @@ async fn test_stale_element_detection() {
     agent.observe().await.expect("Failed to observe");
     assert_eq!(agent.len(), 2);
 
-    // Remove the button via JS (simulating DOM mutation)
     agent
         .exec("document.getElementById('btn').remove()")
         .await
         .expect("Failed to exec");
 
-    // Try to click the removed element - should error
     let result = agent.click(0).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -443,30 +413,24 @@ async fn test_session_basic() {
     agent.observe().await.expect("Failed to observe");
     assert_eq!(agent.len(), 1);
 
-    // Click should work and auto-wait
     agent.click(0).await.expect("Failed to click");
 
-    // Verify the click worked
     let text = agent.text().await.expect("Failed to get text");
     assert!(text.contains("Clicked!"), "Page text: {}", text);
 
     agent.close().await.expect("Failed to close");
 }
 
-// =============================================================================
-// Live targeting tests
-// =============================================================================
-
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_text() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>Submit Form</button><button>Cancel</button>"#)
         .await
@@ -479,7 +443,6 @@ async fn test_live_resolve_text() {
     assert_eq!(r.tag, "button");
     assert!(r.text.contains("Submit"));
 
-    // Case insensitive
     let r2 = target::resolve(&page, &LivePattern::Text("cancel".into()))
         .await
         .unwrap();
@@ -492,13 +455,13 @@ async fn test_live_resolve_text() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_placeholder() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<input placeholder="Enter your email"><input placeholder="Password">"#)
         .await
@@ -521,13 +484,13 @@ async fn test_live_resolve_placeholder() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_css() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button class="primary">OK</button><button class="secondary">Cancel</button>"#)
         .await
@@ -551,13 +514,13 @@ async fn test_live_resolve_css() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_id() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button id="submit-btn">Submit</button>"#)
         .await
@@ -576,13 +539,13 @@ async fn test_live_resolve_id() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_role() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<div role="button" tabindex="0">Custom Button</div>"#)
         .await
@@ -600,13 +563,13 @@ async fn test_live_resolve_role() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_not_found() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>OK</button>"#)
         .await
@@ -624,13 +587,13 @@ async fn test_live_resolve_not_found() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_bbox() {
-    use eoka_agent::{target, LivePattern};
+    use eoka_mcp::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_agent::Browser::launch().await.unwrap();
+    let browser = eoka_mcp::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<style>body{margin:0}</style><button style="width:100px;height:50px">Click</button>"#)
         .await
@@ -646,10 +609,6 @@ async fn test_live_resolve_bbox() {
     browser.close().await.unwrap();
 }
 
-// =============================================================================
-// SPA tests
-// =============================================================================
-
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_spa_info_history_api() {
@@ -664,7 +623,6 @@ async fn test_spa_info_history_api() {
         .unwrap();
 
     let info = agent.spa_info().await.unwrap();
-    // data: URLs should fall back to history API
     assert!(info.can_navigate);
 
     agent.close().await.unwrap();
@@ -679,7 +637,6 @@ async fn test_history_go() {
 
     let mut agent = Session::launch().await.unwrap();
 
-    // Navigate to two pages
     agent
         .goto(r#"data:text/html,<h1>Page 1</h1>"#)
         .await
@@ -689,13 +646,11 @@ async fn test_history_go() {
         .await
         .unwrap();
 
-    // Go back
     agent.history_go(-1).await.unwrap();
 
     let text = agent.text().await.unwrap();
     assert!(text.contains("Page 1"), "Expected Page 1, got: {}", text);
 
-    // Go forward
     agent.history_go(1).await.unwrap();
 
     let text = agent.text().await.unwrap();
@@ -703,10 +658,6 @@ async fn test_history_go() {
 
     agent.close().await.unwrap();
 }
-
-// =============================================================================
-// Session method tests
-// =============================================================================
 
 #[tokio::test]
 #[ignore = "requires Chrome"]
@@ -729,7 +680,6 @@ async fn test_session_hover() {
     agent.observe().await.unwrap();
     agent.hover(0).await.unwrap();
 
-    // Check hover triggered
     let hovered: String = agent
         .eval("document.querySelector('button').dataset.hovered || 'no'")
         .await
@@ -762,11 +712,9 @@ async fn test_session_scroll_to() {
 
     agent.observe().await.unwrap();
 
-    // Scroll to button
     agent.scroll_to(0).await.unwrap();
     agent.wait(200).await;
 
-    // Check we scrolled (allow some tolerance)
     let scroll_y: f64 = agent.eval("window.scrollY").await.unwrap();
     assert!(scroll_y > 500.0, "Expected scroll > 500, got {}", scroll_y);
 
@@ -813,19 +761,16 @@ async fn test_session_scroll_directions() {
         .await
         .unwrap();
 
-    // Scroll down
     agent.scroll_down().await.unwrap();
     agent.wait(100).await;
     let y1: f64 = agent.eval("window.scrollY").await.unwrap();
     assert!(y1 > 0.0);
 
-    // Scroll to bottom
     agent.scroll_to_bottom().await.unwrap();
     agent.wait(100).await;
     let y2: f64 = agent.eval("window.scrollY").await.unwrap();
     assert!(y2 > y1);
 
-    // Scroll to top
     agent.scroll_to_top().await.unwrap();
     agent.wait(100).await;
     let y3: f64 = agent.eval("window.scrollY").await.unwrap();
@@ -843,7 +788,6 @@ async fn test_session_press_key() {
 
     let mut agent = Session::launch().await.unwrap();
 
-    // Test page with keyboard event listener
     agent
         .goto(
             r#"data:text/html,
@@ -859,17 +803,14 @@ async fn test_session_press_key() {
         .unwrap();
     agent.wait(100).await;
 
-    // Focus the document body for key events
     agent.exec("document.body.focus()").await.unwrap();
     agent.wait(50).await;
 
-    // Press various keys - they should be captured by the listener
     agent.press_key("Tab").await.unwrap();
     agent.press_key("Escape").await.unwrap();
     agent.press_key("Enter").await.unwrap();
     agent.wait(100).await;
 
-    // Verify keys were captured
     let log: String = agent
         .eval("document.getElementById('log').textContent")
         .await
@@ -894,14 +835,12 @@ async fn test_session_eval_exec() {
         .await
         .unwrap();
 
-    // eval returns value
     let text: String = agent
         .eval("document.getElementById('target').textContent")
         .await
         .unwrap();
     assert_eq!(text, "Hello");
 
-    // exec modifies DOM
     agent
         .exec("document.getElementById('target').textContent = 'World'")
         .await
@@ -998,10 +937,6 @@ async fn test_agent_options() {
     agent.close().await.unwrap();
 }
 
-// =============================================================================
-// Edge cases and error handling
-// =============================================================================
-
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_click_out_of_bounds() {
@@ -1096,22 +1031,16 @@ async fn test_hidden_elements_filtered() {
 
     agent.observe().await.unwrap();
 
-    // Should only find the visible button
     assert_eq!(agent.len(), 1);
     assert!(agent.element_list().contains("Visible"));
 
     agent.close().await.unwrap();
 }
 
-// =============================================================================
-// State save/load
-// =============================================================================
-
-/// Helper: capture state from a page (mirrors the MCP helper logic which is pub(crate)).
 async fn capture_state(
-    page: &eoka::Page,
+    page: &eoka_server::eoka::Page,
 ) -> (
-    Vec<eoka::SessionCookie>,
+    Vec<eoka_server::eoka::SessionCookie>,
     HashMap<String, String>,
     HashMap<String, String>,
 ) {
@@ -1131,9 +1060,8 @@ async fn capture_state(
     (cookies, local_storage, session_storage)
 }
 
-/// Helper: restore storage from HashMaps (mirrors the MCP helper logic).
 async fn restore_storage(
-    page: &eoka::Page,
+    page: &eoka_server::eoka::Page,
     local_storage: &HashMap<String, String>,
     session_storage: &HashMap<String, String>,
 ) {
@@ -1155,9 +1083,7 @@ async fn restore_storage(
     }
 }
 
-/// Helper: cookies round-trip directly as `SessionCookie` in eoka 0.5
-/// (`set_cookies_bulk` takes the same type `cookies()` returns).
-fn cookie_to_set_cookie(c: &eoka::SessionCookie) -> eoka::SessionCookie {
+fn cookie_to_set_cookie(c: &eoka_server::eoka::SessionCookie) -> eoka_server::eoka::SessionCookie {
     c.clone()
 }
 
@@ -1259,14 +1185,13 @@ async fn test_state_restore_cookies() {
 
     let page = agent.page();
 
-    // Set a cookie, then clear + restore different ones
     page.set_cookie("original", "yes", Some(".example.com"), Some("/"))
         .await
         .unwrap();
 
     page.clear_all_cookies().await.unwrap();
     let restored_cookies = vec![
-        eoka::SessionCookie {
+        eoka_server::eoka::SessionCookie {
             name: "restored_1".into(),
             value: "val1".into(),
             domain: ".example.com".into(),
@@ -1276,7 +1201,7 @@ async fn test_state_restore_cookies() {
             same_site: Some("Lax".into()),
             expires: None,
         },
-        eoka::SessionCookie {
+        eoka_server::eoka::SessionCookie {
             name: "restored_2".into(),
             value: "val2".into(),
             domain: ".example.com".into(),
@@ -1307,7 +1232,6 @@ async fn test_state_restore_cookies() {
         names
     );
 
-    // Verify httpOnly flag was preserved
     let r1 = cookies.iter().find(|c| c.name == "restored_1").unwrap();
     assert!(r1.http_only, "httpOnly should be true for restored_1");
 
@@ -1329,7 +1253,6 @@ async fn test_state_restore_local_storage() {
         .await
         .unwrap();
 
-    // Restore: clear and set new values
     let data: HashMap<String, String> = [
         ("token".into(), "new_jwt".into()),
         ("pref".into(), "light".into()),
@@ -1361,7 +1284,6 @@ async fn test_state_full_roundtrip() {
 
     let page = agent.page();
 
-    // Set up state: cookies + localStorage + sessionStorage
     page.set_cookie("sid", "session123", Some(".example.com"), Some("/"))
         .await
         .unwrap();
@@ -1372,7 +1294,6 @@ async fn test_state_full_roundtrip() {
         .await
         .unwrap();
 
-    // Capture
     let (cookies, ls, ss) = capture_state(page).await;
     assert!(cookies
         .iter()
@@ -1380,13 +1301,11 @@ async fn test_state_full_roundtrip() {
     assert_eq!(ls.get("app_token").unwrap(), "tok_xyz");
     assert_eq!(ss.get("view").unwrap(), "dashboard");
 
-    // Wipe everything
     page.clear_all_cookies().await.unwrap();
     page.execute("localStorage.clear(); sessionStorage.clear()")
         .await
         .unwrap();
 
-    // Verify wiped
     let (c2, ls2, ss2) = capture_state(page).await;
     assert!(
         !c2.iter().any(|c| c.name == "sid"),
@@ -1398,14 +1317,11 @@ async fn test_state_full_roundtrip() {
     );
     assert!(!ss2.contains_key("view"), "sessionStorage should be wiped");
 
-    // Restore cookies
     let set_cookies: Vec<_> = cookies.iter().map(cookie_to_set_cookie).collect();
     page.set_cookies_bulk(set_cookies).await.unwrap();
 
-    // Restore storage
     restore_storage(page, &ls, &ss).await;
 
-    // Verify restored
     let (c3, ls3, ss3) = capture_state(page).await;
     assert!(
         c3.iter()
@@ -1430,7 +1346,6 @@ async fn test_state_empty_storage_capture() {
     agent.goto("https://example.com").await.unwrap();
 
     let page = agent.page();
-    // Clear everything first
     page.clear_all_cookies().await.unwrap();
     page.execute("localStorage.clear(); sessionStorage.clear()")
         .await
@@ -1438,11 +1353,8 @@ async fn test_state_empty_storage_capture() {
 
     let (cookies, ls, ss) = capture_state(page).await;
 
-    // Cookies might have some from example.com, but storage should be empty
     assert!(ls.is_empty(), "localStorage should be empty");
     assert!(ss.is_empty(), "sessionStorage should be empty");
-    // Cookies: we cleared them, but the site might set some on load.
-    // Just verify capture doesn't error on empty state.
     let _ = cookies;
 
     agent.close().await.unwrap();

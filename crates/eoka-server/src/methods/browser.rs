@@ -168,6 +168,8 @@ pub async fn close(state: &mut AppState, _params: Value) -> Result<Value, Server
         .take_browser()
         .ok_or_else(|| ServerError::internal("browser not launched"))?;
     state.clear_pages();
+    let browser = std::sync::Arc::try_unwrap(browser)
+        .map_err(|_| ServerError::internal("browser is still in use"))?;
     browser.close().await?;
     state.mark_shutdown();
     Ok(json!({}))

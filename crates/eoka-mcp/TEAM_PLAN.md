@@ -1,4 +1,4 @@
-# eoka-agent: Post-Refactor Hardening Plan
+# eoka-mcp: Post-Refactor Hardening Plan
 
 4 parallel workstreams. Each team member owns one tier end-to-end.
 
@@ -15,10 +15,10 @@
 
 **Fix:**
 ```rust
-pub(crate) async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
+pub(crate) async fn wait_for_stable(page: &Page) -> eoka_server::eoka::Result<()> {
     // ... same polling loop ...
     if start.elapsed() > max_wait {
-        return Err(eoka::Error::CdpSimple(
+        return Err(eoka_server::eoka::Error::CdpSimple(
             "Page did not reach interactive state within 10s".into()
         ));
     }
@@ -135,14 +135,14 @@ This saves 1 line per handler and removes the scattered `ok_or_else` calls.
 
 **Action:** Add `#[deprecated]` to `Session` with a message pointing to `AgentPage` or MCP. If nothing outside this crate uses `Session`, mark it `pub(crate)` or remove it entirely.
 
-Check: `cargo doc -p eoka-agent` and `grep -r "Session" ../` outside the crate.
+Check: `cargo doc -p eoka-mcp` and `grep -r "Session" ../` outside the crate.
 
 ### Acceptance criteria
 - [ ] AgentError has 6+ variants with From<AgentError> for ErrorData
 - [ ] ERR_NO_BROWSER/ERR_NO_TAB constants removed
 - [ ] lock_browser() used in all handlers, no more raw lock+ok_or_else
 - [ ] Session is deprecated or removed
-- [ ] `cargo clippy -p eoka-agent -- -Dwarnings` clean
+- [ ] `cargo clippy -p eoka-mcp -- -Dwarnings` clean
 
 ---
 
@@ -214,10 +214,10 @@ Add ESLint or Biome check for the 6 extracted JS files. Create a minimal config 
 
 ```bash
 # In CI:
-npx biome check crates/eoka-agent/src/js/
+npx biome check crates/eoka-mcp/src/js/
 ```
 
-Add a `biome.json` or `.eslintrc` in `crates/eoka-agent/` scoped to `src/js/`.
+Add a `biome.json` or `.eslintrc` in `crates/eoka-mcp/` scoped to `src/js/`.
 
 ### 4B. Test coverage for error paths
 **File:** `src/mcp/error.rs`, `src/mcp/helpers.rs`, new test file `src/mcp/tests.rs`
@@ -253,7 +253,7 @@ Review: Are these tested? Are the JS snippets in captcha.rs also candidates for 
 - [ ] 8+ new unit tests for error/edge cases
 - [ ] ObserveConfig either consistently used or removed from public API
 - [ ] Captcha detection JS either extracted or has tests
-- [ ] `cargo test -p eoka-agent` passes with 30+ tests (currently 24)
+- [ ] `cargo test -p eoka-mcp` passes with 30+ tests (currently 24)
 
 ---
 
@@ -267,8 +267,8 @@ Review: Are these tested? Are the JS snippets in captcha.rs also candidates for 
 ## Verification (all tiers)
 
 ```bash
-cargo build -p eoka-agent
-cargo test -p eoka-agent
-cargo clippy -p eoka-agent -- -Dwarnings
-cargo fmt -p eoka-agent -- --check
+cargo build -p eoka-mcp
+cargo test -p eoka-mcp
+cargo clippy -p eoka-mcp -- -Dwarnings
+cargo fmt -p eoka-mcp -- --check
 ```

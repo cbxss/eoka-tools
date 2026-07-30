@@ -1,26 +1,23 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use eoka::Page;
-use rmcp::model::{CallToolResult, Content, ErrorData};
+use eoka_server::eoka::Page;
+use rmcp::model::{CallToolResult, ContentBlock, ErrorData};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use eoka_agent::{observe, target, InteractiveElement, Target};
+use eoka_mcp::{observe, target, InteractiveElement, Target};
 
 use super::error::{internal, invalid};
 use super::state::TabState;
 use super::types::JsRequest;
 
-/// Resolved target ready for action.
 pub(crate) struct ResolvedTarget {
     pub selector: String,
     pub desc: String,
 }
 
-/// Shared selector-generation JS (used by ref resolution and live resolve).
 const SELECTOR_JS: &str = include_str!("../js/selector.js");
 
-/// Resolve a snapshot ref (@eN) to a CSS selector via CDP.
 async fn resolve_ref(
     page: &Page,
     snapshot_refs: &HashMap<String, i64>,
@@ -67,7 +64,6 @@ async fn resolve_ref(
         .ok_or_else(|| stale("selector generation returned null"))
 }
 
-/// Resolve target to selector + bbox. Index uses cache, ref uses snapshot, live uses JS.
 pub(crate) async fn resolve_target(
     tab: &TabState,
     target_str: &str,
@@ -111,16 +107,13 @@ pub(crate) async fn resolve_target(
     }
 }
 
-/// Get page title without blocking on busy JS thread.
 pub(crate) async fn title_nonblocking(page: &Page) -> String {
     page.evaluate_sync("document.title || ''")
         .await
         .unwrap_or_default()
 }
 
-/// Wait for document.readyState to reach at least "interactive".
-/// Returns Err if the page does not stabilize within 10 seconds.
-pub(crate) async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
+pub(crate) async fn wait_for_stable(page: &Page) -> eoka_server::eoka::Result<()> {
     let start = std::time::Instant::now();
     let max_wait = std::time::Duration::from_secs(10);
     loop {
@@ -132,7 +125,7 @@ pub(crate) async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
             return Ok(());
         }
         if start.elapsed() > max_wait {
-            return Err(eoka::Error::cdp_msg(
+            return Err(eoka_server::eoka::Error::cdp_msg(
                 "Page did not reach interactive state within 10s",
             ));
         }
@@ -140,7 +133,6 @@ pub(crate) async fn wait_for_stable(page: &Page) -> eoka::Result<()> {
     }
 }
 
-/// Auto-observe if target is an index and element cache is empty.
 pub(crate) async fn auto_observe_if_needed(
     tab: &mut TabState,
     target_str: &str,
@@ -154,7 +146,6 @@ pub(crate) async fn auto_observe_if_needed(
     Ok(())
 }
 
-/// Check if an error message indicates a stale/detached element that warrants retry.
 pub(crate) fn is_stale_element_error(msg: &str) -> bool {
     const NEEDLES: &[&str] = &[
         "not found",
@@ -166,14 +157,13 @@ pub(crate) fn is_stale_element_error(msg: &str) -> bool {
     NEEDLES.iter().any(|n| msg.contains(n))
 }
 
-/// What to do with a resolved selector.
 enum Action<'a> {
     Click,
     Fill(&'a str),
 }
 
 impl Action<'_> {
-    async fn run(&self, page: &Page, selector: &str) -> eoka::Result<()> {
+    async fn run(&self, page: &Page, selector: &str) -> eoka_server::eoka::Result<()> {
         match self {
             Action::Click => page.click(selector).await,
             Action::Fill(text) => page.fill(selector, text).await,
@@ -181,7 +171,6 @@ impl Action<'_> {
     }
 }
 
-/// Resolve + act + auto-retry once on stale element error.
 async fn act_with_retry(
     tab: &mut TabState,
     target_str: &str,
@@ -206,7 +195,6 @@ async fn act_with_retry(
     }
 }
 
-/// Click with auto-retry on stale element.
 pub(crate) async fn click_with_retry(
     tab: &mut TabState,
     target_str: &str,
@@ -215,7 +203,6 @@ pub(crate) async fn click_with_retry(
     act_with_retry(tab, target_str, viewport_only, Action::Click).await
 }
 
-/// Fill with auto-retry on stale element.
 pub(crate) async fn fill_with_retry(
     tab: &mut TabState,
     target_str: &str,
@@ -225,7 +212,6 @@ pub(crate) async fn fill_with_retry(
     act_with_retry(tab, target_str, viewport_only, Action::Fill(text)).await
 }
 
-/// Resolve JS code from a JsRequest: prefer `file` (read from disk), fall back to `js` inline.
 pub(crate) fn resolve_js(req: &JsRequest) -> Result<String, ErrorData> {
     if let Some(path) = &req.file {
         std::fs::read_to_string(path)
@@ -238,10 +224,9 @@ pub(crate) fn resolve_js(req: &JsRequest) -> Result<String, ErrorData> {
 }
 
 pub(crate) fn text_ok(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
-    Ok(CallToolResult::success(vec![Content::text(s.into())]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(s)]))
 }
 
-/// Generate element list string.
 pub(crate) fn element_list(elements: &[InteractiveElement]) -> String {
     let mut out = String::with_capacity(elements.len() * 40);
     for el in elements {
@@ -250,18 +235,14 @@ pub(crate) fn element_list(elements: &[InteractiveElement]) -> String {
     out
 }
 
-/// Valid filter values for the observe tool.
 pub(crate) const VALID_OBSERVE_FILTERS: &[&str] = &["inputs", "buttons", "all"];
 
-/// JS that captures console.* calls and window errors into global arrays.
 const CONSOLE_CAPTURE_JS: &str = include_str!("../js/console_capture.js");
 
-/// Inject console capture into the current page and register it for future navigations.
 pub(crate) async fn ensure_console_capture(tab: &mut TabState) -> Result<(), ErrorData> {
     if tab.console_injected {
         return Ok(());
     }
-    // Register for all future navigations in this tab
     tab.page
         .session()
         .send::<_, serde_json::Value>(
@@ -270,7 +251,6 @@ pub(crate) async fn ensure_console_capture(tab: &mut TabState) -> Result<(), Err
         )
         .await
         .map_err(internal)?;
-    // Also inject into the current page immediately
     let _: String = tab
         .page
         .evaluate_sync(CONSOLE_CAPTURE_JS)
@@ -279,10 +259,6 @@ pub(crate) async fn ensure_console_capture(tab: &mut TabState) -> Result<(), Err
     tab.console_injected = true;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// State save/load
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedState {
@@ -320,8 +296,8 @@ where
     Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0))
 }
 
-impl From<eoka::SessionCookie> for SavedCookie {
-    fn from(c: eoka::SessionCookie) -> Self {
+impl From<eoka_server::eoka::SessionCookie> for SavedCookie {
+    fn from(c: eoka_server::eoka::SessionCookie) -> Self {
         Self {
             name: c.name,
             value: c.value,
@@ -336,8 +312,8 @@ impl From<eoka::SessionCookie> for SavedCookie {
 }
 
 impl SavedCookie {
-    pub fn to_session_cookie(&self) -> eoka::SessionCookie {
-        eoka::SessionCookie {
+    pub fn to_session_cookie(&self) -> eoka_server::eoka::SessionCookie {
+        eoka_server::eoka::SessionCookie {
             name: self.name.clone(),
             value: self.value.clone(),
             domain: self.domain.clone(),
@@ -354,7 +330,6 @@ impl SavedCookie {
     }
 }
 
-/// Capture full browser state: cookies (via CDP), localStorage, sessionStorage, URL, UA.
 pub(crate) async fn capture_state(page: &Page) -> Result<SavedState, ErrorData> {
     let cookies: Vec<SavedCookie> = page
         .cookies()
@@ -405,11 +380,9 @@ pub(crate) async fn capture_state(page: &Page) -> Result<SavedState, ErrorData> 
     })
 }
 
-/// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub(crate) async fn restore_state(page: &Page, state: &SavedState) -> Result<(), ErrorData> {
-    // Restore cookies via CDP (full fidelity: httpOnly, secure, sameSite, expires)
     page.clear_all_cookies().await.map_err(internal)?;
-    let set_cookies: Vec<eoka::SessionCookie> = state
+    let set_cookies: Vec<eoka_server::eoka::SessionCookie> = state
         .cookies
         .iter()
         .map(|c| c.to_session_cookie())
@@ -418,7 +391,6 @@ pub(crate) async fn restore_state(page: &Page, state: &SavedState) -> Result<(),
         page.set_cookies_bulk(set_cookies).await.map_err(internal)?;
     }
 
-    // Restore localStorage
     if !state.local_storage.is_empty() {
         let json = serde_json::to_string(&state.local_storage).map_err(internal)?;
         let js = format!(
@@ -428,7 +400,6 @@ pub(crate) async fn restore_state(page: &Page, state: &SavedState) -> Result<(),
         let _: String = page.evaluate_sync(&js).await.unwrap_or_default();
     }
 
-    // Restore sessionStorage
     if !state.session_storage.is_empty() {
         let json = serde_json::to_string(&state.session_storage).map_err(internal)?;
         let js = format!(
@@ -444,7 +415,7 @@ pub(crate) async fn restore_state(page: &Page, state: &SavedState) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eoka_agent::InteractiveElement;
+    use eoka_mcp::InteractiveElement;
 
     fn make_test_element(index: usize, tag: &str, text: &str) -> InteractiveElement {
         InteractiveElement {
@@ -457,7 +428,7 @@ mod tests {
             selector: format!("[data-idx=\"{}\"]", index),
             checked: false,
             value: None,
-            bbox: eoka::BoundingBox {
+            bbox: eoka_server::eoka::BoundingBox {
                 x: 0.0,
                 y: 0.0,
                 width: 100.0,
@@ -538,7 +509,7 @@ mod tests {
 
     #[test]
     fn saved_cookie_from_cdp_cookie() {
-        let cdp = eoka::SessionCookie {
+        let cdp = eoka_server::eoka::SessionCookie {
             name: "sid".into(),
             value: "abc123".into(),
             domain: ".example.com".into(),
@@ -629,7 +600,7 @@ mod tests {
 
     #[test]
     fn saved_cookie_all_fields_survive_conversion() {
-        let cdp = eoka::SessionCookie {
+        let cdp = eoka_server::eoka::SessionCookie {
             name: "token".into(),
             value: "eyJhbGciOiJSUzI1NiJ9".into(),
             domain: ".app.example.com".into(),
@@ -642,7 +613,6 @@ mod tests {
         let saved = SavedCookie::from(cdp);
         let sc = saved.to_session_cookie();
 
-        // Verify full round-trip fidelity
         assert_eq!(sc.name, "token");
         assert_eq!(sc.value, "eyJhbGciOiJSUzI1NiJ9");
         assert_eq!(sc.domain, ".app.example.com");
@@ -752,7 +722,6 @@ mod tests {
 
     #[test]
     fn saved_state_missing_field_fails() {
-        // Missing required "url" field
         let result = serde_json::from_str::<SavedState>(r#"{"cookies":[]}"#);
         assert!(result.is_err());
     }

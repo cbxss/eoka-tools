@@ -1,6 +1,6 @@
 [package]
 name = "eoka-cli"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 license = "MIT"
 description = "Browser automation CLI for AI agents and pentesting"
@@ -12,7 +12,7 @@ name = "eoka"
 path = "src/main.rs"
 
 [dependencies]
-eoka-agent = { version = "0.1.9", path = "../eoka-agent" }
+eoka-mcp = { version = "0.1.0", path = "../eoka-mcp" }
 eoka-proxy = { path = "../eoka-proxy", version = "0.1.0" }
 captcha = { package = "eoka-captcha", version = "0.1.1", path = "../captcha" }
 eoka = "0.5"

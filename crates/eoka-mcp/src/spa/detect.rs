@@ -1,12 +1,9 @@
-//! SPA router detection logic.
-
-use eoka::{Page, Result};
+use eoka_server::eoka::{Page, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{RouterType, SpaRouterInfo};
 
-/// Raw detection result from JavaScript.
 #[derive(Debug, Deserialize)]
 struct JsDetectionResult {
     router_type: String,
@@ -17,14 +14,13 @@ struct JsDetectionResult {
     details: Option<String>,
 }
 
-/// JavaScript code for detecting SPA routers.
 const DETECT_JS: &str = include_str!("../js/spa_detect.js");
 
-/// Detect the SPA router type and current route state.
 pub async fn detect_router(page: &Page) -> Result<SpaRouterInfo> {
     let json: String = page.evaluate(DETECT_JS).await?;
-    let raw: JsDetectionResult = serde_json::from_str(&json)
-        .map_err(|e| eoka::Error::cdp_msg(format!("Failed to parse router detection: {}", e)))?;
+    let raw: JsDetectionResult = serde_json::from_str(&json).map_err(|e| {
+        eoka_server::eoka::Error::cdp_msg(format!("Failed to parse router detection: {}", e))
+    })?;
 
     let router_type = match raw.router_type.as_str() {
         "react-router" => RouterType::ReactRouter,
