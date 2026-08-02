@@ -1,6 +1,6 @@
 # eoka-tools
 
-Companion tools for [eoka](https://github.com/cbxss/eoka), the low-level CDP browser automation library.
+Companion tools for [eoka](https://github.com/shrimp-software/eoka), the low-level CDP browser automation library.
 
 ## Components
 
