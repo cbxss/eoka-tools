@@ -1,5 +1,6 @@
 mod eval;
 pub mod intercept;
+pub mod network;
 mod persist;
 pub mod profile;
 pub mod script_policy;
@@ -19,6 +20,7 @@ use serde_json::{json, Value};
 use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
 use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
+use network::{NetworkConfig, NetworkRecorder};
 use persist::{capture_state, ensure_console_capture, restore_cookies, restore_state, SavedState};
 use script_policy::{ScriptPolicyMode, ScriptPolicyState};
 use state::{BrowserState, TabState};
@@ -32,6 +34,7 @@ pub struct Handler {
     spec: LaunchSpec,
     intercept: InterceptState,
     script_policy: ScriptPolicyState,
+    network: Option<NetworkRecorder>,
     fetch_events: Option<tokio::sync::broadcast::Receiver<CdpMessage>>,
     fetch_sessions: HashMap<String, CdpSession>,
 }
@@ -60,6 +63,7 @@ impl Handler {
             spec,
             intercept: InterceptState::new(),
             script_policy,
+            network: None,
             fetch_events: None,
             fetch_sessions: HashMap::new(),
         }
@@ -214,6 +218,13 @@ impl Handler {
             "js_block" => self.cmd_js_block(args).await,
             "js_remove" => self.cmd_js_remove(args).await,
             "js_list" => self.cmd_js_list().await,
+            "network_record_start" => self.cmd_network_record_start(args).await,
+            "network_record_stop" => self.cmd_network_record_stop().await,
+            "network_record_status" => self.cmd_network_record_status().await,
+            "network_log" => self.cmd_network_log(args).await,
+            "network_show" => self.cmd_network_show(args).await,
+            "network_save_har" => self.cmd_network_save_har(args).await,
+            "network_clear" => self.cmd_network_clear().await,
             "close" => self.cmd_close().await,
             other => Err(format!("Unknown command: {}", other)),
         }
@@ -272,11 +283,18 @@ impl Handler {
             || script_enabled.is_some();
 
         let drain = self.start_fetch_drain();
+        let active_recorder = self.network.clone();
         let result = async {
             let state = self.require_state_mut()?;
 
             if state.is_live {
                 state.new_tab(None).await.map_err(|e| e.to_string())?;
+                if let Some(recorder) = active_recorder.as_ref() {
+                    if recorder.is_active().await {
+                        let session = state.current_tab().ok_or("No tab")?.page.session().clone();
+                        recorder.update_session(&session).await?;
+                    }
+                }
             }
 
             if has_extras {
@@ -378,6 +396,7 @@ impl Handler {
         }
         let (url, title) = result?;
         self.sync_fetch_interception().await?;
+        self.sync_network_recording().await?;
         Ok(Response::ok_text(format!(
             "Navigated to: {}\nTitle: {}",
             url, title
@@ -1144,13 +1163,29 @@ impl Handler {
     async fn cmd_tab_new(&mut self, args: &Value) -> Result<Response, String> {
         self.ensure_browser().await?;
         let url = args["url"].as_str();
+        let active_recorder = self.network.clone();
         let state = self.require_state_mut()?;
         let (tab_id, url, title) = {
-            let (tab_id, tab) = state.new_tab(url).await.map_err(|e| e.to_string())?;
+            let record_first_navigation = match active_recorder.as_ref() {
+                Some(recorder) => recorder.is_active().await,
+                None => false,
+            };
+            let (tab_id, tab) = if let (Some(url), true) = (url, record_first_navigation) {
+                let (tab_id, tab) = state.new_tab(None).await.map_err(|e| e.to_string())?;
+                let session = tab.page.session().clone();
+                if let Some(recorder) = active_recorder.as_ref() {
+                    recorder.update_session(&session).await?;
+                }
+                tab.page.goto(url).await.map_err(|e| e.to_string())?;
+                (tab_id, tab)
+            } else {
+                state.new_tab(url).await.map_err(|e| e.to_string())?
+            };
             let (url, title) = tab_summary(tab).await?;
             (tab_id, url, title)
         };
         self.sync_fetch_interception().await?;
+        self.sync_network_recording().await?;
         Ok(Response::ok_text(format!(
             "Opened new tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1166,6 +1201,7 @@ impl Handler {
             tab_summary(tab).await?
         };
         self.sync_fetch_interception().await?;
+        self.sync_network_recording().await?;
         Ok(Response::ok_text(format!(
             "Switched to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1185,6 +1221,7 @@ impl Handler {
             tab_summary(tab).await?
         };
         self.sync_fetch_interception().await?;
+        self.sync_network_recording().await?;
         Ok(Response::ok_text(format!(
             "Attached to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1242,6 +1279,7 @@ impl Handler {
             self.disable_fetch_session(&session).await;
         }
         self.sync_fetch_interception().await?;
+        self.sync_network_recording().await?;
         Ok(Response::ok_text(format!("Closed tab [{}]", tab_id)))
     }
 
@@ -1491,6 +1529,146 @@ impl Handler {
         Ok(())
     }
 
+    fn network_recorder(&mut self) -> Result<NetworkRecorder, String> {
+        if let Some(recorder) = self.network.clone() {
+            return Ok(recorder);
+        }
+        let session = self.require_tab()?.page.session().clone();
+        let recorder = NetworkRecorder::spawn(session.transport().clone());
+        self.network = Some(recorder.clone());
+        Ok(recorder)
+    }
+
+    async fn sync_network_recording(&mut self) -> Result<(), String> {
+        let Some(recorder) = self.network.clone() else {
+            return Ok(());
+        };
+        if !recorder.is_active().await {
+            return Ok(());
+        }
+        let session = self.require_tab()?.page.session().clone();
+        recorder.update_session(&session).await
+    }
+
+    pub async fn is_network_recording(&self) -> bool {
+        match self.network.as_ref() {
+            Some(recorder) => recorder.is_active().await,
+            None => false,
+        }
+    }
+
+    async fn cmd_network_record_start(&mut self, args: &Value) -> Result<Response, String> {
+        self.ensure_browser().await?;
+        if self
+            .state
+            .as_ref()
+            .and_then(|state| state.current_tab())
+            .is_none()
+        {
+            self.require_state_mut()?
+                .ensure_blank_tab()
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        let patterns = args
+            .get("patterns")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|patterns| !patterns.is_empty())
+            .unwrap_or_else(|| NetworkConfig::default().patterns);
+        let max_body_bytes = args["max_body_bytes"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_else(|| NetworkConfig::default().max_body_bytes);
+        let config = NetworkConfig {
+            patterns,
+            capture_bodies: !args["no_bodies"].as_bool().unwrap_or(false),
+            max_body_bytes,
+            ..NetworkConfig::default()
+        };
+        let session = self.require_tab()?.page.session().clone();
+        let recorder = self.network_recorder()?;
+        let status = recorder.start(&session, config).await?;
+        Ok(Response::ok(status))
+    }
+
+    async fn cmd_network_record_stop(&mut self) -> Result<Response, String> {
+        let Some(recorder) = self.network.clone() else {
+            return Ok(Response::ok(json!({ "active": false })));
+        };
+        let session = self
+            .state
+            .as_ref()
+            .and_then(|state| state.current_tab())
+            .map(|tab| tab.page.session().clone());
+        Ok(Response::ok(recorder.stop(session).await?))
+    }
+
+    async fn cmd_network_record_status(&mut self) -> Result<Response, String> {
+        match self.network.as_ref() {
+            Some(recorder) => Ok(Response::ok(recorder.status().await)),
+            None => Ok(Response::ok(json!({
+                "active": false,
+                "entry_count": 0,
+                "in_flight": 0,
+            }))),
+        }
+    }
+
+    async fn cmd_network_log(&mut self, args: &Value) -> Result<Response, String> {
+        let Some(recorder) = self.network.as_ref() else {
+            return Ok(Response::ok(json!([])));
+        };
+        let limit = args["limit"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(100)
+            .min(1000);
+        let pattern = args["pattern"].as_str();
+        let method = args["method"].as_str();
+        let status = args["status"]
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok());
+        Ok(Response::ok(
+            recorder.log(limit, pattern, method, status).await,
+        ))
+    }
+
+    async fn cmd_network_show(&mut self, args: &Value) -> Result<Response, String> {
+        let id = args["id"].as_u64().ok_or("Missing 'id'")?;
+        let Some(recorder) = self.network.as_ref() else {
+            return Err(format!("Network entry #{} not found", id));
+        };
+        recorder
+            .show(id)
+            .await
+            .map(Response::ok)
+            .ok_or_else(|| format!("Network entry #{} not found", id))
+    }
+
+    async fn cmd_network_save_har(&mut self, args: &Value) -> Result<Response, String> {
+        let path = self.arg_str(args, "path")?;
+        let Some(recorder) = self.network.as_ref() else {
+            return Err("No network recorder has been started".into());
+        };
+        Ok(Response::ok(
+            recorder.save_har(std::path::Path::new(path)).await?,
+        ))
+    }
+
+    async fn cmd_network_clear(&mut self) -> Result<Response, String> {
+        match self.network.as_ref() {
+            Some(recorder) => Ok(Response::ok(recorder.clear().await?)),
+            None => Ok(Response::ok(json!({ "cleared": true }))),
+        }
+    }
+
     async fn cmd_intercept_add(&mut self, args: &Value) -> Result<Response, String> {
         let url_pattern = self.arg_str(args, "url_pattern")?.to_string();
         let capture = args["capture"].as_str().map(std::path::PathBuf::from);
@@ -1532,6 +1710,27 @@ impl Handler {
 
     async fn cmd_intercept_log(&mut self, args: &Value) -> Result<Response, String> {
         self.drain_fetch_events().await;
+        if let Some(recorder) = self.network.clone() {
+            self.intercept
+                .resolve_network_links(|session_id, network_id, url, method| {
+                    let recorder = recorder.clone();
+                    let session_id = session_id.map(str::to_string);
+                    let network_id = network_id.map(str::to_string);
+                    let url = url.to_string();
+                    let method = method.to_string();
+                    async move {
+                        recorder
+                            .entry_id_for_network(
+                                session_id.as_deref(),
+                                network_id.as_deref(),
+                                &url,
+                                &method,
+                            )
+                            .await
+                    }
+                })
+                .await;
+        }
         let clear = args["clear"].as_bool().unwrap_or(false);
         let result = self.intercept.log_json();
         if clear {
@@ -1568,6 +1767,14 @@ impl Handler {
     }
 
     async fn cmd_close(&mut self) -> Result<Response, String> {
+        if let Some(recorder) = self.network.clone() {
+            let session = self
+                .state
+                .as_ref()
+                .and_then(|state| state.current_tab())
+                .map(|tab| tab.page.session().clone());
+            let _ = recorder.stop(session).await;
+        }
         self.disable_all_fetch_sessions().await;
         if let Some(state) = self.state.take() {
             state.close().await.map_err(|e| e.to_string())?;
@@ -1677,6 +1884,10 @@ async fn process_fetch_paused_event(
     let url = req_field("url").unwrap_or_default();
     let method = req_field("method").unwrap_or_else(|| "GET".to_string());
     let post_data = req_field("postData");
+    let network_id = params
+        .get("networkId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let session_id = fetch_command_session_id(
         event.session_id.as_deref(),
         config.fallback_session_id.as_deref(),
@@ -1762,6 +1973,9 @@ async fn process_fetch_paused_event(
         method,
         has_body: post_data.is_some(),
         action: action.to_string(),
+        session_id: Some(session_id),
+        network_id,
+        network_entry_id: None,
     })
 }
 

@@ -1,10 +1,9 @@
-//! Network request interception via CDP Fetch domain.
-
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-/// A single intercept rule.
+use super::network::url_matches;
+
 #[derive(Clone)]
 pub struct InterceptRule {
     pub id: usize,
@@ -20,7 +19,6 @@ impl InterceptRule {
     }
 }
 
-/// Log entry for an intercepted request.
 #[derive(Clone)]
 pub struct InterceptLogEntry {
     pub rule_id: usize,
@@ -28,6 +26,9 @@ pub struct InterceptLogEntry {
     pub method: String,
     pub has_body: bool,
     pub action: String,
+    pub session_id: Option<String>,
+    pub network_id: Option<String>,
+    pub network_entry_id: Option<u64>,
 }
 
 pub struct InterceptState {
@@ -109,6 +110,25 @@ impl InterceptState {
         self.log.clear();
     }
 
+    pub async fn resolve_network_links<F, Fut>(&mut self, mut resolve: F)
+    where
+        F: FnMut(Option<&str>, Option<&str>, &str, &str) -> Fut,
+        Fut: std::future::Future<Output = Option<u64>>,
+    {
+        for entry in &mut self.log {
+            if entry.network_entry_id.is_some() {
+                continue;
+            }
+            entry.network_entry_id = resolve(
+                entry.session_id.as_deref(),
+                entry.network_id.as_deref(),
+                &entry.url,
+                &entry.method,
+            )
+            .await;
+        }
+    }
+
     pub fn list_json(&self) -> Value {
         let rules: Vec<Value> = self
             .rules
@@ -137,36 +157,14 @@ impl InterceptState {
                     "method": e.method,
                     "has_body": e.has_body,
                     "action": e.action,
+                    "session_id": e.session_id,
+                    "network_id": e.network_id,
+                    "network_entry_id": e.network_entry_id,
                 })
             })
             .collect();
         Value::Array(entries)
     }
-}
-
-/// Simple glob matching: * matches any sequence of chars.
-fn url_matches(pattern: &str, url: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return url.contains(pattern);
-    }
-
-    let mut pos = 0;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        match url[pos..].find(part) {
-            Some(found) => {
-                if i == 0 && found != 0 {
-                    return false; // first part must match at start if no leading *
-                }
-                pos += found + part.len();
-            }
-            None => return false,
-        }
-    }
-    true
 }
 
 #[cfg(test)]
