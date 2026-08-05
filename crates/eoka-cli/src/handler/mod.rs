@@ -2,6 +2,7 @@ mod eval;
 pub mod intercept;
 mod persist;
 pub mod profile;
+mod proxy_forward;
 pub mod script_policy;
 pub mod state;
 mod target;
