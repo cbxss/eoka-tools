@@ -4,6 +4,7 @@ use eoka::{Browser, Page, StealthConfig};
 use eoka_mcp::{InteractiveElement, ObserveConfig};
 
 use super::profile::clone_profile_dir;
+use super::proxy_forward::ProxyForwarder;
 
 pub struct TabState {
     pub page: Page,
@@ -34,6 +35,7 @@ pub struct BrowserState {
     pub current_tab_id: Option<String>,
     pub config: ObserveConfig,
     pub is_live: bool,
+    _proxy_forwarder: Option<ProxyForwarder>,
 }
 
 impl BrowserState {
@@ -53,8 +55,19 @@ impl BrowserState {
             })
             .transpose()?;
 
+        let mut proxy_forwarder = None;
         let (proxy, proxy_username, proxy_password) = match proxy {
-            Some(proxy) => (Some(proxy.server), proxy.username, proxy.password),
+            Some(proxy) => match (proxy.username, proxy.password) {
+                (Some(username), Some(password)) if proxy.server.starts_with("http://") => {
+                    let forwarder = ProxyForwarder::start(&proxy.server, &username, &password)
+                        .await
+                        .map_err(|error| eoka::Error::Launch(error.to_string()))?;
+                    let server = forwarder.server().to_owned();
+                    proxy_forwarder = Some(forwarder);
+                    (Some(server), None, None)
+                }
+                (username, password) => (Some(proxy.server), username, password),
+            },
             None => (None, None, None),
         };
 
@@ -105,6 +118,7 @@ impl BrowserState {
             current_tab_id: None,
             config: ObserveConfig::default(),
             is_live: false,
+            _proxy_forwarder: proxy_forwarder,
         })
     }
 
@@ -117,6 +131,7 @@ impl BrowserState {
             current_tab_id: None,
             config: ObserveConfig::default(),
             is_live: true,
+            _proxy_forwarder: None,
         })
     }
 

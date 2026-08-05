@@ -3,6 +3,7 @@ pub mod intercept;
 pub mod network;
 mod persist;
 pub mod profile;
+mod proxy_forward;
 pub mod script_policy;
 pub mod state;
 mod target;
