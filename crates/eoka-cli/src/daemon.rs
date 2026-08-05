@@ -111,3 +111,42 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
     eprintln!("[eoka] daemon stopped");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The idle check only runs on the accept loop's fixed 10s tick (see the
+    /// `tokio::time::timeout(Duration::from_secs(10), listener.accept())`
+    /// above), so shutdown latency is capped at ~10s regardless of how low
+    /// EOKA_IDLE_TIMEOUT is set — this test's outer bound accounts for that.
+    #[tokio::test]
+    async fn idle_timeout_shuts_daemon_down_with_no_clients() {
+        // SAFETY: no other test in this binary reads or writes EOKA_IDLE_TIMEOUT.
+        unsafe {
+            std::env::set_var("EOKA_IDLE_TIMEOUT", "50");
+        }
+        let session_name = format!("eoka-idle-test-{}", std::process::id());
+        let spec = LaunchSpec::Launch {
+            headless: true,
+            from_profile: None,
+            clone_state_from: None,
+            no_stealth: false,
+            proxy: None,
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(15), run(&session_name, spec)).await;
+
+        unsafe {
+            std::env::remove_var("EOKA_IDLE_TIMEOUT");
+        }
+
+        assert!(
+            result.is_ok(),
+            "daemon did not shut itself down within 15s of being idle"
+        );
+        assert!(result.unwrap().is_ok(), "daemon run() returned an error");
+        assert!(!session::socket_path(&session_name).exists());
+        assert!(!session::pid_path(&session_name).exists());
+    }
+}

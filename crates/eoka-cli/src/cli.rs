@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -46,6 +46,30 @@ pub struct Cli {
     /// connect/CDP mode; opt-in for launch mode.
     #[arg(long, global = true, env = "EOKA_NO_STEALTH")]
     pub no_stealth: bool,
+
+    /// Proxy URL for the launched browser (socks5://host:port or
+    /// http://host:port, optionally with user:pass@). For a local Tor
+    /// daemon: socks5://127.0.0.1:9050.
+    #[arg(
+        long,
+        global = true,
+        value_name = "URL",
+        env = "EOKA_PROXY",
+        conflicts_with = "proxy_file"
+    )]
+    pub proxy: Option<String>,
+
+    /// Read the proxy from a file: one proxy per line, blank lines and
+    /// `#`-prefixed lines ignored. If multiple lines are present, one is
+    /// chosen at random per launch.
+    #[arg(
+        long,
+        global = true,
+        value_name = "FILE",
+        env = "EOKA_PROXY_FILE",
+        conflicts_with = "proxy"
+    )]
+    pub proxy_file: Option<PathBuf>,
 
     /// Internal: run as daemon (hidden)
     #[arg(long, hide = true)]
@@ -398,6 +422,11 @@ pub enum Command {
     SpaNavigate { path: String },
 
     // ── Session management ──────────────────────────────────────────
+    /// List all sessions (running or stale) across every --session name,
+    /// like `tmux ls`.
+    #[command(alias = "ls")]
+    Sessions,
+
     /// Show daemon status
     Status,
 
@@ -431,47 +460,7 @@ pub enum Command {
 #[derive(Subcommand)]
 pub enum CaptchaAction {
     /// Solve hCaptcha, reCAPTCHA, or an AWS WAF challenge with Anti-Captcha.
-    Solve {
-        /// hcaptcha, recaptcha_v2, recaptcha_v2_enterprise, recaptcha_v3, or amazon_waf
-        #[arg(long)]
-        captcha_type: String,
-        #[arg(long)]
-        website_url: String,
-        #[arg(long)]
-        website_key: String,
-        /// Anti-Captcha key; defaults to ANTI_CAPTCHA_KEY.
-        #[arg(long, env = "ANTI_CAPTCHA_KEY")]
-        api_key: Option<String>,
-        #[arg(long)]
-        page_action: Option<String>,
-        #[arg(long)]
-        min_score: Option<f32>,
-        /// JSON object passed to grecaptcha.enterprise.render (Enterprise v2 only).
-        #[arg(long)]
-        enterprise_payload: Option<String>,
-        /// reCAPTCHA script domain: www.google.com or www.recaptcha.net (Enterprise v2 only).
-        #[arg(long)]
-        api_domain: Option<String>,
-        /// Required for amazon_waf; obtain from window.gokuProps.
-        #[arg(long)]
-        iv: Option<String>,
-        /// Required for amazon_waf; obtain from window.gokuProps.
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long)]
-        captcha_script: Option<String>,
-        #[arg(long)]
-        challenge_script: Option<String>,
-        /// Inject the solved token into the current browser session.
-        #[arg(long)]
-        inject: bool,
-        /// Optional JavaScript callback expression to call with the solved token.
-        #[arg(long)]
-        inject_callback: Option<String>,
-        /// Target to click after injecting the solved token.
-        #[arg(long)]
-        click_after: Option<String>,
-    },
+    Solve(Box<SolveArgs>),
 
     /// Inject an already-solved CAPTCHA token into the current browser session.
     Inject {
@@ -486,6 +475,49 @@ pub enum CaptchaAction {
         #[arg(long)]
         click_after: Option<String>,
     },
+}
+
+#[derive(Args)]
+pub struct SolveArgs {
+    /// hcaptcha, recaptcha_v2, recaptcha_v2_enterprise, recaptcha_v3, or amazon_waf
+    #[arg(long)]
+    pub captcha_type: String,
+    #[arg(long)]
+    pub website_url: String,
+    #[arg(long)]
+    pub website_key: String,
+    /// Anti-Captcha key; defaults to ANTI_CAPTCHA_KEY.
+    #[arg(long, env = "ANTI_CAPTCHA_KEY")]
+    pub api_key: Option<String>,
+    #[arg(long)]
+    pub page_action: Option<String>,
+    #[arg(long)]
+    pub min_score: Option<f32>,
+    /// JSON object passed to grecaptcha.enterprise.render (Enterprise v2 only).
+    #[arg(long)]
+    pub enterprise_payload: Option<String>,
+    /// reCAPTCHA script domain: www.google.com or www.recaptcha.net (Enterprise v2 only).
+    #[arg(long)]
+    pub api_domain: Option<String>,
+    /// Required for amazon_waf; obtain from window.gokuProps.
+    #[arg(long)]
+    pub iv: Option<String>,
+    /// Required for amazon_waf; obtain from window.gokuProps.
+    #[arg(long)]
+    pub context: Option<String>,
+    #[arg(long)]
+    pub captcha_script: Option<String>,
+    #[arg(long)]
+    pub challenge_script: Option<String>,
+    /// Inject the solved token into the current browser session.
+    #[arg(long)]
+    pub inject: bool,
+    /// Optional JavaScript callback expression to call with the solved token.
+    #[arg(long)]
+    pub inject_callback: Option<String>,
+    /// Target to click after injecting the solved token.
+    #[arg(long)]
+    pub click_after: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -572,4 +604,18 @@ pub enum TabAction {
     /// Attach to an existing tab by ID without injecting any scripts.
     /// Useful in --cdp mode to drive a tab the user already has open.
     Attach { tab_id: String },
+}
+
+/// Shared by the test modules in `captcha_cmd.rs`, `batch.rs`, and
+/// `command_request.rs` — kept in one place instead of duplicated per file.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    pub(crate) fn parsed_command(args: &[&str]) -> (Cli, Command) {
+        let mut cli = Cli::try_parse_from(args).unwrap();
+        let command = cli.command.take().unwrap();
+        (cli, command)
+    }
 }

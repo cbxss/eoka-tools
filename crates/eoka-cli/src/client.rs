@@ -62,6 +62,7 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             from_profile,
             clone_state_from,
             no_stealth,
+            proxy,
         } => {
             if !*headless {
                 cmd.arg("--headed");
@@ -74,6 +75,12 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             }
             if *no_stealth {
                 cmd.arg("--no-stealth");
+            }
+            // Already resolved (literal value or the one line picked from
+            // --proxy-file) — forward as --proxy so the daemon subprocess
+            // doesn't re-resolve --proxy-file and pick a different line.
+            if let Some(p) = proxy {
+                cmd.arg("--proxy").arg(p);
             }
         }
         LaunchSpec::Connect { ws_url } => {
