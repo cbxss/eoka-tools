@@ -493,13 +493,49 @@ pub enum NetworkAction {
         method: Option<String>,
         #[arg(long)]
         status: Option<u16>,
+        #[arg(long)]
+        since: Option<u64>,
+        #[arg(long)]
+        compact: bool,
     },
     Show {
         id: u64,
+        #[arg(long)]
+        body: bool,
+        #[arg(long)]
+        max_body: Option<usize>,
     },
     #[command(name = "save-har")]
     SaveHar {
         path: PathBuf,
+        #[arg(long)]
+        settle_ms: Option<u64>,
+    },
+    Har {
+        path: PathBuf,
+        #[arg(long)]
+        settle_ms: Option<u64>,
+    },
+    Export {
+        path: PathBuf,
+        #[arg(long, default_value = "har")]
+        format: String,
+        #[arg(long)]
+        settle_ms: Option<u64>,
+    },
+    Wait {
+        #[arg(long)]
+        pattern: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        status: Option<u16>,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(long)]
+        since: Option<u64>,
+        #[arg(long)]
+        include_existing: bool,
     },
     Clear,
     Intercept {
@@ -517,6 +553,8 @@ pub enum NetworkRecordAction {
         no_bodies: bool,
         #[arg(long, default_value = "10485760")]
         max_body_bytes: usize,
+        #[arg(long)]
+        clear: bool,
     },
     Stop,
     Status,

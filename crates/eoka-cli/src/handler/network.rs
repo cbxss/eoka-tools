@@ -1,315 +1,53 @@
-use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use base64::Engine;
-use eoka::cdp::{transport::CdpMessage, Session as CdpSession, Transport};
-use serde_json::{json, Map, Value};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use eoka::cdp::{Session as CdpSession, Transport};
+use serde_json::{json, Value};
+use tokio::sync::{mpsc, Mutex, Notify, Semaphore};
 
-const DEFAULT_BODY_LIMIT: usize = 10 * 1024 * 1024;
-const DEFAULT_BODY_POOL_LIMIT: usize = 512 * 1024 * 1024;
-const DEFAULT_ENTRY_LIMIT: usize = 10_000;
-const DEFAULT_TOTAL_BUFFER_SIZE: usize = 128 * 1024 * 1024;
+mod body;
+mod har;
+mod model;
+mod runtime;
 
-#[derive(Clone)]
-pub struct NetworkConfig {
-    pub patterns: Vec<String>,
-    pub capture_bodies: bool,
-    pub max_body_bytes: usize,
-    pub body_pool_bytes: usize,
-    pub entry_limit: usize,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            patterns: vec!["http://*".to_string(), "https://*".to_string()],
-            capture_bodies: true,
-            max_body_bytes: DEFAULT_BODY_LIMIT,
-            body_pool_bytes: DEFAULT_BODY_POOL_LIMIT,
-            entry_limit: DEFAULT_ENTRY_LIMIT,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct BodyCapture {
-    pub bytes: Vec<u8>,
-    pub base64_encoded: bool,
-    pub mime_type: Option<String>,
-    pub omitted: Option<String>,
-}
-
-impl BodyCapture {
-    fn omitted(reason: impl Into<String>) -> Self {
-        Self {
-            bytes: Vec::new(),
-            base64_encoded: false,
-            mime_type: None,
-            omitted: Some(reason.into()),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    fn to_text(&self) -> Option<String> {
-        if self.omitted.is_some() {
-            return None;
-        }
-        if self.base64_encoded {
-            return Some(base64::engine::general_purpose::STANDARD.encode(&self.bytes));
-        }
-        String::from_utf8(self.bytes.clone()).ok()
-    }
-}
-
-#[derive(Clone)]
-pub struct NetworkEntry {
-    pub id: u64,
-    pub session_id: String,
-    pub target_id: String,
-    pub request_id: String,
-    pub hop: u32,
-    pub url: String,
-    pub method: String,
-    pub resource_type: Option<String>,
-    pub started_at: f64,
-    pub wall_time: Option<f64>,
-    pub request_headers: Map<String, Value>,
-    pub request_post_data: Option<BodyCapture>,
-    pub status: Option<u16>,
-    pub status_text: Option<String>,
-    pub protocol: Option<String>,
-    pub mime_type: Option<String>,
-    pub response_headers: Map<String, Value>,
-    pub response_headers_text: Option<String>,
-    pub request_headers_text: Option<String>,
-    pub remote_ip: Option<String>,
-    pub remote_port: Option<u64>,
-    pub encoded_data_length: Option<f64>,
-    pub response_body: Option<BodyCapture>,
-    pub finished_at: Option<f64>,
-    pub failed_at: Option<f64>,
-    pub failure_text: Option<String>,
-    pub canceled: bool,
-    pub complete: bool,
-}
-
-impl NetworkEntry {
-    fn duration_ms(&self) -> f64 {
-        let end = self
-            .finished_at
-            .or(self.failed_at)
-            .unwrap_or(self.started_at);
-        ((end - self.started_at) * 1000.0).max(0.0)
-    }
-
-    fn body_bytes(&self) -> usize {
-        self.request_post_data
-            .as_ref()
-            .map(BodyCapture::len)
-            .unwrap_or(0)
-            + self
-                .response_body
-                .as_ref()
-                .map(BodyCapture::len)
-                .unwrap_or(0)
-    }
-
-    fn log_json(&self) -> Value {
-        json!({
-            "id": self.id,
-            "url": self.url,
-            "method": self.method,
-            "status": self.status,
-            "resource_type": self.resource_type,
-            "duration_ms": self.duration_ms(),
-            "request_body": body_summary(self.request_post_data.as_ref()),
-            "response_body": body_summary(self.response_body.as_ref()),
-            "complete": self.complete,
-            "failed": self.failure_text,
-        })
-    }
-
-    fn full_json(&self) -> Value {
-        json!({
-            "id": self.id,
-            "session_id": self.session_id,
-            "target_id": self.target_id,
-            "request_id": self.request_id,
-            "hop": self.hop,
-            "url": self.url,
-            "method": self.method,
-            "resource_type": self.resource_type,
-            "started_at": self.wall_time,
-            "duration_ms": self.duration_ms(),
-            "request": {
-                "headers": self.request_headers,
-                "headers_text": self.request_headers_text,
-                "post_data": body_json(self.request_post_data.as_ref()),
-            },
-            "response": {
-                "status": self.status,
-                "status_text": self.status_text,
-                "protocol": self.protocol,
-                "mime_type": self.mime_type,
-                "headers": self.response_headers,
-                "headers_text": self.response_headers_text,
-                "remote_ip": self.remote_ip,
-                "remote_port": self.remote_port,
-                "encoded_data_length": self.encoded_data_length,
-                "body": body_json(self.response_body.as_ref()),
-            },
-            "failure": self.failure_text,
-            "canceled": self.canceled,
-            "complete": self.complete,
-        })
-    }
-}
-
-#[derive(Default)]
-pub struct NetworkStore {
-    active: bool,
-    session_id: Option<String>,
-    target_id: Option<String>,
-    config: NetworkConfig,
-    entries: VecDeque<NetworkEntry>,
-    active_by_key: HashMap<String, u64>,
-    next_id: u64,
-    body_bytes: usize,
-    lagged_events: u64,
-    dropped_events: u64,
-    started_at: Option<u64>,
-}
-
-impl NetworkStore {
-    fn clear(&mut self) {
-        let active = self.active;
-        let session_id = self.session_id.clone();
-        let target_id = self.target_id.clone();
-        let config = self.config.clone();
-        self.entries.clear();
-        self.active_by_key.clear();
-        self.next_id = 0;
-        self.body_bytes = 0;
-        self.lagged_events = 0;
-        self.dropped_events = 0;
-        self.active = active;
-        self.session_id = session_id;
-        self.target_id = target_id;
-        self.config = config;
-    }
-
-    fn push_entry(&mut self, mut entry: NetworkEntry) {
-        self.next_id += 1;
-        entry.id = self.next_id;
-        self.active_by_key
-            .insert(entry_key(&entry.session_id, &entry.request_id), entry.id);
-        self.entries.push_back(entry);
-        self.enforce_entry_limit();
-    }
-
-    fn entry_mut_by_id(&mut self, id: u64) -> Option<&mut NetworkEntry> {
-        self.entries.iter_mut().find(|entry| entry.id == id)
-    }
-
-    fn entry_by_id(&self, id: u64) -> Option<&NetworkEntry> {
-        self.entries.iter().find(|entry| entry.id == id)
-    }
-
-    fn current_entry_mut(
-        &mut self,
-        session_id: &str,
-        request_id: &str,
-    ) -> Option<&mut NetworkEntry> {
-        let id = *self.active_by_key.get(&entry_key(session_id, request_id))?;
-        self.entry_mut_by_id(id)
-    }
-
-    fn finalize_key(&mut self, session_id: &str, request_id: &str) {
-        self.active_by_key
-            .remove(&entry_key(session_id, request_id));
-    }
-
-    fn add_body_bytes(&mut self, bytes: usize) {
-        self.body_bytes += bytes;
-        self.enforce_body_limit();
-    }
-
-    fn enforce_entry_limit(&mut self) {
-        while self.entries.len() > self.config.entry_limit {
-            let Some(entry) = self.entries.pop_front() else {
-                break;
-            };
-            self.body_bytes = self.body_bytes.saturating_sub(entry.body_bytes());
-            self.active_by_key
-                .remove(&entry_key(&entry.session_id, &entry.request_id));
-        }
-    }
-
-    fn enforce_body_limit(&mut self) {
-        while self.body_bytes > self.config.body_pool_bytes {
-            let Some(entry) = self.entries.iter_mut().find(|entry| entry.body_bytes() > 0) else {
-                break;
-            };
-            if let Some(body) = entry
-                .request_post_data
-                .as_mut()
-                .filter(|body| body.len() > 0)
-            {
-                self.body_bytes = self.body_bytes.saturating_sub(body.len());
-                *body = BodyCapture::omitted("evicted");
-                continue;
-            }
-            if let Some(body) = entry.response_body.as_mut().filter(|body| body.len() > 0) {
-                self.body_bytes = self.body_bytes.saturating_sub(body.len());
-                *body = BodyCapture::omitted("evicted");
-            }
-        }
-    }
-
-    fn status_json(&self) -> Value {
-        json!({
-            "active": self.active,
-            "session_id": self.session_id,
-            "target_id": self.target_id,
-            "patterns": self.config.patterns,
-            "entry_count": self.entries.len(),
-            "in_flight": self.active_by_key.len(),
-            "captured_body_bytes": self.body_bytes,
-            "body_limit_bytes": self.config.body_pool_bytes,
-            "per_body_limit_bytes": self.config.max_body_bytes,
-            "lagged_events": self.lagged_events,
-            "dropped_events": self.dropped_events,
-            "started_at": self.started_at,
-        })
-    }
-}
+use har::{atomic_write_json, build_har, build_json_export};
+pub use model::NetworkConfig;
+use model::{
+    entry_key, now_secs, BodyCapture, NetworkEntry, NetworkStore, DEFAULT_TOTAL_BUFFER_SIZE,
+};
+use runtime::{network_enable, run_recorder, NetworkControl};
 
 #[derive(Clone)]
 pub struct NetworkRecorder {
+    namespace: String,
     store: Arc<Mutex<NetworkStore>>,
     control: mpsc::Sender<NetworkControl>,
+    notify: Arc<Notify>,
 }
 
 impl NetworkRecorder {
-    pub fn spawn(transport: Arc<Transport>) -> Self {
+    pub fn spawn(namespace: impl Into<String>, transport: Arc<Transport>) -> Self {
         let store = Arc::new(Mutex::new(NetworkStore {
             config: NetworkConfig::default(),
             ..NetworkStore::default()
         }));
+        let notify = Arc::new(Notify::new());
         let (control, control_rx) = mpsc::channel(32);
         tokio::spawn(run_recorder(
             store.clone(),
             transport.clone(),
             transport.subscribe(),
             control_rx,
+            Arc::new(Semaphore::new(8)),
+            notify.clone(),
         ));
-        Self { store, control }
+        Self {
+            namespace: namespace.into(),
+            store,
+            control,
+            notify,
+        }
     }
 
     pub async fn start(
@@ -359,11 +97,16 @@ impl NetworkRecorder {
             .send(NetworkControl::Clear)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(json!({ "cleared": true }))
+        let meta = self.meta_with_warnings(Vec::new()).await;
+        Ok(json!({ "cleared": true, "meta": meta }))
     }
 
     pub async fn status(&self) -> Value {
-        self.store.lock().await.status_json()
+        let status = self.store.lock().await.status_json();
+        json!({
+            "meta": self.meta_with_warnings(Vec::new()).await,
+            "status": status,
+        })
     }
 
     pub async fn is_active(&self) -> bool {
@@ -376,32 +119,73 @@ impl NetworkRecorder {
         pattern: Option<&str>,
         method: Option<&str>,
         status: Option<u16>,
+        since: Option<u64>,
+        compact: bool,
     ) -> Value {
         let store = self.store.lock().await;
+        let host = pattern.and_then(pattern_exact_host);
         let mut rows: Vec<Value> = store
-            .entries
-            .iter()
+            .candidate_ids(method, status, None, host.as_deref())
+            .into_iter()
+            .filter_map(|id| store.entries.get(&id))
+            .filter(|entry| since.map(|id| entry.id > id).unwrap_or(true))
             .filter(|entry| pattern.map(|p| url_matches(p, &entry.url)).unwrap_or(true))
-            .filter(|entry| {
-                method
-                    .map(|m| entry.method.eq_ignore_ascii_case(m))
-                    .unwrap_or(true)
-            })
-            .filter(|entry| status.map(|s| entry.status == Some(s)).unwrap_or(true))
             .rev()
             .take(limit)
-            .map(NetworkEntry::log_json)
+            .map(|entry| {
+                if compact {
+                    json!({
+                        "id": entry.id,
+                        "url": entry.url,
+                        "method": entry.method,
+                        "status": entry.status,
+                        "complete": entry.complete,
+                    })
+                } else {
+                    entry.log_json()
+                }
+            })
             .collect();
         rows.reverse();
-        Value::Array(rows)
+        let next_since = rows
+            .iter()
+            .filter_map(|entry| entry["id"].as_u64())
+            .max()
+            .or(since)
+            .unwrap_or(0);
+        json!({
+            "meta": self.meta_from_store(&store, next_since, Vec::new()),
+            "count": rows.len(),
+            "entries": rows,
+            "filters": {
+                "limit": limit,
+                "pattern": pattern,
+                "method": method,
+                "status": status,
+                "since": since,
+                "compact": compact,
+            },
+        })
     }
 
-    pub async fn show(&self, id: u64) -> Option<Value> {
-        self.store
-            .lock()
-            .await
-            .entry_by_id(id)
-            .map(NetworkEntry::full_json)
+    pub async fn show(
+        &self,
+        id: u64,
+        include_body: bool,
+        max_body: Option<usize>,
+    ) -> Option<Value> {
+        let store = self.store.lock().await;
+        store.entry_by_id(id).map(|entry| {
+            let entry = if include_body {
+                entry.full_json_with_body_limit(max_body)
+            } else {
+                entry.metadata_json()
+            };
+            json!({
+                "meta": self.meta_from_store(&store, id, Vec::new()),
+                "entry": entry,
+            })
+        })
     }
 
     pub async fn entry_id_for_network(
@@ -418,7 +202,7 @@ impl NetworkRecorder {
             }
             if let Some(entry) = store
                 .entries
-                .iter()
+                .values()
                 .rev()
                 .find(|entry| entry.session_id == session_id && entry.request_id == request_id)
             {
@@ -427,388 +211,173 @@ impl NetworkRecorder {
         }
         store
             .entries
-            .iter()
+            .values()
             .rev()
             .find(|entry| entry.url == url && entry.method.eq_ignore_ascii_case(method))
             .map(|entry| entry.id)
     }
 
-    pub async fn save_har(&self, path: &Path) -> Result<Value, String> {
+    pub async fn export(
+        &self,
+        path: &Path,
+        format: &str,
+        settle_ms: Option<u64>,
+    ) -> Result<Value, String> {
+        self.settle(settle_ms.unwrap_or(5000)).await;
         let snapshot = {
             let store = self.store.lock().await;
-            store.entries.iter().cloned().collect::<Vec<_>>()
+            store.entries.values().cloned().collect::<Vec<_>>()
         };
-        let har = build_har(&snapshot);
-        atomic_write_json(path, &har)?;
+        let output = match format {
+            "har" => build_har(&snapshot),
+            "json" => build_json_export(&snapshot),
+            other => return Err(format!("Unknown network export format '{}'", other)),
+        };
+        atomic_write_json(path, &output)?;
         let in_flight = snapshot.iter().filter(|entry| !entry.complete).count();
         let exported = snapshot.len().saturating_sub(in_flight);
+        let store = self.store.lock().await;
+        let body_pending = store.body_pending;
+        let body_omitted = snapshot
+            .iter()
+            .flat_map(|entry| {
+                [
+                    entry.request_post_data.as_ref(),
+                    entry.response_body.as_ref(),
+                ]
+            })
+            .flatten()
+            .filter(|body| body.omitted.is_some())
+            .count();
         Ok(json!({
+            "meta": self.meta_from_store(&store, self.highest_snapshot_id(&snapshot), Vec::new()),
             "path": path.to_string_lossy(),
+            "format": format,
+            "entries": snapshot.len(),
             "exported": exported,
             "skipped_in_flight": in_flight,
+            "body_pending": body_pending,
+            "body_omitted": body_omitted,
+            "warnings": [],
         }))
     }
-}
 
-enum NetworkControl {
-    Start {
-        session_id: String,
-        target_id: String,
-        config: NetworkConfig,
-    },
-    SetSession {
-        session_id: String,
-        target_id: String,
-    },
-    Stop,
-    Clear,
-}
+    pub async fn high_water_id(&self) -> u64 {
+        self.store.lock().await.next_id
+    }
 
-async fn run_recorder(
-    store: Arc<Mutex<NetworkStore>>,
-    transport: Arc<Transport>,
-    mut rx: broadcast::Receiver<CdpMessage>,
-    mut control_rx: mpsc::Receiver<NetworkControl>,
-) {
-    loop {
-        tokio::select! {
-            command = control_rx.recv() => {
-                let Some(command) = command else {
-                    break;
-                };
-                apply_control(&store, command).await;
-            }
-            message = rx.recv() => {
-                match message {
-                    Ok(CdpMessage::Event { method, params, session_id }) => {
-                        handle_network_event(&store, transport.clone(), method, params, session_id).await;
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        let mut store = store.lock().await;
-                        store.lagged_events += n;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }
-    }
-}
-
-async fn apply_control(store: &Arc<Mutex<NetworkStore>>, command: NetworkControl) {
-    let mut store = store.lock().await;
-    match command {
-        NetworkControl::Start {
-            session_id,
-            target_id,
-            config,
-        } => {
-            store.active = true;
-            store.session_id = Some(session_id);
-            store.target_id = Some(target_id);
-            store.config = config;
-            if store.started_at.is_none() {
-                store.started_at = Some(now_secs());
-            }
-        }
-        NetworkControl::SetSession {
-            session_id,
-            target_id,
-        } => {
-            if store.active {
-                store.session_id = Some(session_id);
-                store.target_id = Some(target_id);
-            }
-        }
-        NetworkControl::Stop => {
-            store.active = false;
-            store.session_id = None;
-            store.target_id = None;
-        }
-        NetworkControl::Clear => store.clear(),
-    }
-}
-
-async fn handle_network_event(
-    store: &Arc<Mutex<NetworkStore>>,
-    transport: Arc<Transport>,
-    method: String,
-    params: Value,
-    session_id: Option<String>,
-) {
-    let Some(session_id) = session_id else {
-        return;
-    };
-    match method.as_str() {
-        "Network.requestWillBeSent" => request_will_be_sent(store, params, session_id).await,
-        "Network.responseReceived" => response_received(store, params, session_id).await,
-        "Network.requestWillBeSentExtraInfo" => request_extra_info(store, params, session_id).await,
-        "Network.responseReceivedExtraInfo" => response_extra_info(store, params, session_id).await,
-        "Network.loadingFinished" => loading_finished(store, transport, params, session_id).await,
-        "Network.loadingFailed" => loading_failed(store, params, session_id).await,
-        _ => {}
-    }
-}
-
-async fn request_will_be_sent(store: &Arc<Mutex<NetworkStore>>, params: Value, session_id: String) {
-    let request_id = match params.get("requestId").and_then(Value::as_str) {
-        Some(id) => id.to_string(),
-        None => return,
-    };
-    let request = params.get("request").cloned().unwrap_or_else(|| json!({}));
-    let url = request
-        .get("url")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let method = request
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or("GET")
-        .to_string();
-    let mut store = store.lock().await;
-    if !store.active || store.session_id.as_deref() != Some(session_id.as_str()) {
-        return;
-    }
-    if !store
-        .config
-        .patterns
-        .iter()
-        .any(|pattern| url_matches(pattern, &url))
-    {
-        return;
-    }
-    if let Some(previous) = store.current_entry_mut(&session_id, &request_id) {
-        previous.complete = true;
-        previous.finished_at = params.get("timestamp").and_then(Value::as_f64);
-    }
-    let request_headers = value_object(request.get("headers"));
-    let body = request.get("postData").and_then(Value::as_str).map(|data| {
-        capture_text_body(
-            data,
-            store.config.max_body_bytes,
-            store.config.capture_bodies,
-        )
-    });
-    let body_bytes = body.as_ref().map(BodyCapture::len).unwrap_or(0);
-    let hop = store
-        .entries
-        .iter()
-        .filter(|entry| entry.session_id == session_id && entry.request_id == request_id)
-        .count() as u32;
-    let entry = NetworkEntry {
-        id: 0,
-        session_id: session_id.clone(),
-        target_id: store.target_id.clone().unwrap_or_default(),
-        request_id: request_id.clone(),
-        hop,
-        url,
-        method,
-        resource_type: params
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        started_at: params
-            .get("timestamp")
-            .and_then(Value::as_f64)
-            .unwrap_or_default(),
-        wall_time: params.get("wallTime").and_then(Value::as_f64),
-        request_headers,
-        request_post_data: body,
-        status: None,
-        status_text: None,
-        protocol: None,
-        mime_type: None,
-        response_headers: Map::new(),
-        response_headers_text: None,
-        request_headers_text: None,
-        remote_ip: None,
-        remote_port: None,
-        encoded_data_length: None,
-        response_body: None,
-        finished_at: None,
-        failed_at: None,
-        failure_text: None,
-        canceled: false,
-        complete: false,
-    };
-    store.push_entry(entry);
-    store.add_body_bytes(body_bytes);
-}
-
-async fn request_extra_info(store: &Arc<Mutex<NetworkStore>>, params: Value, session_id: String) {
-    let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
-        return;
-    };
-    let mut store = store.lock().await;
-    if let Some(entry) = store.current_entry_mut(&session_id, request_id) {
-        entry.request_headers = value_object(params.get("headers"));
-        entry.request_headers_text = params
-            .get("headersText")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-    }
-}
-
-async fn response_received(store: &Arc<Mutex<NetworkStore>>, params: Value, session_id: String) {
-    let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
-        return;
-    };
-    let response = params.get("response").cloned().unwrap_or_else(|| json!({}));
-    let mut store = store.lock().await;
-    if let Some(entry) = store.current_entry_mut(&session_id, request_id) {
-        entry.status = response
-            .get("status")
-            .and_then(Value::as_u64)
-            .and_then(|value| u16::try_from(value).ok());
-        entry.status_text = response
-            .get("statusText")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        entry.protocol = response
-            .get("protocol")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        entry.mime_type = response
-            .get("mimeType")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        entry.response_headers = value_object(response.get("headers"));
-        entry.remote_ip = response
-            .get("remoteIPAddress")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        entry.remote_port = response.get("remotePort").and_then(Value::as_u64);
-    }
-}
-
-async fn response_extra_info(store: &Arc<Mutex<NetworkStore>>, params: Value, session_id: String) {
-    let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
-        return;
-    };
-    let mut store = store.lock().await;
-    if let Some(entry) = store.current_entry_mut(&session_id, request_id) {
-        if entry.status.is_none() {
-            entry.status = params
-                .get("statusCode")
-                .and_then(Value::as_u64)
-                .and_then(|value| u16::try_from(value).ok());
-        }
-        entry.response_headers = value_object(params.get("headers"));
-        entry.response_headers_text = params
-            .get("headersText")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-    }
-}
-
-async fn loading_finished(
-    store: &Arc<Mutex<NetworkStore>>,
-    transport: Arc<Transport>,
-    params: Value,
-    session_id: String,
-) {
-    let Some(request_id) = params
-        .get("requestId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return;
-    };
-    let entry_id = {
-        let mut store = store.lock().await;
-        let Some(entry) = store.current_entry_mut(&session_id, &request_id) else {
-            return;
-        };
-        entry.finished_at = params.get("timestamp").and_then(Value::as_f64);
-        entry.encoded_data_length = params.get("encodedDataLength").and_then(Value::as_f64);
-        entry.complete = true;
-        entry.id
-    };
-    {
-        let mut store = store.lock().await;
-        store.finalize_key(&session_id, &request_id);
-    }
-    let capture = { store.lock().await.config.clone() };
-    if !capture.capture_bodies {
-        return;
-    }
-    tokio::spawn(capture_response_body(
-        store.clone(),
-        transport,
-        session_id,
-        request_id,
-        entry_id,
-        capture.max_body_bytes,
-    ));
-}
-
-async fn loading_failed(store: &Arc<Mutex<NetworkStore>>, params: Value, session_id: String) {
-    let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
-        return;
-    };
-    let mut store = store.lock().await;
-    if let Some(entry) = store.current_entry_mut(&session_id, request_id) {
-        entry.failed_at = params.get("timestamp").and_then(Value::as_f64);
-        entry.failure_text = params
-            .get("errorText")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        entry.canceled = params
-            .get("canceled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        entry.complete = true;
-        store.finalize_key(&session_id, request_id);
-    }
-}
-
-async fn capture_response_body(
-    store: Arc<Mutex<NetworkStore>>,
-    transport: Arc<Transport>,
-    session_id: String,
-    request_id: String,
-    entry_id: u64,
-    max_body_bytes: usize,
-) {
-    let result = transport
-        .send_to_session::<_, Value>(
-            &session_id,
-            "Network.getResponseBody",
-            &json!({ "requestId": request_id }),
-        )
-        .await;
-    let body = match result {
-        Ok(value) => decode_response_body(value, max_body_bytes),
-        Err(error) => BodyCapture::omitted(format!("body unavailable: {}", error)),
-    };
-    let size = body.len();
-    let mut store = store.lock().await;
-    if let Some(entry) = store.entry_mut_by_id(entry_id) {
-        if body.mime_type.is_none() {
-            let mut with_mime = body;
-            with_mime.mime_type = entry.mime_type.clone();
-            entry.response_body = Some(with_mime);
+    pub async fn wait(
+        &self,
+        pattern: Option<&str>,
+        method: Option<&str>,
+        status: Option<u16>,
+        since: Option<u64>,
+        include_existing: bool,
+        timeout_ms: u64,
+    ) -> Option<Value> {
+        let floor = if include_existing {
+            since.unwrap_or(0)
         } else {
-            entry.response_body = Some(body);
+            match since {
+                Some(id) => id,
+                None => self.high_water_id().await,
+            }
+        };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            if let Some(entry) = self.find_match(pattern, method, status, floor).await {
+                let next_since = entry["id"].as_u64().unwrap_or(floor);
+                return Some(json!({
+                    "meta": self.meta_with_next_since(next_since).await,
+                    "entry": entry,
+                    "matched": true,
+                }));
+            }
+            if !wait_for_notify(&self.notify, deadline).await {
+                return None;
+            }
         }
-        store.add_body_bytes(size);
+    }
+
+    async fn find_match(
+        &self,
+        pattern: Option<&str>,
+        method: Option<&str>,
+        status: Option<u16>,
+        since: u64,
+    ) -> Option<Value> {
+        let store = self.store.lock().await;
+        let host = pattern.and_then(pattern_exact_host);
+        store
+            .candidate_ids(method, status, None, host.as_deref())
+            .into_iter()
+            .filter_map(|id| store.entries.get(&id))
+            .find(|entry| {
+                entry.id > since
+                    && pattern.map(|p| url_matches(p, &entry.url)).unwrap_or(true)
+                    && method
+                        .map(|m| entry.method.eq_ignore_ascii_case(m))
+                        .unwrap_or(true)
+                    && status.map(|s| entry.status == Some(s)).unwrap_or(true)
+            })
+            .map(NetworkEntry::log_json)
+    }
+
+    pub async fn settle(&self, timeout_ms: u64) {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            if self.store.lock().await.body_pending == 0 {
+                return;
+            }
+            if !wait_for_notify(&self.notify, deadline).await {
+                return;
+            }
+        }
+    }
+
+    pub async fn meta_with_warnings(&self, warnings: Vec<String>) -> Value {
+        let store = self.store.lock().await;
+        self.meta_from_store(&store, store.next_id, warnings)
+    }
+
+    async fn meta_with_next_since(&self, next_since: u64) -> Value {
+        let store = self.store.lock().await;
+        self.meta_from_store(&store, next_since, Vec::new())
+    }
+
+    fn meta_from_store(
+        &self,
+        store: &NetworkStore,
+        next_since: u64,
+        warnings: Vec<String>,
+    ) -> Value {
+        json!({
+            "namespace": self.namespace,
+            "active": store.active,
+            "entry_count": store.entries.len(),
+            "in_flight": store.active_by_key.len(),
+            "last_id": store.next_id,
+            "next_since": next_since,
+            "body_pending": store.body_pending,
+            "body_failed": store.body_failed,
+            "warnings": warnings,
+            "suggested_commands": suggested_commands(next_since),
+        })
+    }
+
+    fn highest_snapshot_id(&self, entries: &[NetworkEntry]) -> u64 {
+        entries.iter().map(|entry| entry.id).max().unwrap_or(0)
     }
 }
 
-async fn network_enable(session: &CdpSession, config: &NetworkConfig) -> Result<(), String> {
-    session
-        .send::<_, Value>(
-            "Network.enable",
-            &json!({
-                "maxTotalBufferSize": DEFAULT_TOTAL_BUFFER_SIZE,
-                "maxResourceBufferSize": config.max_body_bytes,
-                "maxPostDataSize": config.max_body_bytes,
-            }),
-        )
+async fn wait_for_notify(notify: &Notify, deadline: Instant) -> bool {
+    let now = Instant::now();
+    if now >= deadline {
+        return false;
+    }
+    tokio::time::timeout(deadline.saturating_duration_since(now), notify.notified())
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .is_ok()
 }
 
 pub fn url_matches(pattern: &str, url: &str) -> bool {
@@ -835,263 +404,27 @@ pub fn url_matches(pattern: &str, url: &str) -> bool {
     true
 }
 
-fn capture_text_body(data: &str, limit: usize, enabled: bool) -> BodyCapture {
-    if !enabled {
-        return BodyCapture::omitted("disabled");
+fn pattern_exact_host(pattern: &str) -> Option<String> {
+    if pattern.contains('*') || pattern.contains('/') {
+        return None;
     }
-    if data.len() > limit {
-        return BodyCapture::omitted("too large");
-    }
-    BodyCapture {
-        bytes: data.as_bytes().to_vec(),
-        base64_encoded: false,
-        mime_type: None,
-        omitted: None,
-    }
+    Some(pattern.to_string())
 }
 
-fn decode_response_body(value: Value, limit: usize) -> BodyCapture {
-    let Some(text) = value.get("body").and_then(Value::as_str) else {
-        return BodyCapture::omitted("empty");
-    };
-    let encoded = value
-        .get("base64Encoded")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let bytes = if encoded {
-        match base64::engine::general_purpose::STANDARD.decode(text) {
-            Ok(bytes) => bytes,
-            Err(error) => return BodyCapture::omitted(format!("decode failed: {}", error)),
-        }
-    } else {
-        text.as_bytes().to_vec()
-    };
-    if bytes.len() > limit {
-        return BodyCapture::omitted("too large");
-    }
-    BodyCapture {
-        bytes,
-        base64_encoded: encoded,
-        mime_type: None,
-        omitted: None,
-    }
-}
-
-fn value_object(value: Option<&Value>) -> Map<String, Value> {
-    value
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn body_summary(body: Option<&BodyCapture>) -> Value {
-    match body {
-        Some(body) => json!({
-            "bytes": body.len(),
-            "base64": body.base64_encoded,
-            "omitted": body.omitted,
-        }),
-        None => Value::Null,
-    }
-}
-
-fn body_json(body: Option<&BodyCapture>) -> Value {
-    match body {
-        Some(body) => json!({
-            "bytes": body.len(),
-            "base64": body.base64_encoded,
-            "text": body.to_text(),
-            "omitted": body.omitted,
-            "mime_type": body.mime_type,
-        }),
-        None => Value::Null,
-    }
-}
-
-fn entry_key(session_id: &str, request_id: &str) -> String {
-    format!("{}\n{}", session_id, request_id)
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
-}
-
-fn build_har(entries: &[NetworkEntry]) -> Value {
-    let har_entries: Vec<Value> = entries
-        .iter()
-        .filter(|entry| entry.complete)
-        .map(har_entry)
-        .collect();
-    json!({
-        "log": {
-            "version": "1.2",
-            "creator": {
-                "name": "eoka",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
-            "entries": har_entries,
-        }
-    })
-}
-
-fn har_entry(entry: &NetworkEntry) -> Value {
-    json!({
-        "startedDateTime": har_time(entry),
-        "time": entry.duration_ms(),
-        "request": {
-            "method": entry.method,
-            "url": entry.url,
-            "httpVersion": "HTTP/1.1",
-            "cookies": [],
-            "headers": har_headers(&entry.request_headers),
-            "queryString": har_query(&entry.url),
-            "headersSize": -1,
-            "bodySize": entry.request_post_data.as_ref().map(|body| body.len() as i64).unwrap_or(0),
-            "postData": har_post_data(entry),
-        },
-        "response": {
-            "status": entry.status.unwrap_or(0),
-            "statusText": entry.status_text.clone().unwrap_or_default(),
-            "httpVersion": entry.protocol.clone().unwrap_or_else(|| "HTTP/1.1".to_string()),
-            "cookies": [],
-            "headers": har_headers(&entry.response_headers),
-            "content": har_content(entry),
-            "redirectURL": "",
-            "headersSize": -1,
-            "bodySize": entry.response_body.as_ref().map(|body| body.len() as i64).unwrap_or(-1),
-        },
-        "cache": {},
-        "timings": {
-            "send": 0,
-            "wait": entry.duration_ms(),
-            "receive": 0,
-        },
-        "serverIPAddress": entry.remote_ip,
-        "_eoka": {
-            "id": entry.id,
-            "session_id": entry.session_id,
-            "target_id": entry.target_id,
-            "request_id": entry.request_id,
-            "hop": entry.hop,
-            "resource_type": entry.resource_type,
-            "failure": entry.failure_text,
-            "request_body_omitted": entry.request_post_data.as_ref().and_then(|body| body.omitted.clone()),
-            "response_body_omitted": entry.response_body.as_ref().and_then(|body| body.omitted.clone()),
-        }
-    })
-}
-
-fn har_headers(headers: &Map<String, Value>) -> Vec<Value> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            json!({
-                "name": name,
-                "value": value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()),
-            })
-        })
-        .collect()
-}
-
-fn har_query(url: &str) -> Vec<Value> {
-    let Some(query) = url.split_once('?').map(|(_, query)| query) else {
-        return Vec::new();
-    };
-    query
-        .split('&')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let (name, value) = part.split_once('=').unwrap_or((part, ""));
-            json!({ "name": name, "value": value })
-        })
-        .collect()
-}
-
-fn har_post_data(entry: &NetworkEntry) -> Value {
-    match entry
-        .request_post_data
-        .as_ref()
-        .and_then(BodyCapture::to_text)
-    {
-        Some(text) => json!({
-            "mimeType": entry
-                .request_headers
-                .get("content-type")
-                .or_else(|| entry.request_headers.get("Content-Type"))
-                .and_then(Value::as_str)
-                .unwrap_or("application/octet-stream"),
-            "text": text,
-        }),
-        None => Value::Null,
-    }
-}
-
-fn har_content(entry: &NetworkEntry) -> Value {
-    let body = entry.response_body.as_ref();
-    let mime_type = entry
-        .mime_type
-        .as_deref()
-        .or_else(|| body.and_then(|body| body.mime_type.as_deref()))
-        .unwrap_or("application/octet-stream");
-    let text = body.and_then(BodyCapture::to_text).unwrap_or_default();
-    let encoding = body
-        .filter(|body| body.base64_encoded)
-        .map(|_| "base64".to_string());
-    json!({
-        "size": body.map(|body| body.len() as i64).unwrap_or(0),
-        "mimeType": mime_type,
-        "text": text,
-        "encoding": encoding,
-    })
-}
-
-fn har_time(entry: &NetworkEntry) -> String {
-    let secs = entry.wall_time.unwrap_or_default();
-    if secs == 0.0 {
-        return "1970-01-01T00:00:00.000Z".to_string();
-    }
-    let millis = (secs * 1000.0).round() as i64;
-    let whole = millis.div_euclid(1000);
-    let ms = millis.rem_euclid(1000);
-    format!(
-        "{}.{:03}Z",
-        chrono::DateTime::from_timestamp(whole, 0)
-            .unwrap_or_default()
-            .format("%Y-%m-%dT%H:%M:%S"),
-        ms
-    )
-}
-
-fn atomic_write_json(path: &Path, value: &Value) -> Result<(), String> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let temp = temp_path(path);
-    let json = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
-    std::fs::write(&temp, json).map_err(|e| e.to_string())?;
-    std::fs::rename(&temp, path).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn temp_path(path: &Path) -> PathBuf {
-    let mut temp = path.to_path_buf();
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("network.har");
-    temp.set_file_name(format!(".{}.{}.tmp", name, std::process::id()));
-    temp
+fn suggested_commands(next_since: u64) -> Vec<String> {
+    vec![
+        format!("eoka network log --since {} --compact", next_since),
+        "eoka network show <id> --body".to_string(),
+        "eoka network har /tmp/session.har".to_string(),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Map;
+
     use super::*;
+    use crate::handler::network::body::capture_text_body;
 
     fn sample_entry() -> NetworkEntry {
         let mut request_headers = Map::new();
@@ -1130,6 +463,8 @@ mod tests {
             remote_ip: Some("127.0.0.1".into()),
             remote_port: Some(443),
             encoded_data_length: Some(42.0),
+            response_timing: None,
+            redirect_url: None,
             response_body: Some(BodyCapture {
                 bytes: br#"{"ok":true}"#.to_vec(),
                 base64_encoded: false,
@@ -1141,6 +476,23 @@ mod tests {
             failure_text: None,
             canceled: false,
             complete: true,
+        }
+    }
+
+    fn recorder_with_entries(entries: Vec<NetworkEntry>) -> NetworkRecorder {
+        let mut store = NetworkStore::default();
+        let body_bytes = entries.iter().map(NetworkEntry::body_bytes).sum();
+        for mut entry in entries {
+            entry.id = 0;
+            store.push_entry(entry);
+        }
+        store.body_bytes = body_bytes;
+        let (control, _rx) = mpsc::channel(1);
+        NetworkRecorder {
+            namespace: "session:test".into(),
+            store: Arc::new(Mutex::new(store)),
+            control,
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -1225,6 +577,48 @@ mod tests {
     }
 
     #[test]
+    fn har_exports_cookie_redirect_timing_and_sizes() {
+        let mut entry = sample_entry();
+        entry
+            .request_headers
+            .insert("Cookie".into(), json!("sid=abc; theme=dark"));
+        entry
+            .response_headers
+            .insert("Set-Cookie".into(), json!("next=one; Path=/"));
+        entry.response_headers_text = Some("HTTP/1.1 302 Found\r\nLocation: /next\r\n\r\n".into());
+        entry.request_headers_text = Some("POST /api HTTP/1.1\r\nCookie: sid=abc\r\n\r\n".into());
+        entry.redirect_url = Some("/next".into());
+        entry.response_timing = Some(json!({
+            "dnsStart": 1.0,
+            "dnsEnd": 2.0,
+            "connectStart": 2.0,
+            "connectEnd": 4.0,
+            "sslStart": 2.5,
+            "sslEnd": 3.5,
+            "sendStart": 5.0,
+            "sendEnd": 6.0,
+            "receiveHeadersEnd": 10.0,
+        }));
+
+        let har = build_har(&[entry]);
+        let entry = &har["log"]["entries"][0];
+
+        assert_eq!(
+            entry["request"]["cookies"][0],
+            json!({ "name": "sid", "value": "abc" })
+        );
+        assert_eq!(
+            entry["response"]["cookies"][0],
+            json!({ "name": "next", "value": "one" })
+        );
+        assert_eq!(entry["response"]["redirectURL"], "/next");
+        assert_eq!(entry["timings"]["dns"], 1.0);
+        assert_eq!(entry["timings"]["connect"], 2.0);
+        assert!(entry["request"]["headersSize"].as_i64().unwrap() > 0);
+        assert!(entry["response"]["headersSize"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
     fn body_pool_eviction_preserves_metadata_and_marks_omission() {
         let mut store = NetworkStore {
             config: NetworkConfig {
@@ -1274,6 +668,126 @@ mod tests {
             store.entry_by_id(2).unwrap().url,
             "https://example.com/api/second"
         );
+    }
+
+    #[tokio::test]
+    async fn log_filters_since_and_compacts_entries() {
+        let mut first = sample_entry();
+        first.id = 1;
+        first.method = "GET".into();
+        first.status = Some(200);
+        let mut second = sample_entry();
+        second.id = 2;
+        second.method = "GET".into();
+        second.status = Some(200);
+        second.url = "https://example.com/api/second".into();
+        let recorder = recorder_with_entries(vec![first, second]);
+
+        let log = recorder
+            .log(10, Some("*/api/*"), Some("GET"), Some(200), Some(1), true)
+            .await;
+        let rows = log["entries"].as_array().unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], 2);
+        assert!(rows[0].get("duration_ms").is_none());
+        assert_eq!(log["meta"]["next_since"], 2);
+    }
+
+    #[tokio::test]
+    async fn show_omits_body_until_requested_and_can_truncate() {
+        let mut entry = sample_entry();
+        entry.id = 1;
+        let recorder = recorder_with_entries(vec![entry]);
+
+        let metadata = recorder.show(1, false, None).await.unwrap();
+        assert!(metadata["entry"]["response"]["body"].get("text").is_none());
+
+        let full = recorder.show(1, true, Some(4)).await.unwrap();
+        assert_eq!(full["entry"]["response"]["body"]["text"], r#"{"ok"#);
+        assert_eq!(full["entry"]["response"]["body"]["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn wait_ignores_existing_entries_by_default() {
+        let mut entry = sample_entry();
+        entry.id = 1;
+        let recorder = recorder_with_entries(vec![entry]);
+
+        assert!(recorder
+            .wait(Some("*/api/*"), None, None, None, false, 1)
+            .await
+            .is_none());
+        assert!(recorder
+            .wait(Some("*/api/*"), None, None, None, true, 1)
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn wait_wakes_when_new_matching_entry_is_notified() {
+        let recorder = recorder_with_entries(Vec::new());
+        let waiting = {
+            let recorder = recorder.clone();
+            tokio::spawn(async move {
+                recorder
+                    .wait(
+                        Some("*/api/*"),
+                        Some("POST"),
+                        Some(201),
+                        Some(0),
+                        false,
+                        1000,
+                    )
+                    .await
+            })
+        };
+        let mut entry = sample_entry();
+        entry.id = 0;
+        {
+            let mut store = recorder.store.lock().await;
+            store.push_entry(entry);
+        }
+        recorder.notify.notify_waiters();
+
+        let result = waiting.await.unwrap().unwrap();
+        assert_eq!(result["matched"], true);
+        assert_eq!(result["entry"]["status"], 201);
+    }
+
+    #[test]
+    fn status_index_updates_candidates() {
+        let mut store = NetworkStore::default();
+        let mut entry = sample_entry();
+        entry.status = None;
+        store.push_entry(entry);
+
+        assert!(store.candidate_ids(None, Some(201), None, None).is_empty());
+        store.set_status(1, Some(201));
+        assert_eq!(store.candidate_ids(None, Some(201), None, None), vec![1]);
+        store.set_status(1, Some(500));
+        assert!(store.candidate_ids(None, Some(201), None, None).is_empty());
+        assert_eq!(store.candidate_ids(None, Some(500), None, None), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn export_writes_json_snapshot() {
+        let dir =
+            std::env::temp_dir().join(format!("eoka-json-export-test-{}", std::process::id()));
+        let path = dir.join("capture.json");
+        let mut entry = sample_entry();
+        entry.id = 1;
+        let recorder = recorder_with_entries(vec![entry]);
+
+        let result = recorder.export(&path, "json", Some(0)).await.unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
+        assert_eq!(result["format"], "json");
+        assert_eq!(result["entries"], 1);
+        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["entries"][0]["id"], 1);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

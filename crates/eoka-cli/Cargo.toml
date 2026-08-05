@@ -1,6 +1,6 @@
 [package]
 name = "eoka-cli"
-version = "0.1.11"
+version = "0.1.14"
 edition = "2021"
 license = "MIT"
 description = "Browser automation CLI for AI agents and pentesting"

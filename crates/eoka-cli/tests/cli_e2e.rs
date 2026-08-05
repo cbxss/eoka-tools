@@ -261,10 +261,13 @@ fn network_record_exports_local_fetch_to_har() {
     let base_url = local_har_server();
     let page_url = format!("{base_url}/page");
     let har_path = std::env::temp_dir().join(format!("{session}.har"));
+    let json_path = std::env::temp_dir().join(format!("{session}.json"));
     let har_arg = har_path.to_string_lossy().into_owned();
+    let json_arg = json_path.to_string_lossy().into_owned();
 
     clean_session(&session);
     let _ = std::fs::remove_file(&har_path);
+    let _ = std::fs::remove_file(&json_path);
 
     let start = run(
         &session,
@@ -282,18 +285,46 @@ fn network_record_exports_local_fetch_to_har() {
     let open = run(&session, &["--json", "open", &page_url]);
     assert_success(&open, "open");
 
-    let wait = run(&session, &["--json", "wait", "1000"]);
-    assert_success(&wait, "wait");
+    let wait = run(
+        &session,
+        &[
+            "--json",
+            "network",
+            "wait",
+            "--pattern",
+            "*/api/*",
+            "--status",
+            "201",
+            "--timeout",
+            "5000",
+        ],
+    );
+    assert_success(&wait, "network wait");
+    let wait_json: serde_json::Value =
+        serde_json::from_slice(&wait.stdout).expect("network wait should be JSON");
+    assert_eq!(wait_json["data"]["matched"], serde_json::json!(true));
+    assert_eq!(wait_json["data"]["entry"]["status"], 201);
+    assert!(wait_json["data"]["meta"]["namespace"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("session:eoka-har-e2e-test-"));
 
     let log = run(
         &session,
-        &["--json", "network", "log", "--pattern", "*/api/*"],
+        &[
+            "--json",
+            "network",
+            "log",
+            "--pattern",
+            "*/api/*",
+            "--compact",
+        ],
     );
     assert_success(&log, "network log");
     let log_json: serde_json::Value =
         serde_json::from_slice(&log.stdout).expect("network log should be JSON");
     assert!(
-        log_json["data"]
+        log_json["data"]["entries"]
             .as_array()
             .unwrap()
             .iter()
@@ -304,8 +335,8 @@ fn network_record_exports_local_fetch_to_har() {
         "network log did not include api request: {log_json}"
     );
 
-    let save = run(&session, &["--json", "network", "save-har", &har_arg]);
-    assert_success(&save, "network save-har");
+    let save = run(&session, &["--json", "network", "har", &har_arg]);
+    assert_success(&save, "network har");
 
     let har: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&har_path).expect("har file should exist"))
@@ -331,6 +362,25 @@ fn network_record_exports_local_fetch_to_har() {
     );
     assert_eq!(entry["_eoka"]["resource_type"], "Fetch");
 
+    let export = run(
+        &session,
+        &["--json", "network", "export", &json_arg, "--format", "json"],
+    );
+    assert_success(&export, "network export json");
+    let exported: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&json_path).expect("json export should exist"))
+            .expect("json export should be valid JSON");
+    assert_eq!(exported["version"], 1);
+    assert!(exported["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["url"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/api/data?from=page")));
+
     clean_session(&session);
     let _ = std::fs::remove_file(har_path);
+    let _ = std::fs::remove_file(json_path);
 }

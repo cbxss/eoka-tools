@@ -22,7 +22,7 @@ pub(crate) async fn run_batch(
     let mut shutdown_daemon = false;
 
     for request in requests {
-        let request_cmd = request.cmd.clone();
+        let request_cmd = request.cmd().to_string();
         let response = client::send_command(session_name, request, spec.clone())
             .await
             .map_err(|e| e.to_string())?;
@@ -99,10 +99,7 @@ fn batch_step_to_request(idx: usize, step: Value) -> Result<Request, String> {
             .ok_or_else(|| format!("Batch step {} field 'cmd' must be a string", idx + 1))?;
         let cmd = normalize_batch_cmd(cmd);
         let args = obj.remove("args").unwrap_or_else(|| json!({}));
-        return Ok(Request {
-            args: normalize_batch_args(idx, &cmd, args)?,
-            cmd,
-        });
+        return batch_request(idx, &cmd, normalize_batch_args(idx, &cmd, args)?);
     }
 
     if obj.len() != 1 {
@@ -115,7 +112,40 @@ fn batch_step_to_request(idx: usize, step: Value) -> Result<Request, String> {
     let (cmd, value) = obj.into_iter().next().expect("len checked");
     let cmd = normalize_batch_cmd(&cmd);
     let args = normalize_batch_args(idx, &cmd, value)?;
-    Ok(Request { cmd, args })
+    batch_request(idx, &cmd, args)
+}
+
+fn batch_request(idx: usize, cmd: &str, args: Value) -> Result<Request, String> {
+    let value = if unit_batch_command(cmd) && args.as_object().is_some_and(|obj| obj.is_empty()) {
+        json!({ "cmd": cmd })
+    } else {
+        json!({ "cmd": cmd, "args": args })
+    };
+    serde_json::from_value(value)
+        .map_err(|e| format!("Batch step {} invalid command '{}': {}", idx + 1, cmd, e))
+}
+
+fn unit_batch_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "back"
+            | "forward"
+            | "reload"
+            | "info"
+            | "text"
+            | "cookies"
+            | "clear_cookies"
+            | "dump_storage"
+            | "tab_list"
+            | "spa_info"
+            | "wasm_info"
+            | "intercept_list"
+            | "js_list"
+            | "network_record_stop"
+            | "network_record_status"
+            | "network_clear"
+            | "close"
+    )
 }
 
 fn normalize_batch_cmd(cmd: &str) -> String {
@@ -276,19 +306,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(requests.len(), 6);
-        assert_eq!(requests[0].cmd, "open");
+        assert_eq!(requests[0].cmd(), "open");
         assert_eq!(
-            requests[0].args["url"],
+            requests[0].args_json()["url"],
             "https://www.recreation.gov/camping/campsites/71576?start_date=2026-08-02&end_date=2026-08-03"
         );
-        assert_eq!(requests[1].cmd, "wait");
-        assert_eq!(requests[1].args["ms"], 3000);
-        assert_eq!(requests[2].cmd, "eval");
-        assert_eq!(requests[2].args["code"], "\"patched\"");
-        assert_eq!(requests[3].cmd, "click");
-        assert_eq!(requests[3].args["target"], "Add to Cart");
-        assert_eq!(requests[5].cmd, "info");
-        assert_eq!(requests[5].args, json!({}));
+        assert_eq!(requests[1].cmd(), "wait");
+        assert_eq!(requests[1].args_json()["ms"], 3000);
+        assert_eq!(requests[2].cmd(), "eval");
+        assert_eq!(requests[2].args_json()["code"], "\"patched\"");
+        assert_eq!(requests[3].cmd(), "click");
+        assert_eq!(requests[3].args_json()["target"], "Add to Cart");
+        assert_eq!(requests[5].cmd(), "info");
+        assert_eq!(requests[5].args_json(), json!({}));
     }
 
     #[test]
@@ -298,8 +328,8 @@ mod tests {
                 .unwrap();
 
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].cmd, "eval");
-        assert_eq!(requests[0].args["code"], "window.location.href");
+        assert_eq!(requests[0].cmd(), "eval");
+        assert_eq!(requests[0].args_json()["code"], "window.location.href");
     }
 
     #[test]
@@ -307,8 +337,8 @@ mod tests {
         let requests = parse_batch_requests(r#"[{"cmd":"spa-navigate","args":"/cart"}]"#).unwrap();
 
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].cmd, "spa_navigate");
-        assert_eq!(requests[0].args["path"], "/cart");
+        assert_eq!(requests[0].cmd(), "spa_navigate");
+        assert_eq!(requests[0].args_json()["path"], "/cart");
     }
 
     #[test]
@@ -316,8 +346,8 @@ mod tests {
         let requests = parse_batch_requests(r#"[{"captcha-inject":"token-123"}]"#).unwrap();
 
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].cmd, "captcha_inject");
-        assert_eq!(requests[0].args["token"], "token-123");
+        assert_eq!(requests[0].cmd(), "captcha_inject");
+        assert_eq!(requests[0].args_json()["token"], "token-123");
     }
 
     #[test]
