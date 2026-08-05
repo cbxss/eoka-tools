@@ -19,7 +19,7 @@ use eoka_mcp::{annotate, observe, snapshot};
 use serde_json::{json, Value};
 
 use crate::launch_spec::LaunchSpec;
-use crate::protocol::Response;
+use crate::protocol::{Request, Response};
 use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
 use network::{NetworkConfig, NetworkRecorder};
 use persist::{capture_state, ensure_console_capture, restore_cookies, restore_state, SavedState};
@@ -33,6 +33,7 @@ use target::{
 pub struct Handler {
     state: Option<BrowserState>,
     spec: LaunchSpec,
+    session_name: String,
     intercept: InterceptState,
     script_policy: ScriptPolicyState,
     network: Option<NetworkRecorder>,
@@ -41,7 +42,7 @@ pub struct Handler {
 }
 
 impl Handler {
-    pub fn new(spec: LaunchSpec) -> Self {
+    pub fn new(session_name: impl Into<String>, spec: LaunchSpec) -> Self {
         let script_policy = match &spec {
             LaunchSpec::Launch {
                 no_js,
@@ -62,6 +63,7 @@ impl Handler {
         Self {
             state: None,
             spec,
+            session_name: session_name.into(),
             intercept: InterceptState::new(),
             script_policy,
             network: None,
@@ -154,6 +156,12 @@ impl Handler {
         response
     }
 
+    pub async fn handle_request(&mut self, request: Request) -> Response {
+        let cmd = request.cmd();
+        let args = request.args_json();
+        self.handle(cmd, &args).await
+    }
+
     async fn dispatch(&mut self, cmd: &str, args: &Value) -> Result<Response, String> {
         match cmd {
             "open" => self.cmd_open(args).await,
@@ -225,6 +233,8 @@ impl Handler {
             "network_log" => self.cmd_network_log(args).await,
             "network_show" => self.cmd_network_show(args).await,
             "network_save_har" => self.cmd_network_save_har(args).await,
+            "network_export" => self.cmd_network_export(args).await,
+            "network_wait" => self.cmd_network_wait(args).await,
             "network_clear" => self.cmd_network_clear().await,
             "close" => self.cmd_close().await,
             other => Err(format!("Unknown command: {}", other)),
@@ -396,8 +406,7 @@ impl Handler {
             self.script_policy.note_applied(enabled);
         }
         let (url, title) = result?;
-        self.sync_fetch_interception().await?;
-        self.sync_network_recording().await?;
+        self.sync_current_target_features().await?;
         Ok(Response::ok_text(format!(
             "Navigated to: {}\nTitle: {}",
             url, title
@@ -1185,8 +1194,7 @@ impl Handler {
             let (url, title) = tab_summary(tab).await?;
             (tab_id, url, title)
         };
-        self.sync_fetch_interception().await?;
-        self.sync_network_recording().await?;
+        self.sync_current_target_features().await?;
         Ok(Response::ok_text(format!(
             "Opened new tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1201,8 +1209,7 @@ impl Handler {
             let tab = state.current_tab().ok_or("Tab switch failed")?;
             tab_summary(tab).await?
         };
-        self.sync_fetch_interception().await?;
-        self.sync_network_recording().await?;
+        self.sync_current_target_features().await?;
         Ok(Response::ok_text(format!(
             "Switched to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1221,8 +1228,7 @@ impl Handler {
             let tab = state.current_tab().ok_or("Attach failed")?;
             tab_summary(tab).await?
         };
-        self.sync_fetch_interception().await?;
-        self.sync_network_recording().await?;
+        self.sync_current_target_features().await?;
         Ok(Response::ok_text(format!(
             "Attached to tab [{}]\nURL: {}\nTitle: {}",
             tab_id, url, title
@@ -1279,8 +1285,7 @@ impl Handler {
         if let Some(session) = closing_session {
             self.disable_fetch_session(&session).await;
         }
-        self.sync_fetch_interception().await?;
-        self.sync_network_recording().await?;
+        self.sync_current_target_features().await?;
         Ok(Response::ok_text(format!("Closed tab [{}]", tab_id)))
     }
 
@@ -1535,7 +1540,10 @@ impl Handler {
             return Ok(recorder);
         }
         let session = self.require_tab()?.page.session().clone();
-        let recorder = NetworkRecorder::spawn(session.transport().clone());
+        let recorder = NetworkRecorder::spawn(
+            format!("session:{}", self.session_name),
+            session.transport().clone(),
+        );
         self.network = Some(recorder.clone());
         Ok(recorder)
     }
@@ -1549,6 +1557,11 @@ impl Handler {
         }
         let session = self.require_tab()?.page.session().clone();
         recorder.update_session(&session).await
+    }
+
+    async fn sync_current_target_features(&mut self) -> Result<(), String> {
+        self.sync_fetch_interception().await?;
+        self.sync_network_recording().await
     }
 
     pub async fn is_network_recording(&self) -> bool {
@@ -1587,6 +1600,7 @@ impl Handler {
             .as_u64()
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or_else(|| NetworkConfig::default().max_body_bytes);
+        let clear = args["clear"].as_bool().unwrap_or(false);
         let config = NetworkConfig {
             patterns,
             capture_bodies: !args["no_bodies"].as_bool().unwrap_or(false),
@@ -1595,6 +1609,9 @@ impl Handler {
         };
         let session = self.require_tab()?.page.session().clone();
         let recorder = self.network_recorder()?;
+        if clear {
+            let _ = recorder.clear().await?;
+        }
         let status = recorder.start(&session, config).await?;
         Ok(Response::ok(status))
     }
@@ -1615,16 +1632,24 @@ impl Handler {
         match self.network.as_ref() {
             Some(recorder) => Ok(Response::ok(recorder.status().await)),
             None => Ok(Response::ok(json!({
-                "active": false,
-                "entry_count": 0,
-                "in_flight": 0,
+                "meta": self.network_empty_meta(),
+                "status": {
+                    "active": false,
+                    "entry_count": 0,
+                    "in_flight": 0,
+                },
             }))),
         }
     }
 
     async fn cmd_network_log(&mut self, args: &Value) -> Result<Response, String> {
         let Some(recorder) = self.network.as_ref() else {
-            return Ok(Response::ok(json!([])));
+            return Ok(Response::ok(json!({
+                "meta": self.network_empty_meta(),
+                "entries": [],
+                "count": 0,
+                "filters": args,
+            })));
         };
         let limit = args["limit"]
             .as_u64()
@@ -1636,38 +1661,97 @@ impl Handler {
         let status = args["status"]
             .as_u64()
             .and_then(|value| u16::try_from(value).ok());
+        let since = args["since"].as_u64();
+        let compact = args["compact"].as_bool().unwrap_or(false);
         Ok(Response::ok(
-            recorder.log(limit, pattern, method, status).await,
+            recorder
+                .log(limit, pattern, method, status, since, compact)
+                .await,
         ))
     }
 
     async fn cmd_network_show(&mut self, args: &Value) -> Result<Response, String> {
         let id = args["id"].as_u64().ok_or("Missing 'id'")?;
+        let body = args["body"].as_bool().unwrap_or(false);
+        let max_body = args["max_body"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok());
         let Some(recorder) = self.network.as_ref() else {
             return Err(format!("Network entry #{} not found", id));
         };
+        if body {
+            recorder.settle(5000).await;
+        }
         recorder
-            .show(id)
+            .show(id, body, max_body)
             .await
             .map(Response::ok)
             .ok_or_else(|| format!("Network entry #{} not found", id))
     }
 
     async fn cmd_network_save_har(&mut self, args: &Value) -> Result<Response, String> {
+        self.cmd_network_export(args).await
+    }
+
+    async fn cmd_network_export(&mut self, args: &Value) -> Result<Response, String> {
         let path = self.arg_str(args, "path")?;
+        let format = args["format"].as_str().unwrap_or("har");
+        let settle_ms = args["settle_ms"].as_u64();
         let Some(recorder) = self.network.as_ref() else {
             return Err("No network recorder has been started".into());
         };
         Ok(Response::ok(
-            recorder.save_har(std::path::Path::new(path)).await?,
+            recorder
+                .export(std::path::Path::new(path), format, settle_ms)
+                .await?,
         ))
+    }
+
+    async fn cmd_network_wait(&mut self, args: &Value) -> Result<Response, String> {
+        let Some(recorder) = self.network.as_ref() else {
+            return Err("No network recorder has been started".into());
+        };
+        let timeout = args["timeout"].as_u64().unwrap_or(10_000);
+        let pattern = args["pattern"].as_str();
+        let method = args["method"].as_str();
+        let status = args["status"]
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok());
+        let since = args["since"].as_u64();
+        let include_existing = args["include_existing"].as_bool().unwrap_or(false);
+        recorder
+            .wait(pattern, method, status, since, include_existing, timeout)
+            .await
+            .map(Response::ok)
+            .ok_or_else(|| format!("Timed out waiting {}ms for matching network entry", timeout))
     }
 
     async fn cmd_network_clear(&mut self) -> Result<Response, String> {
         match self.network.as_ref() {
             Some(recorder) => Ok(Response::ok(recorder.clear().await?)),
-            None => Ok(Response::ok(json!({ "cleared": true }))),
+            None => Ok(Response::ok(json!({
+                "meta": self.network_empty_meta(),
+                "cleared": true,
+            }))),
         }
+    }
+
+    fn network_empty_meta(&self) -> Value {
+        json!({
+            "namespace": format!("session:{}", self.session_name),
+            "active": false,
+            "entry_count": 0,
+            "in_flight": 0,
+            "last_id": 0,
+            "next_since": 0,
+            "body_pending": 0,
+            "body_failed": 0,
+            "warnings": [],
+            "suggested_commands": [
+                "eoka network record start",
+                "eoka network log --since 0 --compact",
+            ],
+        })
     }
 
     async fn cmd_intercept_add(&mut self, args: &Value) -> Result<Response, String> {

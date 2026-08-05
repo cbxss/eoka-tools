@@ -98,11 +98,16 @@ eoka fetch https://api.target.com/data -m POST --headers '{"Content-Type": "appl
 eoka fetch https://target.com/oauth --redirect manual
 eoka fetch https://target.com/app.js --body-only
 eoka network record start
-eoka network record start --pattern "*/api/*" --max-body-bytes 10485760
+eoka network record start --pattern "*/api/*" --max-body-bytes 10485760 --clear
 eoka network record status
 eoka network log --limit 50 --method POST
+eoka network log --since 12 --compact
 eoka network show 12
-eoka network save-har /tmp/session.har
+eoka network show 12 --body --max-body 65536
+eoka network wait --pattern "*/api/*" --status 200 --timeout 10000
+eoka network har /tmp/session.har
+eoka network export /tmp/session.json --format json
+eoka network save-har /tmp/session.har --settle-ms 5000
 eoka network record stop
 eoka network clear
 eoka network intercept add "*/api/data*"
@@ -115,7 +120,7 @@ eoka network intercept remove 1
 eoka network intercept remove all
 ```
 
-`fetch` runs from the browser context with the active session's cookies and TLS fingerprint. `network record start` passively records the active tab and follows explicit `eoka tab switch`, `tab attach`, `tab new`, and `open` operations. Recording appends until `network clear`; `network save-har` snapshots without stopping or clearing. Bodies are captured unredacted by default up to 10 MiB each, with a shared 512 MiB in-memory body pool.
+`fetch` runs from the browser context with the active session's cookies and TLS fingerprint. `network record start` passively records the active tab and follows explicit `eoka tab switch`, `tab attach`, `tab new`, and `open` operations. Recording appends until `network clear`, or starts fresh with `network record start --clear`. `network har`, `network export --format har`, and `network save-har` snapshot without stopping or clearing; `network export --format json` writes the same captured entries in eoka JSON form. Bodies are captured unredacted by default up to 10 MiB each, with a shared 512 MiB in-memory body pool and bounded concurrent body capture.
 
 `network intercept` uses the CDP Fetch domain to pause matching requests. Intercept logs include `network_entry_id` when passive recording is active, so agents can jump from an intercepted request to `eoka network show <id>` or the exported HAR entry.
 

@@ -1,7 +1,3 @@
-//! `captcha solve`/`captcha inject` orchestration: calling out to the
-//! Anti-Captcha solver and, for `solve --inject`, forwarding the token to
-//! the daemon in one step.
-
 use serde_json::{json, Value};
 
 use crate::cli::{CaptchaAction, SolveArgs};
@@ -138,15 +134,12 @@ pub(crate) fn captcha_inject_request(
     callback: Option<&str>,
     click_after: Option<&str>,
 ) -> protocol::Request {
-    protocol::Request {
-        cmd: "captcha_inject".into(),
-        args: json!({
-            "token": token,
-            "captcha_type": captcha_type,
-            "callback": callback,
-            "click_after": click_after,
-        }),
-    }
+    protocol::Request::CaptchaInject(protocol::CaptchaInjectArgs {
+        token: token.to_string(),
+        captcha_type: captcha_type.to_string(),
+        callback: callback.map(str::to_string),
+        click_after: click_after.map(str::to_string),
+    })
 }
 
 #[cfg(test)]

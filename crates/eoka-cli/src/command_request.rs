@@ -1,16 +1,15 @@
-//! Maps a parsed `Command` to the daemon-facing `Request` envelope.
-
-use serde_json::json;
+mod network;
 
 use crate::captcha_cmd::captcha_inject_request;
-use crate::cli::{
-    CaptchaAction, Command, InterceptAction, JsAction, NetworkAction, NetworkRecordAction,
-    TabAction, WasmAction,
+use crate::cli::{CaptchaAction, Command, JsAction, TabAction, WasmAction};
+use crate::protocol::{
+    ClearFlagArgs, CloneFromArgs, ConsoleArgs, DeleteCookieArgs, DomainArgs, EmulateArgs,
+    FakeCameraArgs, FetchArgs, FillArgs, HeadersArgs, KeyArgs, LoadStateArgs, ModeArgs,
+    ObserveArgs, OpenArgs, PathArgs, PathStringArgs, Request, ScreenshotArgs, ScriptArgs,
+    SelectArgs, SetCookieArgs, SetStorageArgs, SnapshotArgs, StorageArgs, TabIdArgs, TabNewArgs,
+    TargetArgs, TextArgs, WaitArgs, WasmFindArgs, WasmReadArgs, WasmWriteArgs,
 };
-use crate::protocol::Request;
-
-/// Parse a `--headers` JSON string, exiting with a clear error on malformed
-/// input instead of silently sending the request with no headers.
+use network::network_action_to_request;
 fn parse_headers_json(raw: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => v,
@@ -23,7 +22,6 @@ fn parse_headers_json(raw: &str) -> serde_json::Value {
 
 pub(crate) fn command_to_request(cmd: &Command) -> Request {
     match cmd {
-        // Navigation
         Command::Open {
             url,
             headers,
@@ -31,139 +29,92 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             bypass_csp,
             inject_js,
             load_state,
-        } => {
-            let mut args = json!({ "url": url });
-            if let Some(h) = headers {
-                args["headers"] = parse_headers_json(h);
-            }
-            if let Some(ua) = user_agent {
-                args["user_agent"] = json!(ua);
-            }
-            if *bypass_csp {
-                args["bypass_csp"] = json!(true);
-            }
-            if let Some(js) = inject_js {
-                args["inject_js"] = json!(js);
-            }
-            if let Some(path) = load_state {
-                args["load_state"] = json!(path.to_string_lossy());
-            }
-            Request {
-                cmd: "open".into(),
-                args,
-            }
-        }
-        Command::Back => Request {
-            cmd: "back".into(),
-            args: json!({}),
-        },
-        Command::Forward => Request {
-            cmd: "forward".into(),
-            args: json!({}),
-        },
-        Command::Reload => Request {
-            cmd: "reload".into(),
-            args: json!({}),
-        },
-
-        // Observation
-        Command::Snapshot { interactive, all } => Request {
-            cmd: "snapshot".into(),
-            args: json!({ "interactive": interactive, "all": all }),
-        },
-        Command::Observe { filter, max } => Request {
-            cmd: "observe".into(),
-            args: json!({ "filter": filter, "max": max }),
-        },
-        Command::Screenshot { output, annotate } => Request {
-            cmd: "screenshot".into(),
-            args: json!({
-                "output": output.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "annotate": annotate,
-            }),
-        },
+        } => Request::Open(OpenArgs {
+            url: url.clone(),
+            headers: headers.as_ref().map(|h| parse_headers_json(h)),
+            user_agent: user_agent.clone(),
+            bypass_csp: *bypass_csp,
+            inject_js: inject_js.clone(),
+            load_state: load_state
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+        }),
+        Command::Back => Request::Back,
+        Command::Forward => Request::Forward,
+        Command::Reload => Request::Reload,
+        Command::Snapshot { interactive, all } => Request::Snapshot(SnapshotArgs {
+            interactive: *interactive,
+            all: *all,
+        }),
+        Command::Observe { filter, max } => Request::Observe(ObserveArgs {
+            filter: filter.clone(),
+            max: *max,
+        }),
+        Command::Screenshot { output, annotate } => Request::Screenshot(ScreenshotArgs {
+            output: output
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            annotate: *annotate,
+        }),
         Command::Emulate {
             width,
             height,
             dpr,
             desktop,
             reset,
-        } => Request {
-            cmd: "emulate".into(),
-            args: json!({
-                "width": width,
-                "height": height,
-                "dpr": dpr,
-                "desktop": desktop,
-                "reset": reset,
-            }),
-        },
-        Command::Info => Request {
-            cmd: "info".into(),
-            args: json!({}),
-        },
-        Command::Text => Request {
-            cmd: "text".into(),
-            args: json!({}),
-        },
-        Command::Find { text } => Request {
-            cmd: "find".into(),
-            args: json!({ "text": text }),
-        },
-
-        // Actions
-        Command::Click { target } => Request {
-            cmd: "click".into(),
-            args: json!({ "target": target }),
-        },
-        Command::DoubleClick { target } => Request {
-            cmd: "dblclick".into(),
-            args: json!({ "target": target }),
-        },
-        Command::Fill { target, text } => Request {
-            cmd: "fill".into(),
-            args: json!({ "target": target, "text": text }),
-        },
-        Command::Select { target, value } => Request {
-            cmd: "select".into(),
-            args: json!({ "target": target, "value": value }),
-        },
-        Command::Hover { target } => Request {
-            cmd: "hover".into(),
-            args: json!({ "target": target }),
-        },
-        Command::Key { key } => Request {
-            cmd: "key".into(),
-            args: json!({ "key": key }),
-        },
-        Command::Scroll { target } => Request {
-            cmd: "scroll".into(),
-            args: json!({ "target": target }),
-        },
-
-        // JavaScript
+        } => Request::Emulate(EmulateArgs {
+            width: *width,
+            height: *height,
+            dpr: *dpr,
+            desktop: *desktop,
+            reset: *reset,
+        }),
+        Command::Info => Request::Info,
+        Command::Text => Request::Text,
+        Command::Find { text } => Request::Find(TextArgs { text: text.clone() }),
+        Command::Click { target } => Request::Click(TargetArgs {
+            target: target.clone(),
+        }),
+        Command::DoubleClick { target } => Request::DblClick(TargetArgs {
+            target: target.clone(),
+        }),
+        Command::Fill { target, text } => Request::Fill(FillArgs {
+            target: target.clone(),
+            text: text.clone(),
+        }),
+        Command::Select { target, value } => Request::Select(SelectArgs {
+            target: target.clone(),
+            value: value.clone(),
+        }),
+        Command::Hover { target } => Request::Hover(TargetArgs {
+            target: target.clone(),
+        }),
+        Command::Key { key } => Request::Key(KeyArgs { key: key.clone() }),
+        Command::Scroll { target } => Request::Scroll(TargetArgs {
+            target: target.clone(),
+        }),
         Command::Eval {
             code,
             file,
             no_return,
             max_size,
-        } => Request {
-            cmd: if *no_return { "exec" } else { "eval" }.into(),
-            args: json!({
-                "code": code,
-                "file": file.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "max_size": max_size,
-            }),
-        },
-        Command::Exec { code, file } => Request {
-            cmd: "exec".into(),
-            args: json!({
-                "code": code,
-                "file": file.as_ref().map(|p| p.to_string_lossy().to_string()),
-            }),
-        },
-
-        // Network
+        } => {
+            let args = ScriptArgs {
+                code: code.clone(),
+                file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
+                max_size: *max_size,
+            };
+            if *no_return {
+                Request::Exec(args)
+            } else {
+                Request::Eval(args)
+            }
+        }
+        Command::Exec { code, file } => Request::Exec(ScriptArgs {
+            code: code.clone(),
+            file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
+            max_size: None,
+        }),
         Command::Fetch {
             url,
             method,
@@ -172,242 +123,144 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             redirect,
             body_only,
             max_body,
-        } => {
-            let mut args = json!({ "url": url });
-            if let Some(m) = method {
-                args["method"] = json!(m);
-            }
-            if let Some(h) = headers {
-                args["headers"] = parse_headers_json(h);
-            }
-            if let Some(b) = body {
-                args["body"] = json!(b);
-            }
-            if let Some(r) = redirect {
-                args["redirect"] = json!(r);
-            }
-            if *body_only {
-                args["body_only"] = json!(true);
-            }
-            if let Some(mb) = max_body {
-                args["max_body"] = json!(mb);
-            }
-            Request {
-                cmd: "fetch".into(),
-                args,
-            }
-        }
-
-        // Cookies
-        Command::Cookies => Request {
-            cmd: "cookies".into(),
-            args: json!({}),
-        },
+        } => Request::Fetch(FetchArgs {
+            url: url.clone(),
+            method: method.clone(),
+            headers: headers.as_ref().map(|h| parse_headers_json(h)),
+            body: body.clone(),
+            redirect: redirect.clone(),
+            body_only: *body_only,
+            max_body: *max_body,
+        }),
+        Command::Cookies => Request::Cookies,
         Command::SetCookie {
             name,
             value,
             domain,
             path,
-        } => Request {
-            cmd: "set_cookie".into(),
-            args: json!({
-                "name": name,
-                "value": value,
-                "domain": domain,
-                "path": path,
-            }),
-        },
-        Command::DeleteCookie { name, domain } => Request {
-            cmd: "delete_cookie".into(),
-            args: json!({ "name": name, "domain": domain }),
-        },
-        Command::ClearCookies => Request {
-            cmd: "clear_cookies".into(),
-            args: json!({}),
-        },
-
-        // Storage
+        } => Request::SetCookie(SetCookieArgs {
+            name: name.clone(),
+            value: value.clone(),
+            domain: domain.clone(),
+            path: path.clone(),
+        }),
+        Command::DeleteCookie { name, domain } => Request::DeleteCookie(DeleteCookieArgs {
+            name: name.clone(),
+            domain: domain.clone(),
+        }),
+        Command::ClearCookies => Request::ClearCookies,
         Command::Storage {
             key,
             session_storage,
-        } => Request {
-            cmd: "storage".into(),
-            args: json!({ "key": key, "session_storage": session_storage }),
-        },
+        } => Request::Storage(StorageArgs {
+            key: key.clone(),
+            session_storage: *session_storage,
+        }),
         Command::SetStorage {
             key,
             value,
             session_storage,
-        } => Request {
-            cmd: "set_storage".into(),
-            args: json!({ "key": key, "value": value, "session_storage": session_storage }),
-        },
-        Command::DumpStorage => Request {
-            cmd: "dump_storage".into(),
-            args: json!({}),
-        },
-
-        // State
-        Command::SaveState { path } => Request {
-            cmd: "save_state".into(),
-            args: json!({ "path": path.to_string_lossy() }),
-        },
-        Command::LoadState { path, no_navigate } => Request {
-            cmd: "load_state".into(),
-            args: json!({ "path": path.to_string_lossy(), "no_navigate": no_navigate }),
-        },
-
-        // Headers
-        Command::Headers { headers_json } => Request {
-            cmd: "headers".into(),
-            args: json!({ "headers_json": headers_json }),
-        },
-
-        // Console/Errors
-        Command::Console { clear, level } => Request {
-            cmd: "console".into(),
-            args: json!({ "clear": clear, "level": level }),
-        },
-        Command::Errors { clear } => Request {
-            cmd: "errors".into(),
-            args: json!({ "clear": clear }),
-        },
-
-        // Tabs
+        } => Request::SetStorage(SetStorageArgs {
+            key: key.clone(),
+            value: value.clone(),
+            session_storage: *session_storage,
+        }),
+        Command::DumpStorage => Request::DumpStorage,
+        Command::SaveState { path } => Request::SaveState(PathArgs {
+            path: path.to_string_lossy().to_string(),
+        }),
+        Command::LoadState { path, no_navigate } => Request::LoadState(LoadStateArgs {
+            path: path.to_string_lossy().to_string(),
+            no_navigate: *no_navigate,
+        }),
+        Command::Headers { headers_json } => Request::Headers(HeadersArgs {
+            headers_json: headers_json.clone(),
+        }),
+        Command::Console { clear, level } => Request::Console(ConsoleArgs {
+            clear: *clear,
+            level: level.clone(),
+        }),
+        Command::Errors { clear } => Request::Errors(ClearFlagArgs { clear: *clear }),
         Command::Tab { action } => match action {
-            TabAction::List => Request {
-                cmd: "tab_list".into(),
-                args: json!({}),
-            },
-            TabAction::New { url } => Request {
-                cmd: "tab_new".into(),
-                args: json!({ "url": url }),
-            },
-            TabAction::Switch { tab_id } => Request {
-                cmd: "tab_switch".into(),
-                args: json!({ "tab_id": tab_id }),
-            },
-            TabAction::Close { tab_id } => Request {
-                cmd: "tab_close".into(),
-                args: json!({ "tab_id": tab_id }),
-            },
-            TabAction::Attach { tab_id } => Request {
-                cmd: "tab_attach".into(),
-                args: json!({ "tab_id": tab_id }),
-            },
+            TabAction::List => Request::TabList,
+            TabAction::New { url } => Request::TabNew(TabNewArgs { url: url.clone() }),
+            TabAction::Switch { tab_id } => Request::TabSwitch(TabIdArgs {
+                tab_id: tab_id.clone(),
+            }),
+            TabAction::Close { tab_id } => Request::TabClose(TabIdArgs {
+                tab_id: tab_id.clone(),
+            }),
+            TabAction::Attach { tab_id } => Request::TabAttach(TabIdArgs {
+                tab_id: tab_id.clone(),
+            }),
         },
-
-        // Wait
         Command::Wait {
             ms,
             text,
             url,
             load,
             timeout,
-        } => Request {
-            cmd: "wait".into(),
-            args: json!({
-                "ms": ms,
-                "text": text,
-                "url": url,
-                "load": load,
-                "timeout": timeout,
-            }),
-        },
-
-        // SPA
-        Command::SpaInfo => Request {
-            cmd: "spa_info".into(),
-            args: json!({}),
-        },
-        Command::SpaNavigate { path } => Request {
-            cmd: "spa_navigate".into(),
-            args: json!({ "path": path }),
-        },
-
-        // Fake Camera
-        Command::FakeCamera { file, loop_video } => Request {
-            cmd: "fake_camera".into(),
-            args: json!({
-                "file": file.to_string_lossy(),
-                "loop_video": loop_video,
-            }),
-        },
-
-        // WASM
+        } => Request::Wait(WaitArgs {
+            ms: *ms,
+            text: text.clone(),
+            url: url.clone(),
+            load: load.clone(),
+            timeout: *timeout,
+        }),
+        Command::SpaInfo => Request::SpaInfo,
+        Command::SpaNavigate { path } => {
+            Request::SpaNavigate(PathStringArgs { path: path.clone() })
+        }
+        Command::FakeCamera { file, loop_video } => Request::FakeCamera(FakeCameraArgs {
+            file: file.to_string_lossy().to_string(),
+            loop_video: *loop_video,
+        }),
         Command::Wasm { action } => match action {
-            WasmAction::Info => Request {
-                cmd: "wasm_info".into(),
-                args: json!({}),
-            },
-            WasmAction::Read { addr, len, memory } => Request {
-                cmd: "wasm_read".into(),
-                args: json!({ "addr": addr, "len": len, "memory": memory }),
-            },
-            WasmAction::Write { addr, hex, memory } => Request {
-                cmd: "wasm_write".into(),
-                args: json!({ "addr": addr, "hex": hex, "memory": memory }),
-            },
+            WasmAction::Info => Request::WasmInfo,
+            WasmAction::Read { addr, len, memory } => Request::WasmRead(WasmReadArgs {
+                addr: addr.clone(),
+                len: *len,
+                memory: memory.clone(),
+            }),
+            WasmAction::Write { addr, hex, memory } => Request::WasmWrite(WasmWriteArgs {
+                addr: addr.clone(),
+                hex: hex.clone(),
+                memory: memory.clone(),
+            }),
             WasmAction::Find {
                 pattern,
                 start,
                 end,
                 max,
                 memory,
-            } => Request {
-                cmd: "wasm_find".into(),
-                args: json!({
-                    "pattern": pattern,
-                    "start": start,
-                    "end": end,
-                    "max": max,
-                    "memory": memory,
-                }),
-            },
-        },
-
-        Command::Network { action } => network_action_to_request(action),
-
-        // Script Blocking (NoScript-style)
-        Command::Js { action } => match action {
-            JsAction::Mode { mode } => Request {
-                cmd: "js_mode".into(),
-                args: json!({ "mode": mode }),
-            },
-            JsAction::Allow { domain } => Request {
-                cmd: "js_allow".into(),
-                args: json!({ "domain": domain }),
-            },
-            JsAction::Block { domain } => Request {
-                cmd: "js_block".into(),
-                args: json!({ "domain": domain }),
-            },
-            JsAction::Remove { domain } => Request {
-                cmd: "js_remove".into(),
-                args: json!({ "domain": domain }),
-            },
-            JsAction::List => Request {
-                cmd: "js_list".into(),
-                args: json!({}),
-            },
-        },
-
-        // Close
-        Command::Close => Request {
-            cmd: "close".into(),
-            args: json!({}),
-        },
-
-        // Clone-from (live snapshot import)
-        Command::CloneFrom { source, to } => Request {
-            cmd: "clone_from".into(),
-            args: json!({
-                "source": source,
-                "to": to.as_ref().map(|p| p.to_string_lossy().to_string()),
+            } => Request::WasmFind(WasmFindArgs {
+                pattern: pattern.clone(),
+                start: start.clone(),
+                end: end.clone(),
+                max: *max,
+                memory: memory.clone(),
             }),
         },
 
-        // CAPTCHA
+        Command::Network { action } => network_action_to_request(action),
+        Command::Js { action } => match action {
+            JsAction::Mode { mode } => Request::JsMode(ModeArgs { mode: mode.clone() }),
+            JsAction::Allow { domain } => Request::JsAllow(DomainArgs {
+                domain: domain.clone(),
+            }),
+            JsAction::Block { domain } => Request::JsBlock(DomainArgs {
+                domain: domain.clone(),
+            }),
+            JsAction::Remove { domain } => Request::JsRemove(DomainArgs {
+                domain: domain.clone(),
+            }),
+            JsAction::List => Request::JsList,
+        },
+        Command::Close => Request::Close,
+        Command::CloneFrom { source, to } => Request::CloneFrom(CloneFromArgs {
+            source: source.clone(),
+            to: to.as_ref().map(|path| path.to_string_lossy().to_string()),
+        }),
         Command::Captcha {
             action:
                 CaptchaAction::Inject {
@@ -422,12 +275,6 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             callback.as_deref(),
             click_after.as_deref(),
         ),
-
-        // Commands handled before daemon startup — main() returns early for
-        // these (see the early-dispatch match and the `Command::Batch` check
-        // above it), so this function is never actually called for them. If
-        // this panics, main()'s early-dispatch match no longer intercepts
-        // this variant — fix it there rather than adding a Request arm here.
         Command::Captcha {
             action: CaptchaAction::Solve(_),
         }
@@ -443,114 +290,21 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
     }
 }
 
-fn network_action_to_request(action: &NetworkAction) -> Request {
-    match action {
-        NetworkAction::Record { action } => match action {
-            NetworkRecordAction::Start {
-                patterns,
-                no_bodies,
-                max_body_bytes,
-            } => Request {
-                cmd: "network_record_start".into(),
-                args: json!({
-                    "patterns": patterns,
-                    "no_bodies": no_bodies,
-                    "max_body_bytes": max_body_bytes,
-                }),
-            },
-            NetworkRecordAction::Stop => Request {
-                cmd: "network_record_stop".into(),
-                args: json!({}),
-            },
-            NetworkRecordAction::Status => Request {
-                cmd: "network_record_status".into(),
-                args: json!({}),
-            },
-        },
-        NetworkAction::Log {
-            limit,
-            pattern,
-            method,
-            status,
-        } => Request {
-            cmd: "network_log".into(),
-            args: json!({
-                "limit": limit,
-                "pattern": pattern,
-                "method": method,
-                "status": status,
-            }),
-        },
-        NetworkAction::Show { id } => Request {
-            cmd: "network_show".into(),
-            args: json!({ "id": id }),
-        },
-        NetworkAction::SaveHar { path } => Request {
-            cmd: "network_save_har".into(),
-            args: json!({ "path": absolute_output_path(path).to_string_lossy() }),
-        },
-        NetworkAction::Clear => Request {
-            cmd: "network_clear".into(),
-            args: json!({}),
-        },
-        NetworkAction::Intercept { action } => intercept_action_to_request(action),
-    }
-}
-
-fn intercept_action_to_request(action: &InterceptAction) -> Request {
-    match action {
-        InterceptAction::Add {
-            url_pattern,
-            capture,
-            respond,
-            status,
-        } => Request {
-            cmd: "intercept_add".into(),
-            args: json!({
-                "url_pattern": url_pattern,
-                "capture": capture.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "respond": respond.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "status": status,
-            }),
-        },
-        InterceptAction::List => Request {
-            cmd: "intercept_list".into(),
-            args: json!({}),
-        },
-        InterceptAction::Remove { id } => Request {
-            cmd: "intercept_remove".into(),
-            args: json!({ "id": id }),
-        },
-        InterceptAction::Log { clear } => Request {
-            cmd: "intercept_log".into(),
-            args: json!({ "clear": clear }),
-        },
-    }
-}
-
-fn absolute_output_path(path: &std::path::Path) -> std::path::PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::test_support::parsed_command;
     use crate::cli::Cli;
     use clap::Parser;
+    use serde_json::json;
 
     #[test]
     fn click_accepts_bracketed_observe_target_at_cli_layer() {
         let (_cli, command) = parsed_command(&["eoka", "click", "[38]"]);
         let request = command_to_request(&command);
 
-        assert_eq!(request.cmd, "click");
-        assert_eq!(request.args["target"], "[38]");
+        assert_eq!(request.cmd(), "click");
+        assert_eq!(request.args_json()["target"], "[38]");
     }
 
     #[test]
@@ -565,9 +319,9 @@ mod tests {
         ]);
         let request = command_to_request(&command);
 
-        assert_eq!(request.cmd, "fetch");
-        assert_eq!(request.args["body_only"], true);
-        assert_eq!(request.args["max_body"], 16);
+        assert_eq!(request.cmd(), "fetch");
+        assert_eq!(request.args_json()["body_only"], true);
+        assert_eq!(request.args_json()["max_body"], 16);
     }
 
     #[test]
@@ -581,9 +335,9 @@ mod tests {
         ]);
         let request = command_to_request(&command);
 
-        assert_eq!(request.cmd, "open");
-        assert_eq!(request.args["url"], "/camping/campsites/71576");
-        assert_eq!(request.args["load_state"], "auth.json");
+        assert_eq!(request.cmd(), "open");
+        assert_eq!(request.args_json()["url"], "/camping/campsites/71576");
+        assert_eq!(request.args_json()["load_state"], "auth.json");
     }
 
     #[test]
@@ -602,11 +356,11 @@ mod tests {
         ]);
         let request = command_to_request(&command);
 
-        assert_eq!(request.cmd, "captcha_inject");
-        assert_eq!(request.args["token"], "token-123");
-        assert_eq!(request.args["captcha_type"], "recaptcha");
-        assert_eq!(request.args["callback"], "window.onCaptcha");
-        assert_eq!(request.args["click_after"], "text:Continue Booking");
+        assert_eq!(request.cmd(), "captcha_inject");
+        assert_eq!(request.args_json()["token"], "token-123");
+        assert_eq!(request.args_json()["captcha_type"], "recaptcha");
+        assert_eq!(request.args_json()["callback"], "window.onCaptcha");
+        assert_eq!(request.args_json()["click_after"], "text:Continue Booking");
     }
 
     #[test]
@@ -616,8 +370,85 @@ mod tests {
         let request = command_to_request(&command);
 
         assert!(cli.json);
-        assert_eq!(request.cmd, "intercept_add");
-        assert_eq!(request.args["url_pattern"], "*api*");
+        assert_eq!(request.cmd(), "intercept_add");
+        assert_eq!(request.args_json()["url_pattern"], "*api*");
+    }
+
+    #[test]
+    fn network_record_start_clear_maps_to_typed_request() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "network",
+            "record",
+            "start",
+            "--pattern",
+            "*/api/*",
+            "--clear",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd(), "network_record_start");
+        assert_eq!(request.args_json()["patterns"], json!(["*/api/*"]));
+        assert_eq!(request.args_json()["clear"], true);
+    }
+
+    #[test]
+    fn network_wait_defaults_to_new_entries() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "network",
+            "wait",
+            "--pattern",
+            "*/api/*",
+            "--status",
+            "200",
+            "--timeout",
+            "5000",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd(), "network_wait");
+        assert_eq!(request.args_json()["pattern"], "*/api/*");
+        assert_eq!(request.args_json()["status"], 200);
+        assert_eq!(request.args_json()["timeout"], 5000);
+        assert_eq!(request.args_json()["include_existing"], false);
+    }
+
+    #[test]
+    fn network_export_json_resolves_path_and_format() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "network",
+            "export",
+            "capture.json",
+            "--format",
+            "json",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd(), "network_export");
+        assert_eq!(request.args_json()["format"], "json");
+        assert!(request.args_json()["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("capture.json"));
+    }
+
+    #[test]
+    fn network_save_har_keeps_legacy_wire_command() {
+        let (_cli, command) = parsed_command(&[
+            "eoka",
+            "network",
+            "save-har",
+            "capture.har",
+            "--settle-ms",
+            "1",
+        ]);
+        let request = command_to_request(&command);
+
+        assert_eq!(request.cmd(), "network_save_har");
+        assert_eq!(request.args_json()["format"], "har");
+        assert_eq!(request.args_json()["settle_ms"], 1);
     }
 
     #[test]

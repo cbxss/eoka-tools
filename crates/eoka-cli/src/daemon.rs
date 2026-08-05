@@ -36,7 +36,7 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
     );
     eprintln!("[eoka] socket: {}", sock_path.display());
 
-    let mut handler = Handler::new(spec);
+    let mut handler = Handler::new(session_name, spec);
     let mut last_activity = Instant::now();
     let timeout = idle_timeout();
 
@@ -63,22 +63,30 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
                         last_activity = Instant::now();
                         let (mut reader, mut writer) = stream.into_split();
 
-                        let req: Request = match read_msg(&mut reader).await {
+                        let raw: serde_json::Value = match read_msg(&mut reader).await {
                             Ok(r) => r,
                             Err(e) => {
                                 eprintln!("[eoka] read error: {}", e);
                                 continue;
                             }
                         };
+                        let req: Request = match serde_json::from_value(raw) {
+                            Ok(req) => req,
+                            Err(e) => {
+                                let resp = Response::err(format!("Invalid command request: {}", e));
+                                let _ = write_msg(&mut writer, &resp).await;
+                                continue;
+                            }
+                        };
 
-                        if req.cmd == "shutdown" {
+                        if matches!(req, Request::Shutdown) {
                             let _ = handler.handle("close", &serde_json::Value::Null).await;
                             let resp = Response::ok_text("Daemon shutting down");
                             let _ = write_msg(&mut writer, &resp).await;
                             break;
                         }
 
-                        let resp = handler.handle(&req.cmd, &req.args).await;
+                        let resp = handler.handle_request(req).await;
                         if let Err(e) = write_msg(&mut writer, &resp).await {
                             eprintln!("[eoka] write error: {}", e);
                         }
@@ -109,14 +117,8 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The idle check only runs on the accept loop's fixed 10s tick (see the
-    /// `tokio::time::timeout(Duration::from_secs(10), listener.accept())`
-    /// above), so shutdown latency is capped at ~10s regardless of how low
-    /// EOKA_IDLE_TIMEOUT is set — this test's outer bound accounts for that.
     #[tokio::test]
     async fn idle_timeout_shuts_daemon_down_with_no_clients() {
-        // SAFETY: no other test in this binary reads or writes EOKA_IDLE_TIMEOUT.
         unsafe {
             std::env::set_var("EOKA_IDLE_TIMEOUT", "50");
         }
