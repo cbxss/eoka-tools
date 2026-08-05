@@ -68,3 +68,85 @@ pub async fn read_msg<R: AsyncReadExt + Unpin, T: for<'de> Deserialize<'de>>(
     reader.read_exact(&mut buf).await?;
     serde_json::from_slice(&buf).map_err(|e| std::io::Error::other(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::{UnixListener, UnixStream};
+
+    fn temp_socket_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "eoka-protocol-test-{}-{}.sock",
+            std::process::id(),
+            name
+        ))
+    }
+
+    #[tokio::test]
+    async fn round_trip_over_unix_socket() {
+        let sock_path = temp_socket_path("roundtrip");
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, mut writer) = stream.into_split();
+            let req: Request = read_msg(&mut reader).await.unwrap();
+            assert_eq!(req.cmd, "ping");
+            assert_eq!(req.args, serde_json::json!({ "n": 1 }));
+            write_msg(&mut writer, &Response::ok_text("pong"))
+                .await
+                .unwrap();
+        });
+
+        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let (mut reader, mut writer) = stream.into_split();
+        write_msg(
+            &mut writer,
+            &Request {
+                cmd: "ping".into(),
+                args: serde_json::json!({ "n": 1 }),
+            },
+        )
+        .await
+        .unwrap();
+        let response: Response = read_msg(&mut reader).await.unwrap();
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+
+        assert!(response.ok);
+        assert_eq!(
+            response.data,
+            Some(serde_json::Value::String("pong".into()))
+        );
+        assert_eq!(response.error, None);
+    }
+
+    #[tokio::test]
+    async fn read_msg_rejects_oversized_length_prefix() {
+        let sock_path = temp_socket_path("oversized");
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            let result: std::io::Result<Request> = read_msg(&mut reader).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("too large"));
+        });
+
+        let mut stream = UnixStream::connect(&sock_path).await.unwrap();
+        // Claim a 65MB payload without sending one; read_msg must reject the
+        // length prefix before attempting to read the (nonexistent) body.
+        let oversized_len: u32 = 65 * 1024 * 1024;
+        stream
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+    }
+}

@@ -104,24 +104,24 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
             "(() => { try { return Object.fromEntries(Object.entries(localStorage)) } catch(e) { return {} } })()",
         )
         .await
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
 
     let session_storage: HashMap<String, String> = page
         .evaluate_sync(
             "(() => { try { return Object.fromEntries(Object.entries(sessionStorage)) } catch(e) { return {} } })()",
         )
         .await
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
 
     let url: String = page
         .evaluate_sync("location.href")
         .await
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
 
     let user_agent: String = page
         .evaluate_sync("navigator.userAgent")
         .await
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
 
     let saved_at = {
         let d = std::time::SystemTime::now()
@@ -143,8 +143,8 @@ pub async fn capture_state(page: &Page) -> Result<SavedState, String> {
 /// Restore browser state: clear + set cookies, clear + set localStorage/sessionStorage.
 pub async fn restore_state(page: &Page, state: &SavedState) -> Result<(), String> {
     restore_cookies(page, state).await?;
-    restore_storage(page, "localStorage", &state.local_storage).await;
-    restore_storage(page, "sessionStorage", &state.session_storage).await;
+    restore_storage(page, "localStorage", &state.local_storage).await?;
+    restore_storage(page, "sessionStorage", &state.session_storage).await?;
     Ok(())
 }
 
@@ -164,18 +164,22 @@ pub async fn restore_cookies(page: &Page, state: &SavedState) -> Result<(), Stri
     Ok(())
 }
 
-async fn restore_storage(page: &Page, storage_name: &str, data: &HashMap<String, String>) {
+async fn restore_storage(
+    page: &Page,
+    storage_name: &str,
+    data: &HashMap<String, String>,
+) -> Result<(), String> {
     if data.is_empty() {
-        return;
+        return Ok(());
     }
-    if let Ok(json) = serde_json::to_string(data) {
-        let js = format!(
-            "(() => {{ {s}.clear(); const d = {j}; for (const [k,v] of Object.entries(d)) {s}.setItem(k,v); }})()",
-            s = storage_name,
-            j = json
-        );
-        let _: String = page.evaluate_sync(&js).await.unwrap_or_default();
-    }
+    let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+    let js = format!(
+        "(() => {{ {s}.clear(); const d = {j}; for (const [k,v] of Object.entries(d)) {s}.setItem(k,v); return 'ok'; }})()",
+        s = storage_name,
+        j = json
+    );
+    let _: String = page.evaluate_sync(&js).await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Connect to a running Chrome (port number or ws:// URL), capture its
@@ -202,7 +206,12 @@ pub async fn clone_state_from_source(source: &str) -> Result<SavedState, String>
         .map_err(|e| e.to_string())?;
 
     let state = capture_state(&page).await?;
-    let _ = browser.disconnect().await;
+    if let Err(e) = browser.disconnect().await {
+        eprintln!(
+            "[eoka] warning: failed to disconnect from cloned Chrome session: {}",
+            e
+        );
+    }
     Ok(state)
 }
 
@@ -225,6 +234,10 @@ pub async fn ensure_console_capture(tab: &mut TabState) -> Result<(), String> {
         )
         .await
         .map_err(|e| e.to_string())?;
+    // Best-effort: this IIFE has no return value, so evaluate_sync::<String>
+    // routinely "fails" to deserialize a String even when the injection
+    // itself succeeded. The addScriptToEvaluateOnNewDocument call above is
+    // what actually needs to succeed; this just seeds the *current* page too.
     let _: String = tab
         .page
         .evaluate_sync(CONSOLE_CAPTURE_JS)

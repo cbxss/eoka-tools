@@ -1,5 +1,14 @@
 #!/bin/sh
 # Install the current macOS Apple Silicon eoka CLI release.
+#
+# Pinned to v0.1.1 deliberately, not because it's stale: CI (see
+# .github/workflows/publish.yml) only publishes eoka-cli to crates.io and
+# tags the release now — it no longer builds/uploads a macOS binary asset
+# (unlike eoka-server, which still has release-eoka-server.yml for that).
+# v0.1.1 is the newest eoka-cli release that actually has a downloadable
+# aarch64-apple-darwin tarball attached; bumping this to a newer tag will
+# 404. Until eoka-cli gets its own binary-release workflow, `cargo install
+# eoka-cli` is the only way to get a current version.
 set -eu
 
 version="v0.1.1"
