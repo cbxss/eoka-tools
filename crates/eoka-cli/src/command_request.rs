@@ -3,7 +3,10 @@
 use serde_json::json;
 
 use crate::captcha_cmd::captcha_inject_request;
-use crate::cli::{CaptchaAction, Command, InterceptAction, JsAction, TabAction, WasmAction};
+use crate::cli::{
+    CaptchaAction, Command, InterceptAction, JsAction, NetworkAction, NetworkRecordAction,
+    TabAction, WasmAction,
+};
 use crate::protocol::Request;
 
 /// Parse a `--headers` JSON string, exiting with a clear error on malformed
@@ -363,35 +366,7 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             },
         },
 
-        // Intercept
-        Command::Intercept { action } => match action {
-            InterceptAction::Add {
-                url_pattern,
-                capture,
-                respond,
-                status,
-            } => Request {
-                cmd: "intercept_add".into(),
-                args: json!({
-                    "url_pattern": url_pattern,
-                    "capture": capture.as_ref().map(|p| p.to_string_lossy().to_string()),
-                    "respond": respond.as_ref().map(|p| p.to_string_lossy().to_string()),
-                    "status": status,
-                }),
-            },
-            InterceptAction::List => Request {
-                cmd: "intercept_list".into(),
-                args: json!({}),
-            },
-            InterceptAction::Remove { id } => Request {
-                cmd: "intercept_remove".into(),
-                args: json!({ "id": id }),
-            },
-            InterceptAction::Log { clear } => Request {
-                cmd: "intercept_log".into(),
-                args: json!({ "clear": clear }),
-            },
-        },
+        Command::Network { action } => network_action_to_request(action),
 
         // Script Blocking (NoScript-style)
         Command::Js { action } => match action {
@@ -468,6 +443,100 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
     }
 }
 
+fn network_action_to_request(action: &NetworkAction) -> Request {
+    match action {
+        NetworkAction::Record { action } => match action {
+            NetworkRecordAction::Start {
+                patterns,
+                no_bodies,
+                max_body_bytes,
+            } => Request {
+                cmd: "network_record_start".into(),
+                args: json!({
+                    "patterns": patterns,
+                    "no_bodies": no_bodies,
+                    "max_body_bytes": max_body_bytes,
+                }),
+            },
+            NetworkRecordAction::Stop => Request {
+                cmd: "network_record_stop".into(),
+                args: json!({}),
+            },
+            NetworkRecordAction::Status => Request {
+                cmd: "network_record_status".into(),
+                args: json!({}),
+            },
+        },
+        NetworkAction::Log {
+            limit,
+            pattern,
+            method,
+            status,
+        } => Request {
+            cmd: "network_log".into(),
+            args: json!({
+                "limit": limit,
+                "pattern": pattern,
+                "method": method,
+                "status": status,
+            }),
+        },
+        NetworkAction::Show { id } => Request {
+            cmd: "network_show".into(),
+            args: json!({ "id": id }),
+        },
+        NetworkAction::SaveHar { path } => Request {
+            cmd: "network_save_har".into(),
+            args: json!({ "path": absolute_output_path(path).to_string_lossy() }),
+        },
+        NetworkAction::Clear => Request {
+            cmd: "network_clear".into(),
+            args: json!({}),
+        },
+        NetworkAction::Intercept { action } => intercept_action_to_request(action),
+    }
+}
+
+fn intercept_action_to_request(action: &InterceptAction) -> Request {
+    match action {
+        InterceptAction::Add {
+            url_pattern,
+            capture,
+            respond,
+            status,
+        } => Request {
+            cmd: "intercept_add".into(),
+            args: json!({
+                "url_pattern": url_pattern,
+                "capture": capture.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "respond": respond.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "status": status,
+            }),
+        },
+        InterceptAction::List => Request {
+            cmd: "intercept_list".into(),
+            args: json!({}),
+        },
+        InterceptAction::Remove { id } => Request {
+            cmd: "intercept_remove".into(),
+            args: json!({ "id": id }),
+        },
+        InterceptAction::Log { clear } => Request {
+            cmd: "intercept_log".into(),
+            args: json!({ "clear": clear }),
+        },
+    }
+}
+
+fn absolute_output_path(path: &std::path::Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,8 +610,9 @@ mod tests {
     }
 
     #[test]
-    fn standard_intercept_subcommand_accepts_trailing_json_flag() {
-        let (cli, command) = parsed_command(&["eoka", "intercept", "add", "*api*", "--json"]);
+    fn network_intercept_subcommand_accepts_trailing_json_flag() {
+        let (cli, command) =
+            parsed_command(&["eoka", "network", "intercept", "add", "*api*", "--json"]);
         let request = command_to_request(&command);
 
         assert!(cli.json);
@@ -551,9 +621,20 @@ mod tests {
     }
 
     #[test]
+    fn top_level_intercept_is_rejected() {
+        let err = match Cli::try_parse_from(["eoka", "intercept", "add", "*api*", "--json"]) {
+            Ok(_) => panic!("top-level intercept should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("unrecognized subcommand"));
+    }
+
+    #[test]
     fn deprecated_json_intercept_spec_is_rejected() {
         let err = match Cli::try_parse_from([
             "eoka",
+            "network",
             "intercept",
             r#"{"urlPattern":"*api*","action":"log"}"#,
             "--json",

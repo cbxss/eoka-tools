@@ -1,5 +1,3 @@
-//! Daemon process: listens on Unix socket, dispatches commands to Handler.
-
 use std::time::{Duration, Instant};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
@@ -9,7 +7,6 @@ use crate::launch_spec::LaunchSpec;
 use crate::protocol::{read_msg, write_msg, Request, Response};
 use crate::session;
 
-/// Default idle timeout: 30 minutes.
 fn idle_timeout() -> Duration {
     let ms = std::env::var("EOKA_IDLE_TIMEOUT")
         .ok()
@@ -24,7 +21,6 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
     let sock_path = session::socket_path(session_name);
     let pid_path = session::pid_path(session_name);
 
-    // Clean up stale socket
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }
@@ -44,7 +40,6 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
     let mut last_activity = Instant::now();
     let timeout = idle_timeout();
 
-    // Signal handler sends shutdown notification via channel
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
     tokio::spawn(async move {
         let mut sigterm =
@@ -90,8 +85,7 @@ pub async fn run(session_name: &str, spec: LaunchSpec) -> anyhow::Result<()> {
                     }
                     Ok(Err(e)) => eprintln!("[eoka] accept error: {}", e),
                     Err(_) => {
-                        // Accept timeout — check idle
-                        if last_activity.elapsed() > timeout {
+                        if last_activity.elapsed() > timeout && !handler.is_network_recording().await {
                             eprintln!("[eoka] idle timeout ({}s), shutting down", timeout.as_secs());
                             let _ = handler.handle("close", &serde_json::Value::Null).await;
                             break;

@@ -1,6 +1,6 @@
 ---
 name: eoka
-description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, protected-site sessions and AWS WAF CAPTCHA solving, headless screenshots, CDP fetch interception, WASM memory, fake-camera injection, and SPA navigation. Triggers on: eoka, browser cli, AWS WAF, captcha, anti-captcha, headless screenshot, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
+description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, protected-site sessions and AWS WAF CAPTCHA solving, headless screenshots, network recording, HAR export, CDP fetch interception, WASM memory, fake-camera injection, and SPA navigation. Triggers on: eoka, browser cli, AWS WAF, captcha, anti-captcha, headless screenshot, network record, save har, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
 ---
 
 # eoka — Browser Automation CLI
@@ -93,12 +93,31 @@ Use `--no-return` or `--max-size` when evaluating scripts that produce large res
 ### Network (Pentesting)
 
 ```bash
-# Fetch from browser context — uses real cookies, TLS fingerprint, bypasses Cloudflare
 eoka fetch https://api.target.com/me
 eoka fetch https://api.target.com/data -m POST --headers '{"Content-Type": "application/json"}' -b '{"key": "value"}'
-eoka fetch https://target.com/oauth --redirect manual   # Capture redirect URL
-eoka fetch https://target.com/app.js --body-only          # Print only response body for grep/sed/awk
+eoka fetch https://target.com/oauth --redirect manual
+eoka fetch https://target.com/app.js --body-only
+eoka network record start
+eoka network record start --pattern "*/api/*" --max-body-bytes 10485760
+eoka network record status
+eoka network log --limit 50 --method POST
+eoka network show 12
+eoka network save-har /tmp/session.har
+eoka network record stop
+eoka network clear
+eoka network intercept add "*/api/data*"
+eoka network intercept add "*/biometrics/*" --capture /tmp/req.json
+eoka network intercept add "*/config" --respond /tmp/mock.json --status 200
+eoka network intercept list
+eoka network intercept log
+eoka network intercept log --clear
+eoka network intercept remove 1
+eoka network intercept remove all
 ```
+
+`fetch` runs from the browser context with the active session's cookies and TLS fingerprint. `network record start` passively records the active tab and follows explicit `eoka tab switch`, `tab attach`, `tab new`, and `open` operations. Recording appends until `network clear`; `network save-har` snapshots without stopping or clearing. Bodies are captured unredacted by default up to 10 MiB each, with a shared 512 MiB in-memory body pool.
+
+`network intercept` uses the CDP Fetch domain to pause matching requests. Intercept logs include `network_entry_id` when passive recording is active, so agents can jump from an intercepted request to `eoka network show <id>` or the exported HAR entry.
 
 ### Cookies
 
@@ -203,23 +222,6 @@ eoka wasm find "00 00 00 01" --start 0x300000 --end 0x400000 --max 5
 ```
 
 Reads are chunked (64KB) to avoid CDP message size limits. Output is formatted as hex dump (xxd-style). Addresses support `0x` hex prefix or decimal.
-
-### Network Interception
-
-Capture and modify HTTP requests using the CDP Fetch domain. Useful for intercepting encrypted API payloads, replaying modified requests, or mocking responses.
-
-```bash
-eoka intercept add "*/api/data*"                            # Log matching requests
-eoka intercept add "*/biometrics/*" --capture /tmp/req.json  # Capture request body to file
-eoka intercept add "*/config" --respond /tmp/mock.json --status 200  # Mock response from file
-eoka intercept list                                          # List active rules
-eoka intercept log                                           # Show intercepted request log
-eoka intercept log --clear                                   # Show and clear log
-eoka intercept remove 1                                      # Remove rule by ID
-eoka intercept remove all                                    # Remove all rules, disable interception
-```
-
-URL patterns use glob matching (`*` matches any sequence). When `--capture` is set, the full request (URL, method, headers, postData) is saved as JSON. When `--respond` is set, the file contents are returned instead of forwarding the request. Events are processed before each CLI command.
 
 ### SPA Navigation
 

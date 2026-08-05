@@ -1,5 +1,8 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const AUTH_PROXY: &str = "http://14a48de81a808:9b2c74eae3@217.156.58.217:12323";
@@ -106,6 +109,54 @@ fn assert_success(output: &std::process::Output, context: &str) {
     );
 }
 
+fn local_har_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+    let addr = listener.local_addr().expect("test server address");
+    thread::spawn(move || {
+        for stream in listener.incoming().take(12).flatten() {
+            handle_har_request(stream);
+        }
+    });
+    format!("http://{addr}")
+}
+
+fn handle_har_request(mut stream: TcpStream) {
+    let mut buffer = [0_u8; 8192];
+    let read = stream.read(&mut buffer).unwrap_or_default();
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/");
+    let (status, content_type, body) = if path.starts_with("/api/data") {
+        (
+            "HTTP/1.1 201 Created",
+            "application/json",
+            r#"{"ok":true,"source":"e2e"}"#,
+        )
+    } else if path == "/page" {
+        (
+            "HTTP/1.1 200 OK",
+            "text/html",
+            r#"<html><body><script>
+fetch('/api/data?from=page', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({from: 'page'})
+});
+</script></body></html>"#,
+        )
+    } else {
+        ("HTTP/1.1 404 Not Found", "text/plain", "not found")
+    };
+    let response = format!(
+        "{status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
 #[test]
 #[ignore = "requires Chrome"]
 fn spawns_daemon_and_completes_a_real_command() {
@@ -201,4 +252,85 @@ fn proxy_file_user_flow_forwards_resolved_proxy_to_daemon_and_chrome() {
 
     clean_session(&session);
     let _ = std::fs::remove_file(proxy_file);
+}
+
+#[test]
+#[ignore = "requires Chrome"]
+fn network_record_exports_local_fetch_to_har() {
+    let session = format!("eoka-har-e2e-test-{}", std::process::id());
+    let base_url = local_har_server();
+    let page_url = format!("{base_url}/page");
+    let har_path = std::env::temp_dir().join(format!("{session}.har"));
+    let har_arg = har_path.to_string_lossy().into_owned();
+
+    clean_session(&session);
+    let _ = std::fs::remove_file(&har_path);
+
+    let start = run(
+        &session,
+        &[
+            "--json",
+            "network",
+            "record",
+            "start",
+            "--pattern",
+            "*/api/*",
+        ],
+    );
+    assert_success(&start, "network record start");
+
+    let open = run(&session, &["--json", "open", &page_url]);
+    assert_success(&open, "open");
+
+    let wait = run(&session, &["--json", "wait", "1000"]);
+    assert_success(&wait, "wait");
+
+    let log = run(
+        &session,
+        &["--json", "network", "log", "--pattern", "*/api/*"],
+    );
+    assert_success(&log, "network log");
+    let log_json: serde_json::Value =
+        serde_json::from_slice(&log.stdout).expect("network log should be JSON");
+    assert!(
+        log_json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["url"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/api/data?from=page")),
+        "network log did not include api request: {log_json}"
+    );
+
+    let save = run(&session, &["--json", "network", "save-har", &har_arg]);
+    assert_success(&save, "network save-har");
+
+    let har: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&har_path).expect("har file should exist"))
+            .expect("har should be valid JSON");
+    let entries = har["log"]["entries"]
+        .as_array()
+        .expect("har entries should be an array");
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/api/data?from=page")
+        })
+        .expect("har should include api request");
+
+    assert_eq!(entry["request"]["method"], "POST");
+    assert_eq!(entry["response"]["status"], 201);
+    assert_eq!(
+        entry["response"]["content"]["text"],
+        r#"{"ok":true,"source":"e2e"}"#
+    );
+    assert_eq!(entry["_eoka"]["resource_type"], "Fetch");
+
+    clean_session(&session);
+    let _ = std::fs::remove_file(har_path);
 }

@@ -285,6 +285,11 @@ pub enum Command {
         max_body: Option<usize>,
     },
 
+    Network {
+        #[command(subcommand)]
+        action: NetworkAction,
+    },
+
     // ── Cookies ─────────────────────────────────────────────────────
     /// Get all cookies
     Cookies,
@@ -423,13 +428,6 @@ pub enum Command {
         action: WasmAction,
     },
 
-    // ── Network Interception ────────────────────────────────────────
-    /// Intercept and modify network requests (CDP Fetch domain)
-    Intercept {
-        #[command(subcommand)]
-        action: InterceptAction,
-    },
-
     // ── Script Blocking (NoScript-style) ──────────────────────────────
     /// Manage the per-domain JS policy for the running session
     Js {
@@ -481,6 +479,51 @@ pub enum Command {
 }
 
 #[derive(Subcommand)]
+pub enum NetworkAction {
+    Record {
+        #[command(subcommand)]
+        action: NetworkRecordAction,
+    },
+    Log {
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        pattern: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        status: Option<u16>,
+    },
+    Show {
+        id: u64,
+    },
+    #[command(name = "save-har")]
+    SaveHar {
+        path: PathBuf,
+    },
+    Clear,
+    Intercept {
+        #[command(subcommand)]
+        action: InterceptAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NetworkRecordAction {
+    Start {
+        #[arg(long = "pattern")]
+        patterns: Vec<String>,
+        #[arg(long)]
+        no_bodies: bool,
+        #[arg(long, default_value = "10485760")]
+        max_body_bytes: usize,
+    },
+    Stop,
+    Status,
+}
+
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum CaptchaAction {
     /// Solve hCaptcha, reCAPTCHA, or an AWS WAF challenge with Anti-Captcha.
     Solve(Box<SolveArgs>),
