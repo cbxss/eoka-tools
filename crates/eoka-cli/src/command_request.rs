@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::captcha_cmd::captcha_inject_request;
-use crate::cli::{CaptchaAction, Command, InterceptAction, TabAction, WasmAction};
+use crate::cli::{CaptchaAction, Command, InterceptAction, JsAction, TabAction, WasmAction};
 use crate::protocol::Request;
 
 /// Parse a `--headers` JSON string, exiting with a clear error on malformed
@@ -390,6 +390,30 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             InterceptAction::Log { clear } => Request {
                 cmd: "intercept_log".into(),
                 args: json!({ "clear": clear }),
+            },
+        },
+
+        // Script Blocking (NoScript-style)
+        Command::Js { action } => match action {
+            JsAction::Mode { mode } => Request {
+                cmd: "js_mode".into(),
+                args: json!({ "mode": mode }),
+            },
+            JsAction::Allow { domain } => Request {
+                cmd: "js_allow".into(),
+                args: json!({ "domain": domain }),
+            },
+            JsAction::Block { domain } => Request {
+                cmd: "js_block".into(),
+                args: json!({ "domain": domain }),
+            },
+            JsAction::Remove { domain } => Request {
+                cmd: "js_remove".into(),
+                args: json!({ "domain": domain }),
+            },
+            JsAction::List => Request {
+                cmd: "js_list".into(),
+                args: json!({}),
             },
         },
 

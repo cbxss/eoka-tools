@@ -2,6 +2,7 @@ mod eval;
 pub mod intercept;
 mod persist;
 pub mod profile;
+pub mod script_policy;
 pub mod state;
 mod target;
 mod wasm;
@@ -19,6 +20,7 @@ use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
 use intercept::{InterceptLogEntry, InterceptRule, InterceptState};
 use persist::{capture_state, ensure_console_capture, restore_cookies, restore_state, SavedState};
+use script_policy::{ScriptPolicyMode, ScriptPolicyState};
 use state::{BrowserState, TabState};
 use target::{
     auto_observe_if_needed, click_with_retry, fill_with_retry, json_str, resolve_target,
@@ -29,16 +31,35 @@ pub struct Handler {
     state: Option<BrowserState>,
     spec: LaunchSpec,
     intercept: InterceptState,
+    script_policy: ScriptPolicyState,
     fetch_events: Option<tokio::sync::broadcast::Receiver<CdpMessage>>,
     fetch_sessions: HashMap<String, CdpSession>,
 }
 
 impl Handler {
     pub fn new(spec: LaunchSpec) -> Self {
+        let script_policy = match &spec {
+            LaunchSpec::Launch {
+                no_js,
+                js_allow,
+                js_block,
+                ..
+            } => ScriptPolicyState::new(
+                if *no_js {
+                    ScriptPolicyMode::BlockAll
+                } else {
+                    ScriptPolicyMode::AllowAll
+                },
+                js_allow.clone(),
+                js_block.clone(),
+            ),
+            LaunchSpec::Connect { .. } => ScriptPolicyState::default(),
+        };
         Self {
             state: None,
             spec,
             intercept: InterceptState::new(),
+            script_policy,
             fetch_events: None,
             fetch_sessions: HashMap::new(),
         }
@@ -58,6 +79,7 @@ impl Handler {
                 clone_state_from,
                 no_stealth,
                 proxy,
+                ..
             } => {
                 let mut s = BrowserState::launched(
                     *headless,
@@ -187,6 +209,11 @@ impl Handler {
             "intercept_list" => self.cmd_intercept_list().await,
             "intercept_remove" => self.cmd_intercept_remove(args).await,
             "intercept_log" => self.cmd_intercept_log(args).await,
+            "js_mode" => self.cmd_js_mode(args).await,
+            "js_allow" => self.cmd_js_allow(args).await,
+            "js_block" => self.cmd_js_block(args).await,
+            "js_remove" => self.cmd_js_remove(args).await,
+            "js_list" => self.cmd_js_list().await,
             "close" => self.cmd_close().await,
             other => Err(format!("Unknown command: {}", other)),
         }
@@ -227,12 +254,22 @@ impl Handler {
         let user_agent = args["user_agent"].as_str();
         let bypass_csp = args["bypass_csp"].as_bool().unwrap_or(false);
         let inject_js = args["inject_js"].as_str();
+        let script_enabled = self.script_policy.is_active().then(|| {
+            // No host (data:, about:blank, ...) can't match any allow/block
+            // entry, so this falls through to the mode's own default —
+            // never silently allows JS under block-all.
+            let host = url::Url::parse(&url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned));
+            self.script_policy.resolve(host.as_deref().unwrap_or(""))
+        });
         let has_extras = headers.is_some()
             || user_agent.is_some()
             || bypass_csp
             || inject_js.is_some()
             || open_state.is_some()
-            || state_init_js.is_some();
+            || state_init_js.is_some()
+            || script_enabled.is_some();
 
         let drain = self.start_fetch_drain();
         let result = async {
@@ -302,6 +339,12 @@ impl Handler {
                 } else {
                     None
                 };
+                if let Some(enabled) = script_enabled {
+                    tab.page
+                        .set_javascript_enabled(enabled)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
                 tab.invalidate();
                 let nav_result = tab.page.goto(&url).await;
                 if let Some(identifier) = state_script_id {
@@ -330,6 +373,9 @@ impl Handler {
         }
         .await;
         self.stop_fetch_drain(drain).await;
+        if let Some(enabled) = script_enabled {
+            self.script_policy.note_applied(enabled);
+        }
         let (url, title) = result?;
         self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
@@ -360,14 +406,34 @@ impl Handler {
 
     async fn cmd_reload(&mut self) -> Result<Response, String> {
         let page = self.require_tab()?.page.clone();
+        // Re-resolve the script policy against the current URL before
+        // reloading, so a policy change (e.g. `eoka js allow`) since the
+        // last navigation takes effect without a full re-open.
+        let script_enabled = if self.script_policy.is_active() {
+            let current_url = page.url().await.map_err(|e| e.to_string())?;
+            let host = url::Url::parse(&current_url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned));
+            Some(self.script_policy.resolve(host.as_deref().unwrap_or("")))
+        } else {
+            None
+        };
         let drain = self.start_fetch_drain();
         let result = async {
+            if let Some(enabled) = script_enabled {
+                page.set_javascript_enabled(enabled)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             page.reload().await.map_err(|e| e.to_string())?;
             let _ = wait_for_stable(&page).await;
             page.url().await.map_err(|e| e.to_string())
         }
         .await;
         self.stop_fetch_drain(drain).await;
+        if let Some(enabled) = script_enabled {
+            self.script_policy.note_applied(enabled);
+        }
         let url = result?;
         if let Ok(tab) = self.require_tab_mut() {
             tab.invalidate();
