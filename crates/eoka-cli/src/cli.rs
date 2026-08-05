@@ -71,6 +71,22 @@ pub struct Cli {
     )]
     pub proxy_file: Option<PathBuf>,
 
+    /// Start with JS execution blocked by default on every domain (NoScript
+    /// "Safest"-style). Combine with --js-allow to carve out exceptions.
+    #[arg(long, global = true, env = "EOKA_NO_JS")]
+    pub no_js: bool,
+
+    /// Domain to always run JS on, regardless of --no-js. Repeatable.
+    /// Subdomains are included (e.g. `example.com` also covers
+    /// `www.example.com`).
+    #[arg(long, global = true, value_name = "DOMAIN")]
+    pub js_allow: Vec<String>,
+
+    /// Domain to always block JS on, even without --no-js. Repeatable.
+    /// Subdomains are included.
+    #[arg(long, global = true, value_name = "DOMAIN")]
+    pub js_block: Vec<String>,
+
     /// Internal: run as daemon (hidden)
     #[arg(long, hide = true)]
     pub daemon: bool,
@@ -414,6 +430,13 @@ pub enum Command {
         action: InterceptAction,
     },
 
+    // ── Script Blocking (NoScript-style) ──────────────────────────────
+    /// Manage the per-domain JS policy for the running session
+    Js {
+        #[command(subcommand)]
+        action: JsAction,
+    },
+
     // ── SPA ─────────────────────────────────────────────────────────
     /// Detect SPA router type
     SpaInfo,
@@ -589,6 +612,23 @@ pub enum InterceptAction {
         #[arg(long)]
         clear: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum JsAction {
+    /// Set the default policy: block-all or allow-all
+    Mode {
+        /// block-all or allow-all
+        mode: String,
+    },
+    /// Always run JS on this domain, regardless of mode
+    Allow { domain: String },
+    /// Always block JS on this domain, regardless of mode
+    Block { domain: String },
+    /// Remove a domain from the allow/block exception list
+    Remove { domain: String },
+    /// Show the current mode and exception lists
+    List,
 }
 
 #[derive(Subcommand)]

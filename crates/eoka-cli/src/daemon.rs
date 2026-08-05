@@ -133,6 +133,9 @@ mod tests {
             clone_state_from: None,
             no_stealth: false,
             proxy: None,
+            no_js: false,
+            js_allow: Vec::new(),
+            js_block: Vec::new(),
         };
 
         let result = tokio::time::timeout(Duration::from_secs(15), run(&session_name, spec)).await;
