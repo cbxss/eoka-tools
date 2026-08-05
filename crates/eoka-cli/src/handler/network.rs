@@ -1093,6 +1093,57 @@ fn temp_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn sample_entry() -> NetworkEntry {
+        let mut request_headers = Map::new();
+        request_headers.insert("Content-Type".into(), json!("application/json"));
+        request_headers.insert("Accept".into(), json!("application/json"));
+
+        let mut response_headers = Map::new();
+        response_headers.insert("content-type".into(), json!("application/json"));
+        response_headers.insert("x-trace".into(), json!("abc123"));
+
+        NetworkEntry {
+            id: 7,
+            session_id: "session-1".into(),
+            target_id: "target-1".into(),
+            request_id: "request-1".into(),
+            hop: 0,
+            url: "https://example.com/api/data?x=1&y=two".into(),
+            method: "POST".into(),
+            resource_type: Some("Fetch".into()),
+            started_at: 2.0,
+            wall_time: Some(1_700_000_000.123),
+            request_headers,
+            request_post_data: Some(BodyCapture {
+                bytes: br#"{"hello":"world"}"#.to_vec(),
+                base64_encoded: false,
+                mime_type: Some("application/json".into()),
+                omitted: None,
+            }),
+            status: Some(201),
+            status_text: Some("Created".into()),
+            protocol: Some("h2".into()),
+            mime_type: Some("application/json".into()),
+            response_headers,
+            response_headers_text: None,
+            request_headers_text: None,
+            remote_ip: Some("127.0.0.1".into()),
+            remote_port: Some(443),
+            encoded_data_length: Some(42.0),
+            response_body: Some(BodyCapture {
+                bytes: br#"{"ok":true}"#.to_vec(),
+                base64_encoded: false,
+                mime_type: Some("application/json".into()),
+                omitted: None,
+            }),
+            finished_at: Some(2.25),
+            failed_at: None,
+            failure_text: None,
+            canceled: false,
+            complete: true,
+        }
+    }
+
     #[test]
     fn glob_matching() {
         assert!(url_matches("*/api/*", "https://example.com/api/data"));
@@ -1109,36 +1160,8 @@ mod tests {
 
     #[test]
     fn har_skips_incomplete_entries() {
-        let entry = NetworkEntry {
-            id: 1,
-            session_id: "s".into(),
-            target_id: "t".into(),
-            request_id: "r".into(),
-            hop: 0,
-            url: "https://example.com/a?x=1".into(),
-            method: "GET".into(),
-            resource_type: Some("Document".into()),
-            started_at: 1.0,
-            wall_time: Some(1.0),
-            request_headers: Map::new(),
-            request_post_data: None,
-            status: Some(200),
-            status_text: Some("OK".into()),
-            protocol: Some("h2".into()),
-            mime_type: Some("text/plain".into()),
-            response_headers: Map::new(),
-            response_headers_text: None,
-            request_headers_text: None,
-            remote_ip: None,
-            remote_port: None,
-            encoded_data_length: None,
-            response_body: None,
-            finished_at: Some(1.1),
-            failed_at: None,
-            failure_text: None,
-            canceled: false,
-            complete: false,
-        };
+        let mut entry = sample_entry();
+        entry.complete = false;
 
         assert_eq!(
             build_har(&[entry])["log"]["entries"]
@@ -1147,5 +1170,125 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn har_exports_request_response_and_eoka_metadata() {
+        let har = build_har(&[sample_entry()]);
+        let entry = &har["log"]["entries"][0];
+
+        assert_eq!(entry["startedDateTime"], "2023-11-14T22:13:20.123Z");
+        assert_eq!(entry["time"], 250.0);
+        assert_eq!(entry["request"]["method"], "POST");
+        assert_eq!(
+            entry["request"]["url"],
+            "https://example.com/api/data?x=1&y=two"
+        );
+        assert_eq!(entry["request"]["postData"]["mimeType"], "application/json");
+        assert_eq!(entry["request"]["postData"]["text"], r#"{"hello":"world"}"#);
+        assert_eq!(entry["response"]["status"], 201);
+        assert_eq!(entry["response"]["statusText"], "Created");
+        assert_eq!(entry["response"]["content"]["mimeType"], "application/json");
+        assert_eq!(entry["response"]["content"]["text"], r#"{"ok":true}"#);
+        assert_eq!(entry["serverIPAddress"], "127.0.0.1");
+        assert_eq!(entry["_eoka"]["id"], 7);
+        assert_eq!(entry["_eoka"]["resource_type"], "Fetch");
+    }
+
+    #[test]
+    fn har_exports_query_string_pairs() {
+        let har = build_har(&[sample_entry()]);
+        let query = har["log"]["entries"][0]["request"]["queryString"]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(query[0], json!({ "name": "x", "value": "1" }));
+        assert_eq!(query[1], json!({ "name": "y", "value": "two" }));
+    }
+
+    #[test]
+    fn har_marks_binary_response_content_base64() {
+        let mut entry = sample_entry();
+        entry.response_body = Some(BodyCapture {
+            bytes: vec![0, 159, 146, 150],
+            base64_encoded: true,
+            mime_type: Some("application/octet-stream".into()),
+            omitted: None,
+        });
+
+        let har = build_har(&[entry]);
+        let content = &har["log"]["entries"][0]["response"]["content"];
+
+        assert_eq!(content["encoding"], "base64");
+        assert_eq!(content["text"], "AJ+Slg==");
+        assert_eq!(content["size"], 4);
+    }
+
+    #[test]
+    fn body_pool_eviction_preserves_metadata_and_marks_omission() {
+        let mut store = NetworkStore {
+            config: NetworkConfig {
+                body_pool_bytes: 5,
+                ..NetworkConfig::default()
+            },
+            ..NetworkStore::default()
+        };
+        let entry = sample_entry();
+        let body_bytes = entry.body_bytes();
+
+        store.push_entry(entry);
+        store.add_body_bytes(body_bytes);
+
+        let entry = store.entry_by_id(1).unwrap();
+        assert_eq!(entry.url, "https://example.com/api/data?x=1&y=two");
+        assert_eq!(
+            entry.request_post_data.as_ref().unwrap().omitted.as_deref(),
+            Some("evicted")
+        );
+        assert_eq!(
+            entry.response_body.as_ref().unwrap().omitted.as_deref(),
+            Some("evicted")
+        );
+    }
+
+    #[test]
+    fn entry_limit_evicts_oldest_metadata() {
+        let mut store = NetworkStore {
+            config: NetworkConfig {
+                entry_limit: 1,
+                ..NetworkConfig::default()
+            },
+            ..NetworkStore::default()
+        };
+        let mut first = sample_entry();
+        first.request_id = "first".into();
+        let mut second = sample_entry();
+        second.request_id = "second".into();
+        second.url = "https://example.com/api/second".into();
+
+        store.push_entry(first);
+        store.push_entry(second);
+
+        assert!(store.entry_by_id(1).is_none());
+        assert_eq!(
+            store.entry_by_id(2).unwrap().url,
+            "https://example.com/api/second"
+        );
+    }
+
+    #[test]
+    fn atomic_har_write_creates_parent_and_valid_json() {
+        let dir = std::env::temp_dir().join(format!("eoka-har-test-{}", std::process::id()));
+        let path = dir.join("nested").join("capture.har");
+        let har = build_har(&[sample_entry()]);
+
+        atomic_write_json(&path, &har).unwrap();
+
+        let parsed: Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).expect("har should parse");
+        assert_eq!(parsed["log"]["version"], "1.2");
+        assert_eq!(parsed["log"]["entries"].as_array().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
