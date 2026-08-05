@@ -98,11 +98,13 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             file,
             no_return,
             max_size,
+            no_await,
         } => {
             let args = ScriptArgs {
                 code: code.clone(),
                 file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
                 max_size: *max_size,
+                no_await: *no_await,
             };
             if *no_return {
                 Request::Exec(args)
@@ -110,11 +112,17 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
                 Request::Eval(args)
             }
         }
-        Command::Exec { code, file } => Request::Exec(ScriptArgs {
+        Command::Exec {
+            code,
+            file,
+            no_await,
+        } => Request::Exec(ScriptArgs {
             code: code.clone(),
             file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
             max_size: None,
+            no_await: *no_await,
         }),
+        Command::Tack { .. } => unreachable!("tack is handled before daemon request conversion"),
         Command::Fetch {
             url,
             method,

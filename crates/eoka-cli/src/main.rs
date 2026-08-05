@@ -2,6 +2,7 @@ mod batch;
 mod captcha_cmd;
 mod cli;
 mod client;
+mod code;
 mod command_request;
 mod daemon;
 mod handler;
@@ -145,6 +146,38 @@ async fn main() {
                 }
             }
             if result.is_err() {
+                std::process::exit(1);
+            }
+            return;
+        }
+        Command::Tack {
+            code,
+            file,
+            timeout_ms,
+            raw_json,
+        } => {
+            let response = match code::run_code_command(
+                &effective_session,
+                spec.clone(),
+                code.as_deref(),
+                file.as_ref().map(|path| path.as_path()),
+                *timeout_ms,
+                *raw_json,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) => protocol::Response::err(error),
+            };
+            if *raw_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response).unwrap_or_default()
+                );
+            } else {
+                output::print_response(&response, json_mode);
+            }
+            if !response.ok {
                 std::process::exit(1);
             }
             return;

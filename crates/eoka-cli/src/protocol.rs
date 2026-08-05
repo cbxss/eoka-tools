@@ -165,6 +165,8 @@ pub struct ScriptArgs {
     pub code: Option<String>,
     pub file: Option<String>,
     pub max_size: Option<usize>,
+    #[serde(default)]
+    pub no_await: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

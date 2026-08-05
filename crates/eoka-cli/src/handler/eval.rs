@@ -11,6 +11,7 @@ impl Handler {
     pub(super) async fn cmd_eval(&mut self, args: &Value) -> Result<Response, String> {
         let code = resolve_js(args)?;
         let max_size = args["max_size"].as_u64().map(|v| v as usize);
+        let await_promise = !args["no_await"].as_bool().unwrap_or(false);
         let session = self.require_tab()?.page.session().clone();
 
         if let Some(max) = max_size {
@@ -20,7 +21,7 @@ impl Handler {
                     &json!({
                         "expression": build_limited_eval_js(&code, max),
                         "returnByValue": true,
-                        "awaitPromise": false,
+                        "awaitPromise": await_promise,
                     }),
                 )
                 .await
@@ -34,7 +35,7 @@ impl Handler {
                 &json!({
                     "expression": code,
                     "returnByValue": false,
-                    "awaitPromise": false,
+                    "awaitPromise": await_promise,
                 }),
             )
             .await
@@ -47,12 +48,11 @@ impl Handler {
     pub(super) async fn cmd_exec(&mut self, args: &Value) -> Result<Response, String> {
         let code = resolve_js(args)?;
         let tab = self.require_tab()?;
-        // `exec` runs JS for side effects and intentionally ignores the
-        // return value (it's often `undefined`, which fails to deserialize
-        // as a String — that's not a real failure). Real CDP/connection
-        // errors surface the same way as a type-mismatch here, so this stays
-        // best-effort rather than propagating a misleading error.
-        let _: String = tab.page.evaluate_sync(&code).await.unwrap_or_default();
+        if args["no_await"].as_bool().unwrap_or(false) {
+            let _: String = tab.page.evaluate_sync(&code).await.unwrap_or_default();
+        } else {
+            let _ = tab.page.execute(&code).await;
+        }
         Ok(Response::ok_text("Executed successfully"))
     }
 }
@@ -163,7 +163,7 @@ async fn stringify_remote_object(
                 "objectId": object_id,
                 "functionDeclaration": RUNTIME_OBJECT_TO_TEXT_JS,
                 "returnByValue": true,
-                "awaitPromise": false,
+                "awaitPromise": true,
             }),
         )
         .await
@@ -202,9 +202,9 @@ fn unserializable_runtime_value_text(value: &str) -> String {
 
 fn build_limited_eval_js(code: &str, max_size: usize) -> String {
     format!(
-        r#"(() => {{
+        r#"(async () => {{
   const source = {source};
-  const value = Function("return eval(arguments[0])")(source);
+  const value = await Function("return eval(arguments[0])")(source);
   let text;
   try {{
     text = JSON.stringify(value);
