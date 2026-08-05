@@ -1,6 +1,6 @@
 //! How the daemon should obtain its `Browser` instance.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub enum LaunchSpec {
@@ -13,9 +13,46 @@ pub enum LaunchSpec {
         clone_state_from: Option<String>,
         /// Disable stealth (filter_cdp + evasion script).
         no_stealth: bool,
+        /// Resolved proxy URL (already picked from --proxy-file if that was used).
+        proxy: Option<String>,
     },
     /// Attach to a Chrome already running, via `Browser::connect_with_config`.
     Connect { ws_url: String },
+}
+
+/// Resolve `--proxy`/`--proxy-file` into a single proxy URL. `--proxy` wins
+/// if both are somehow set (clap already rejects that combination via
+/// `conflicts_with`, so this is just a defensive precedence rule).
+/// A `--proxy-file` with multiple lines picks one at random per call.
+pub fn resolve_proxy_spec(
+    proxy: Option<&str>,
+    proxy_file: Option<&Path>,
+) -> Result<Option<String>, String> {
+    if let Some(proxy) = proxy {
+        return Ok(Some(proxy.to_owned()));
+    }
+    let Some(path) = proxy_file else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read --proxy-file '{}': {}", path.display(), e))?;
+    let lines: Vec<&str> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    if lines.is_empty() {
+        return Err(format!(
+            "--proxy-file '{}' does not contain a proxy",
+            path.display()
+        ));
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let idx = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as usize % lines.len())
+        .unwrap_or(0);
+    Ok(Some(lines[idx].to_owned()))
 }
 
 impl LaunchSpec {

@@ -41,12 +41,13 @@ impl BrowserState {
         headless: bool,
         copy_profile_from: Option<&std::path::Path>,
         no_stealth: bool,
+        proxy: Option<String>,
     ) -> eoka::Result<Self> {
         let patch_binary = std::env::var("EOKA_PATCH_BINARY")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let proxy = parse_proxy_env()?
+        let proxy = proxy
             .map(|value| {
                 eoka_proxy::parse(&value).map_err(|error| eoka::Error::Launch(error.to_string()))
             })
@@ -209,29 +210,5 @@ impl BrowserState {
 
     pub async fn close(self) -> eoka::Result<()> {
         self.browser.close().await
-    }
-}
-
-fn parse_proxy_env() -> eoka::Result<Option<String>> {
-    if let Ok(path) = std::env::var("EOKA_PROXY_FILE") {
-        let contents = std::fs::read_to_string(path)?;
-        let lines: Vec<&str> = contents
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .collect();
-        if lines.is_empty() {
-            return Err(eoka::Error::Launch(
-                "proxy file does not contain a proxy".to_owned(),
-            ));
-        }
-        use std::time::SystemTime;
-        let idx = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as usize % lines.len())
-            .unwrap_or(0);
-        Ok(Some(lines[idx].to_string()))
-    } else {
-        Ok(std::env::var("EOKA_PROXY").ok())
     }
 }

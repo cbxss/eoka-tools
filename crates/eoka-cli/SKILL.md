@@ -230,12 +230,28 @@ eoka spa-navigate /dashboard            # Navigate without page reload
 
 ## Sessions
 
-Run multiple isolated browsers:
+Run multiple isolated browsers — each `--session` name gets its own daemon,
+Chrome instance, and Unix socket, so they never share state:
 
 ```bash
 eoka --session pentest1 open https://target-a.com
 eoka --session pentest2 open https://target-b.com
 eoka --session pentest1 snapshot        # Interacts with first browser
+```
+
+Combine with `--proxy` to run one session through a proxy and another
+direct:
+
+```bash
+eoka --session tor --proxy socks5://127.0.0.1:9050 open https://check.torproject.org
+eoka --session regular open https://example.com
+```
+
+List every session (running or stale), like `tmux ls`:
+
+```bash
+eoka sessions                           # or: eoka ls
+eoka --json sessions                    # structured output
 ```
 
 ## Driving Your Real Chrome
@@ -305,14 +321,16 @@ Caveats:
 | `--auto-connect` | Discover a Chrome on ports 9222–9229 |
 | `--clone-state-from <PORT\|URL>` | After launch, hydrate cookies/storage from a running Chrome |
 | `--from-profile <auto\|PATH>` | Clone an existing Chrome profile and launch against the copy |
+| `--proxy <URL>` | Proxy for the launched browser: `socks5://host:port` or `http://host:port`, optionally with `user:pass@`. Conflicts with `--proxy-file` |
+| `--proxy-file <FILE>` | Pick a proxy at random from a file (one per line, `#` comments allowed). Conflicts with `--proxy` |
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `EOKA_HEADLESS` | `false` or `0` to show browser window |
-| `EOKA_PROXY` | Proxy URL: `socks5://user:pass@host:port` or `http://user:pass@host:port`; legacy `host:port[:user:pass]` is supported |
-| `EOKA_PROXY_FILE` | File with proxies (one per line, random selection) |
+| `EOKA_PROXY` | Fallback for `--proxy` when the flag isn't passed: `socks5://user:pass@host:port` or `http://user:pass@host:port`; legacy `host:port[:user:pass]` is supported |
+| `EOKA_PROXY_FILE` | Fallback for `--proxy-file` when the flag isn't passed |
 | `EOKA_PATCH_BINARY` | `true` to apply stealth binary patches |
 | `EOKA_CHROME_ARGS` | Extra Chrome flags, colon-separated (e.g. `--use-fake-ui-for-media-stream:--allow-insecure-localhost`) |
 | `EOKA_IDLE_TIMEOUT` | Daemon idle timeout in ms (default: 1800000 = 30min) |
@@ -323,7 +341,8 @@ Caveats:
 ## Daemon Management
 
 ```bash
-eoka status                             # Check if daemon is running
+eoka status                             # Check if daemon is running (for --session)
+eoka sessions                           # List every session, running or stale (alias: ls)
 eoka kill                               # Force-kill daemon
 eoka close                              # Graceful close (browser + daemon)
 ```

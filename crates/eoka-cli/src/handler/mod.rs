@@ -1,8 +1,10 @@
+mod eval;
 pub mod intercept;
 mod persist;
 pub mod profile;
 pub mod state;
 mod target;
+mod wasm;
 
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
@@ -55,10 +57,16 @@ impl Handler {
                 from_profile,
                 clone_state_from,
                 no_stealth,
+                proxy,
             } => {
-                let mut s = BrowserState::launched(*headless, from_profile.as_deref(), *no_stealth)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let mut s = BrowserState::launched(
+                    *headless,
+                    from_profile.as_deref(),
+                    *no_stealth,
+                    proxy.clone(),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
 
                 if let Some(source) = clone_state_from {
                     let saved = persist::clone_state_from_source(source).await?;
@@ -714,49 +722,6 @@ impl Handler {
         Ok(Response::ok_text(format!("Scrolled {}", target_str)))
     }
 
-    async fn cmd_eval(&mut self, args: &Value) -> Result<Response, String> {
-        let code = resolve_js(args)?;
-        let max_size = args["max_size"].as_u64().map(|v| v as usize);
-        let session = self.require_tab()?.page.session().clone();
-
-        if let Some(max) = max_size {
-            let result: Value = session
-                .send(
-                    "Runtime.evaluate",
-                    &json!({
-                        "expression": build_limited_eval_js(&code, max),
-                        "returnByValue": true,
-                        "awaitPromise": false,
-                    }),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(Response::ok_text(runtime_eval_string_value(&result)?));
-        }
-
-        let result: Value = session
-            .send(
-                "Runtime.evaluate",
-                &json!({
-                    "expression": code,
-                    "returnByValue": false,
-                    "awaitPromise": false,
-                }),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(Response::ok_text(
-            format_runtime_eval_result(&session, &result).await?,
-        ))
-    }
-
-    async fn cmd_exec(&mut self, args: &Value) -> Result<Response, String> {
-        let code = resolve_js(args)?;
-        let tab = self.require_tab()?;
-        let _: String = tab.page.evaluate_sync(&code).await.unwrap_or_default();
-        Ok(Response::ok_text("Executed successfully"))
-    }
-
     async fn cmd_captcha_inject(&mut self, args: &Value) -> Result<Response, String> {
         self.ensure_browser().await?;
         let token = self.arg_str(args, "token")?;
@@ -875,7 +840,7 @@ impl Handler {
                 .page
                 .evaluate_sync("location.hostname")
                 .await
-                .unwrap_or_default(),
+                .map_err(|e| e.to_string())?,
         };
 
         let cookie = eoka::SessionCookie {
@@ -904,7 +869,7 @@ impl Handler {
                 .page
                 .evaluate_sync::<String>("location.hostname")
                 .await
-                .unwrap_or_default(),
+                .map_err(|e| e.to_string())?,
         };
         tab.page
             .session()
@@ -942,9 +907,7 @@ impl Handler {
             Ok(Response::ok(val))
         } else {
             let js = format!("JSON.stringify(Object.fromEntries(Object.entries({})))", s);
-            let json_str: String = tab.page.evaluate_sync(&js).await.unwrap_or_default();
-            let parsed: Value = serde_json::from_str(&json_str).unwrap_or(Value::String(json_str));
-            Ok(Response::ok(parsed))
+            Ok(Response::ok(eval_json_or_string(&tab.page, &js).await?))
         }
     }
 
@@ -971,18 +934,11 @@ impl Handler {
 
     async fn cmd_dump_storage(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        let combined: String = tab
-            .page
-            .evaluate_sync(
-                "JSON.stringify({\
+        let js = "JSON.stringify({\
                     localStorage: Object.fromEntries(Object.entries(localStorage)),\
                     sessionStorage: Object.fromEntries(Object.entries(sessionStorage))\
-                })",
-            )
-            .await
-            .unwrap_or_else(|_| "{}".to_string());
-        let parsed: Value = serde_json::from_str(&combined).unwrap_or_else(|_| json!({}));
-        Ok(Response::ok(parsed))
+                })";
+        Ok(Response::ok(eval_json_or_string(&tab.page, js).await?))
     }
 
     async fn cmd_save_state(&mut self, args: &Value) -> Result<Response, String> {
@@ -1067,19 +1023,18 @@ impl Handler {
             ),
             None => "JSON.stringify(__eoka_console || [])".into(),
         };
-        let result: String = tab
-            .page
-            .evaluate_sync(&js)
-            .await
-            .unwrap_or_else(|_| "[]".into());
+        let parsed = eval_json_or_string(&tab.page, &js).await?;
         if clear {
+            // `x = []` evaluates to the array, not a string, so this
+            // routinely fails to deserialize as String even though the
+            // clear itself succeeded — best-effort by design, not a real
+            // failure to surface.
             let _: String = tab
                 .page
                 .evaluate_sync("__eoka_console = []")
                 .await
                 .unwrap_or_default();
         }
-        let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
     }
 
@@ -1088,11 +1043,7 @@ impl Handler {
         let tab = self.require_tab_mut()?;
         ensure_console_capture(tab).await?;
 
-        let result: String = tab
-            .page
-            .evaluate_sync("JSON.stringify(__eoka_errors || [])")
-            .await
-            .unwrap_or_else(|_| "[]".into());
+        let parsed = eval_json_or_string(&tab.page, "JSON.stringify(__eoka_errors || [])").await?;
         if clear {
             let _: String = tab
                 .page
@@ -1100,7 +1051,6 @@ impl Handler {
                 .await
                 .unwrap_or_default();
         }
-        let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
         Ok(Response::ok(parsed))
     }
 
@@ -1131,8 +1081,7 @@ impl Handler {
         let state = self.require_state_mut()?;
         let (tab_id, url, title) = {
             let (tab_id, tab) = state.new_tab(url).await.map_err(|e| e.to_string())?;
-            let url = tab.page.url().await.map_err(|e| e.to_string())?;
-            let title = title_nonblocking(&tab.page).await;
+            let (url, title) = tab_summary(tab).await?;
             (tab_id, url, title)
         };
         self.sync_fetch_interception().await?;
@@ -1148,9 +1097,7 @@ impl Handler {
         state.switch_tab(tab_id).await.map_err(|e| e.to_string())?;
         let (url, title) = {
             let tab = state.current_tab().ok_or("Tab switch failed")?;
-            let url = tab.page.url().await.map_err(|e| e.to_string())?;
-            let title = title_nonblocking(&tab.page).await;
-            (url, title)
+            tab_summary(tab).await?
         };
         self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
@@ -1169,9 +1116,7 @@ impl Handler {
             .map_err(|e| e.to_string())?;
         let (url, title) = {
             let tab = state.current_tab().ok_or("Attach failed")?;
-            let url = tab.page.url().await.map_err(|e| e.to_string())?;
-            let title = title_nonblocking(&tab.page).await;
-            (url, title)
+            tab_summary(tab).await?
         };
         self.sync_fetch_interception().await?;
         Ok(Response::ok_text(format!(
@@ -1336,6 +1281,10 @@ impl Handler {
             .await
             .map_err(|e| e.to_string())?;
 
+        // fake_camera.js is a side-effecting IIFE with no return value, so
+        // evaluate_sync::<String> routinely "fails" to deserialize a String
+        // even when the injection succeeded. addScriptToEvaluateOnNewDocument
+        // above is what needs to succeed; this just seeds the current page too.
         let _: String = tab.page.evaluate_sync(&js).await.unwrap_or_default();
 
         let _ = tab
@@ -1353,206 +1302,6 @@ impl Handler {
             mime,
             loop_video
         )))
-    }
-
-    async fn cmd_wasm_info(&mut self) -> Result<Response, String> {
-        let tab = self.require_tab()?;
-        let js = include_str!("../js/wasm_info.js");
-        let result: String = tab
-            .page
-            .evaluate_sync(js)
-            .await
-            .map_err(|e| e.to_string())?;
-        let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Array(vec![]));
-        Ok(Response::ok(parsed))
-    }
-
-    async fn cmd_wasm_read(&mut self, args: &Value) -> Result<Response, String> {
-        let addr = parse_addr(self.arg_str(args, "addr")?)?;
-        let len = args["len"].as_u64().ok_or("Missing 'len'")? as usize;
-        let memory = args["memory"].as_str();
-
-        let tab = self.require_tab()?;
-        let mem_expr = wasm_memory_expr(memory);
-
-        let chunk_size = 65536;
-        let mut hex_output = String::new();
-        let mut offset = 0;
-
-        while offset < len {
-            let chunk_len = (len - offset).min(chunk_size);
-            let js = format!(
-                r#"(() => {{
-                    const mem = {mem};
-                    if (!mem || !mem.buffer) return null;
-                    const buf = new Uint8Array(mem.buffer, {addr} + {offset}, {chunk_len});
-                    return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
-                }})()"#,
-                mem = mem_expr,
-                addr = addr,
-                offset = offset,
-                chunk_len = chunk_len,
-            );
-            let chunk: String = tab
-                .page
-                .evaluate_sync(&js)
-                .await
-                .map_err(|e| e.to_string())?;
-            if chunk == "null" || chunk.is_empty() {
-                return Err(format!(
-                    "WASM memory not found or address out of bounds (tried {})",
-                    mem_expr
-                ));
-            }
-            hex_output.push_str(&chunk);
-            offset += chunk_len;
-        }
-
-        let mut formatted = String::new();
-        let bytes_per_line = 16;
-        for (i, chunk) in hex_output.as_bytes().chunks(bytes_per_line * 2).enumerate() {
-            let line_addr = addr + i * bytes_per_line;
-            use std::fmt::Write;
-            let _ = write!(formatted, "{:08x}  ", line_addr);
-            for (j, pair) in chunk.chunks(2).enumerate() {
-                if j == 8 {
-                    formatted.push(' ');
-                }
-                formatted.push(pair[0] as char);
-                formatted.push(pair[1] as char);
-                formatted.push(' ');
-            }
-            formatted.push('\n');
-        }
-
-        Ok(Response::ok_text(formatted))
-    }
-
-    async fn cmd_wasm_write(&mut self, args: &Value) -> Result<Response, String> {
-        let addr = parse_addr(self.arg_str(args, "addr")?)?;
-        let hex = self.arg_str(args, "hex")?;
-        let memory = args["memory"].as_str();
-
-        let hex_clean: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if !hex_clean.len().is_multiple_of(2) {
-            return Err("Hex string must have even length".into());
-        }
-
-        let mem_expr = wasm_memory_expr(memory);
-        let js = format!(
-            r#"(() => {{
-                const mem = {mem};
-                if (!mem || !mem.buffer) return 'error: WASM memory not found';
-                const bytes = new Uint8Array([{byte_array}]);
-                new Uint8Array(mem.buffer).set(bytes, {addr});
-                return 'ok';
-            }})()"#,
-            mem = mem_expr,
-            addr = addr,
-            byte_array = hex_to_byte_array(&hex_clean),
-        );
-
-        let tab = self.require_tab()?;
-        let result: String = tab
-            .page
-            .evaluate_sync(&js)
-            .await
-            .map_err(|e| e.to_string())?;
-        if result.starts_with("error:") {
-            return Err(result);
-        }
-
-        Ok(Response::ok_text(format!(
-            "Wrote {} bytes at 0x{:x}",
-            hex_clean.len() / 2,
-            addr
-        )))
-    }
-
-    async fn cmd_wasm_find(&mut self, args: &Value) -> Result<Response, String> {
-        let pattern = self.arg_str(args, "pattern")?;
-        let memory = args["memory"].as_str();
-        let max = args["max"].as_u64().unwrap_or(20) as usize;
-        let start = args["start"]
-            .as_str()
-            .map(parse_addr)
-            .transpose()?
-            .unwrap_or(0);
-        let end = args["end"].as_str().map(parse_addr).transpose()?;
-
-        let pattern_clean: String = pattern.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if !pattern_clean.len().is_multiple_of(2) || pattern_clean.is_empty() {
-            return Err("Pattern must be non-empty hex with even length".into());
-        }
-
-        let mem_expr = wasm_memory_expr(memory);
-        let end_expr = match end {
-            Some(e) => format!("{}", e),
-            None => "buf.length".to_string(),
-        };
-
-        let js = format!(
-            r#"(() => {{
-                const mem = {mem};
-                if (!mem || !mem.buffer) return JSON.stringify({{error: 'WASM memory not found'}});
-                const buf = new Uint8Array(mem.buffer);
-                const pattern = [{byte_array}];
-                const results = [];
-                const end = Math.min({end_expr}, buf.length);
-                for (let i = {start}; i <= end - pattern.length; i++) {{
-                    let match = true;
-                    for (let j = 0; j < pattern.length; j++) {{
-                        if (buf[i + j] !== pattern[j]) {{ match = false; break; }}
-                    }}
-                    if (match) {{
-                        results.push(i);
-                        if (results.length >= {max}) break;
-                    }}
-                }}
-                return JSON.stringify({{matches: results, searched: end - {start}}});
-            }})()"#,
-            mem = mem_expr,
-            byte_array = hex_to_byte_array(&pattern_clean),
-            start = start,
-            end_expr = end_expr,
-            max = max,
-        );
-
-        let tab = self.require_tab()?;
-        let result: String = tab
-            .page
-            .evaluate_sync(&js)
-            .await
-            .map_err(|e| e.to_string())?;
-        let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::Null);
-
-        if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
-        }
-
-        let matches = parsed.get("matches").and_then(|v| v.as_array());
-        let searched = parsed.get("searched").and_then(|v| v.as_u64()).unwrap_or(0);
-
-        match matches {
-            Some(addrs) if !addrs.is_empty() => {
-                let mut out = format!(
-                    "Found {} matches (searched {} bytes):\n",
-                    addrs.len(),
-                    searched
-                );
-                for a in addrs {
-                    if let Some(addr) = a.as_u64() {
-                        use std::fmt::Write;
-                        let _ = writeln!(out, "  0x{:08x}", addr);
-                    }
-                }
-                Ok(Response::ok_text(out))
-            }
-            _ => Ok(Response::ok_text(format!(
-                "No matches found (searched {} bytes)",
-                searched
-            ))),
-        }
     }
 
     async fn disable_fetch_session(&mut self, session: &CdpSession) {
@@ -1761,6 +1510,20 @@ impl Handler {
     }
 }
 
+/// Evaluate `js` and parse its string result as JSON, falling back to a JSON
+/// string value if the result isn't valid JSON (e.g. a raw storage value).
+async fn eval_json_or_string(page: &eoka::Page, js: &str) -> Result<Value, String> {
+    let result: String = page.evaluate_sync(js).await.map_err(|e| e.to_string())?;
+    Ok(serde_json::from_str(&result).unwrap_or(Value::String(result)))
+}
+
+/// Current URL and title of a tab, for tab-switching command responses.
+async fn tab_summary(tab: &TabState) -> Result<(String, String), String> {
+    let url = tab.page.url().await.map_err(|e| e.to_string())?;
+    let title = title_nonblocking(&tab.page).await;
+    Ok((url, title))
+}
+
 struct FetchPausedEvent {
     session_id: Option<String>,
     params: Value,
@@ -1873,10 +1636,18 @@ async fn process_fetch_paused_event(
             "postData": &post_data,
             "headers": params.get("request").and_then(|r| r.get("headers")),
         });
-        let _ = std::fs::write(
-            path,
-            serde_json::to_string_pretty(&body).unwrap_or_default(),
-        );
+        match serde_json::to_string_pretty(&body) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    eprintln!(
+                        "[eoka] intercept capture write failed ({}): {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+            Err(e) => eprintln!("[eoka] intercept capture serialize failed: {}", e),
+        }
     }
 
     let action = if let Some(ref path) = rule.respond_path {
@@ -2047,304 +1818,9 @@ fn build_storage_seed_js(saved: &SavedState) -> Option<String> {
     ))
 }
 
-async fn format_runtime_eval_result(
-    session: &CdpSession,
-    result: &Value,
-) -> Result<String, String> {
-    if let Some(exception) = result.get("exceptionDetails").filter(|v| !v.is_null()) {
-        return Err(format_runtime_exception(exception));
-    }
-
-    let remote = result
-        .get("result")
-        .ok_or_else(|| "Runtime.evaluate response missing result".to_string())?;
-    format_runtime_remote_object(session, remote).await
-}
-
-fn runtime_eval_string_value(result: &Value) -> Result<String, String> {
-    if let Some(exception) = result.get("exceptionDetails").filter(|v| !v.is_null()) {
-        return Err(format_runtime_exception(exception));
-    }
-
-    let remote = result
-        .get("result")
-        .ok_or_else(|| "Runtime.evaluate response missing result".to_string())?;
-    if remote.get("type").and_then(Value::as_str) == Some("undefined") {
-        return Ok("undefined".into());
-    }
-    remote
-        .get("value")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "Runtime.evaluate did not return a string".to_string())
-}
-
-fn format_runtime_exception(exception: &Value) -> String {
-    let text = exception
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("JavaScript error");
-    let line = exception
-        .get("lineNumber")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let column = exception
-        .get("columnNumber")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    format!("JavaScript error: {} at {}:{}", text, line, column)
-}
-
-async fn format_runtime_remote_object(
-    session: &CdpSession,
-    remote: &Value,
-) -> Result<String, String> {
-    if let Some(text) = runtime_primitive_object_text(remote) {
-        return Ok(text);
-    }
-
-    if let Some(object_id) = remote.get("objectId").and_then(Value::as_str) {
-        let text = stringify_remote_object(session, object_id)
-            .await?
-            .unwrap_or_else(|| runtime_remote_description(remote));
-        let _ = session
-            .send::<_, Value>("Runtime.releaseObject", &json!({ "objectId": object_id }))
-            .await;
-        return Ok(text);
-    }
-
-    Ok(runtime_remote_description(remote))
-}
-
-fn runtime_primitive_object_text(remote: &Value) -> Option<String> {
-    let remote_type = remote.get("type").and_then(Value::as_str).unwrap_or("");
-    if remote_type == "undefined" || remote_type == "function" || remote_type == "symbol" {
-        return Some("undefined".into());
-    }
-
-    if let Some(value) = remote.get("value") {
-        return Some(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()));
-    }
-
-    if let Some(value) = remote.get("unserializableValue").and_then(Value::as_str) {
-        return Some(unserializable_runtime_value_text(value));
-    }
-
-    None
-}
-
-fn runtime_remote_description(remote: &Value) -> String {
-    let remote_type = remote.get("type").and_then(Value::as_str).unwrap_or("");
-    remote
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or(remote_type)
-        .to_string()
-}
-
-async fn stringify_remote_object(
-    session: &CdpSession,
-    object_id: &str,
-) -> Result<Option<String>, String> {
-    let result: Value = session
-        .send(
-            "Runtime.callFunctionOn",
-            &json!({
-                "objectId": object_id,
-                "functionDeclaration": RUNTIME_OBJECT_TO_TEXT_JS,
-                "returnByValue": true,
-                "awaitPromise": false,
-            }),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if result.get("exceptionDetails").is_some_and(|v| !v.is_null()) {
-        return Ok(None);
-    }
-    Ok(runtime_eval_string_value(&result).ok())
-}
-
-const RUNTIME_OBJECT_TO_TEXT_JS: &str = r#"function() {
-  let text;
-  try {
-    text = JSON.stringify(this);
-  } catch (error) {
-    text = String(this);
-  }
-  if (text === undefined) {
-    text = String(this);
-  }
-  if (text === undefined) {
-    text = "undefined";
-  }
-  return text;
-}"#;
-
-fn unserializable_runtime_value_text(value: &str) -> String {
-    match value {
-        "NaN" | "Infinity" | "-Infinity" => "null".into(),
-        "-0" => "0".into(),
-        bigint if bigint.ends_with('n') => bigint.trim_end_matches('n').into(),
-        other => other.into(),
-    }
-}
-
-fn build_limited_eval_js(code: &str, max_size: usize) -> String {
-    format!(
-        r#"(() => {{
-  const source = {source};
-  const value = Function("return eval(arguments[0])")(source);
-  let text;
-  try {{
-    text = JSON.stringify(value);
-  }} catch (error) {{
-    text = String(value);
-  }}
-  if (text === undefined) {{
-    text = "undefined";
-  }}
-  if (text.length <= {max}) {{
-    return text;
-  }}
-  return text.slice(0, {max}) + "...(truncated " + text.length + " chars)";
-}})()"#,
-        source = json_str(code),
-        max = max_size,
-    )
-}
-
-fn resolve_js(args: &Value) -> Result<String, String> {
-    if let Some(path) = args["file"].as_str() {
-        std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read JS file '{}': {}", path, e))
-    } else if let Some(code) = args["code"].as_str() {
-        Ok(code.to_string())
-    } else {
-        Err("Either 'code' or '--file' must be provided".into())
-    }
-}
-
-fn parse_addr(s: &str) -> Result<usize, String> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        usize::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex address '{}': {}", s, e))
-    } else {
-        s.parse()
-            .map_err(|e| format!("Invalid address '{}': {}", s, e))
-    }
-}
-
-fn wasm_memory_expr(memory: Option<&str>) -> String {
-    match memory {
-        Some(expr) => expr.to_string(),
-        None => {
-            r#"(window.__ft?.mem || window.Module?.wasmMemory || window.Module?.HEAPU8?.buffer && {buffer: window.Module.HEAPU8.buffer} || (() => { for (const k of Object.keys(window)) { try { if (window[k] instanceof WebAssembly.Memory) return window[k]; } catch(e){} } return null; })())"#.to_string()
-        }
-    }
-}
-
-fn hex_to_byte_array(hex: &str) -> String {
-    hex.as_bytes()
-        .chunks(2)
-        .map(|pair| format!("0x{}{}", pair[0] as char, pair[1] as char))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn runtime_eval_formats_undefined() {
-        let text = runtime_primitive_object_text(&json!({ "type": "undefined" })).unwrap();
-
-        assert_eq!(text, "undefined");
-    }
-
-    #[test]
-    fn runtime_eval_formats_string_as_json_string() {
-        let text = runtime_primitive_object_text(&json!({ "type": "string", "value": "patched" }))
-            .unwrap();
-
-        assert_eq!(text, "\"patched\"");
-    }
-
-    #[test]
-    fn runtime_eval_formats_remote_object_descriptions() {
-        let text = runtime_remote_description(&json!({
-            "type": "object",
-            "description": "Object"
-        }));
-
-        assert_eq!(text, "Object");
-    }
-
-    #[test]
-    fn runtime_eval_formats_exception_details() {
-        let err = format_runtime_exception(&json!({
-            "text": "Uncaught",
-            "lineNumber": 1,
-            "columnNumber": 2
-        }));
-
-        assert_eq!(err, "JavaScript error: Uncaught at 1:2");
-    }
-
-    #[test]
-    fn runtime_eval_result_detects_exception_details() {
-        let result = json!({
-            "exceptionDetails": {
-                "text": "Uncaught",
-                "lineNumber": 1,
-                "columnNumber": 2
-            },
-            "result": { "type": "object" }
-        });
-        let err = result
-            .get("exceptionDetails")
-            .filter(|v| !v.is_null())
-            .map(format_runtime_exception)
-            .unwrap();
-
-        assert_eq!(err, "JavaScript error: Uncaught at 1:2");
-    }
-
-    #[test]
-    fn runtime_eval_formats_unserializable_values_like_json_stringify() {
-        assert_eq!(
-            runtime_primitive_object_text(
-                &json!({ "type": "number", "unserializableValue": "NaN" })
-            ),
-            Some("null".to_string())
-        );
-        assert_eq!(
-            runtime_primitive_object_text(
-                &json!({ "type": "bigint", "unserializableValue": "123n" })
-            ),
-            Some("123".to_string())
-        );
-    }
-
-    #[test]
-    fn limited_eval_js_truncates_in_browser() {
-        let js = build_limited_eval_js("document.body.innerText", 128);
-
-        assert!(js.contains("Function(\"return eval(arguments[0])\")"));
-        assert!(js.contains("text.slice(0, 128)"));
-        assert!(js.contains("...(truncated "));
-    }
-
-    #[test]
-    fn runtime_eval_string_value_extracts_limited_helper_result() {
-        let text = runtime_eval_string_value(
-            &json!({ "result": { "type": "string", "value": "abc...(truncated 20 chars)" } }),
-        )
-        .unwrap();
-
-        assert_eq!(text, "abc...(truncated 20 chars)");
-    }
 
     fn saved_state_with_storage(url: &str) -> SavedState {
         SavedState {
