@@ -98,11 +98,13 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             file,
             no_return,
             max_size,
+            no_await,
         } => {
             let args = ScriptArgs {
                 code: code.clone(),
                 file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
                 max_size: *max_size,
+                no_await: *no_await,
             };
             if *no_return {
                 Request::Exec(args)
@@ -110,11 +112,19 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
                 Request::Eval(args)
             }
         }
-        Command::Exec { code, file } => Request::Exec(ScriptArgs {
+        Command::Exec {
+            code,
+            file,
+            no_await,
+        } => Request::Exec(ScriptArgs {
             code: code.clone(),
             file: file.as_ref().map(|path| path.to_string_lossy().to_string()),
             max_size: None,
+            no_await: *no_await,
         }),
+        Command::Tack { .. } | Command::Tools { .. } => {
+            unreachable!("command should be handled before daemon request conversion")
+        }
         Command::Fetch {
             url,
             method,
@@ -296,7 +306,19 @@ mod tests {
     use crate::cli::test_support::parsed_command;
     use crate::cli::Cli;
     use clap::Parser;
+    use eoka_protocol::operation_by_cmd;
     use serde_json::json;
+
+    fn assert_command_maps_to_cataloged_operation(args: &[&str]) {
+        let (_cli, command) = parsed_command(args);
+        let request = command_to_request(&command);
+        assert!(
+            operation_by_cmd(request.cmd()).is_some(),
+            "command {:?} mapped to uncataloged protocol command {}",
+            args,
+            request.cmd()
+        );
+    }
 
     #[test]
     fn click_accepts_bracketed_observe_target_at_cli_layer() {
@@ -475,5 +497,82 @@ mod tests {
         };
 
         assert!(err.to_string().contains("unrecognized subcommand"));
+    }
+
+    #[test]
+    fn daemon_backed_cli_commands_map_to_cataloged_protocol_operations() {
+        let commands: &[&[&str]] = &[
+            &["eoka", "open", "https://example.com"],
+            &["eoka", "back"],
+            &["eoka", "forward"],
+            &["eoka", "reload"],
+            &["eoka", "snapshot"],
+            &["eoka", "observe"],
+            &["eoka", "screenshot"],
+            &["eoka", "emulate"],
+            &["eoka", "info"],
+            &["eoka", "text"],
+            &["eoka", "find", "Submit"],
+            &["eoka", "click", "Submit"],
+            &["eoka", "dblclick", "Submit"],
+            &["eoka", "fill", "Email", "ada@example.com"],
+            &["eoka", "select", "Country", "CA"],
+            &["eoka", "hover", "Menu"],
+            &["eoka", "key", "Enter"],
+            &["eoka", "scroll", "down"],
+            &["eoka", "eval", "1 + 1"],
+            &["eoka", "exec", "window.clicked = true"],
+            &["eoka", "fetch", "https://example.com/api"],
+            &["eoka", "cookies"],
+            &["eoka", "set-cookie", "sid", "123"],
+            &["eoka", "delete-cookie", "sid"],
+            &["eoka", "clear-cookies"],
+            &["eoka", "storage"],
+            &["eoka", "set-storage", "token", "abc"],
+            &["eoka", "dump-storage"],
+            &["eoka", "save-state", "state.json"],
+            &["eoka", "load-state", "state.json"],
+            &["eoka", "headers", r#"{"x-test":"1"}"#],
+            &["eoka", "console"],
+            &["eoka", "errors"],
+            &["eoka", "tab", "list"],
+            &["eoka", "tab", "new", "https://example.com"],
+            &["eoka", "tab", "switch", "tab-1"],
+            &["eoka", "tab", "close", "tab-1"],
+            &["eoka", "tab", "attach", "tab-1"],
+            &["eoka", "wait", "100"],
+            &["eoka", "fake-camera", "camera.mp4"],
+            &["eoka", "wasm", "info"],
+            &["eoka", "wasm", "read", "0x10", "4"],
+            &["eoka", "wasm", "write", "0x10", "deadbeef"],
+            &["eoka", "wasm", "find", "deadbeef"],
+            &["eoka", "js", "mode", "block-all"],
+            &["eoka", "js", "allow", "example.com"],
+            &["eoka", "js", "block", "ads.example"],
+            &["eoka", "js", "remove", "example.com"],
+            &["eoka", "js", "list"],
+            &["eoka", "spa-info"],
+            &["eoka", "spa-navigate", "/account"],
+            &["eoka", "captcha", "inject", "token"],
+            &["eoka", "network", "record", "start"],
+            &["eoka", "network", "record", "stop"],
+            &["eoka", "network", "record", "status"],
+            &["eoka", "network", "log"],
+            &["eoka", "network", "show", "1"],
+            &["eoka", "network", "wait"],
+            &["eoka", "network", "save-har", "capture.har"],
+            &["eoka", "network", "export", "capture.har"],
+            &["eoka", "network", "clear"],
+            &["eoka", "network", "intercept", "add", "*/api/*"],
+            &["eoka", "network", "intercept", "list"],
+            &["eoka", "network", "intercept", "remove", "1"],
+            &["eoka", "network", "intercept", "log"],
+            &["eoka", "clone-from", "9222"],
+            &["eoka", "close"],
+        ];
+
+        for args in commands {
+            assert_command_maps_to_cataloged_operation(args);
+        }
     }
 }

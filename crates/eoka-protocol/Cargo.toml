@@ -1,0 +1,17 @@
+[package]
+name = "eoka-protocol"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Protocol and tool catalog definitions for eoka browser automation"
+repository = "https://github.com/shrimp-software/eoka-tools"
+homepage = "https://github.com/shrimp-software/eoka-tools"
+documentation = "https://docs.rs/eoka-protocol"
+readme = "README.md"
+authors = ["cbxss"]
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

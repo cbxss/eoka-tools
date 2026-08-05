@@ -252,6 +252,8 @@ pub enum Command {
         /// Truncate result to N chars (default: unlimited)
         #[arg(long)]
         max_size: Option<usize>,
+        #[arg(long)]
+        no_await: bool,
     },
 
     /// Execute JavaScript (no return value)
@@ -259,6 +261,26 @@ pub enum Command {
         code: Option<String>,
         #[arg(short, long)]
         file: Option<PathBuf>,
+        #[arg(long)]
+        no_await: bool,
+    },
+
+    /// Run Tack TypeScript against the active eoka browser session
+    #[command(alias = "code")]
+    Tack {
+        code: Option<String>,
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        #[arg(long)]
+        raw_json: bool,
+    },
+
+    /// Inspect the generated eoka tool catalog
+    Tools {
+        #[command(subcommand)]
+        action: ToolsAction,
     },
 
     // ── Network ─────────────────────────────────────────────────────
@@ -541,6 +563,19 @@ pub enum NetworkAction {
     Intercept {
         #[command(subcommand)]
         action: InterceptAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ToolsAction {
+    /// Print the generated tool manifest
+    Manifest {
+        /// Include opt-in tools. Lifecycle tools stay hidden.
+        #[arg(long)]
+        all: bool,
+        /// Emit JSON instead of a compact text listing.
+        #[arg(long)]
+        json: bool,
     },
 }
 
