@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-cli"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -560,7 +560,10 @@ dependencies = [
  "eoka",
  "eoka-captcha",
  "eoka-mcp",
+ "eoka-protocol",
  "eoka-proxy",
+ "eoka-sdk",
+ "eoka-tack",
  "serde",
  "serde_json",
  "tack-core",
@@ -585,12 +588,13 @@ dependencies = [
 
 [[package]]
 name = "eoka-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs",
  "eoka-captcha",
+ "eoka-protocol",
  "eoka-proxy",
  "eoka-server",
  "regex",
@@ -601,6 +605,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "urlencoding",
+]
+
+[[package]]
+name = "eoka-protocol"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -631,6 +645,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eoka-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eoka",
+ "eoka-protocol",
+ "tokio",
+]
+
+[[package]]
 name = "eoka-server"
 version = "0.1.8"
 dependencies = [
@@ -644,6 +668,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "eoka-tack"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eoka-protocol",
+ "eoka-sdk",
+ "schemars",
+ "serde_json",
+ "tack-core",
 ]
 
 [[package]]
@@ -2664,11 +2700,12 @@ dependencies = [
 
 [[package]]
 name = "tack-core"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c3cf2496751c9c228aece01569cfba718f828ec492b856d8bb0bacfe887229a"
+checksum = "c8bf723b522b10803be064ef656312f0236f030b640c39d0066bdaff3000b9bf"
 dependencies = [
  "async-trait",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2677,9 +2714,9 @@ dependencies = [
 
 [[package]]
 name = "tack-runtime-quickjs"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05abdcf2a95214fbc4564250f39888a5091d4e3629bcf2802355ffbb1d8f22ef"
+checksum = "8807af291b2a34426beda31e00052f029e62ca83a6a53191a7b44d9f71edbde6"
 dependencies = [
  "async-trait",
  "oxc-browserslist",

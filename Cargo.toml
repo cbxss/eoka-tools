@@ -16,7 +16,11 @@ authors = ["cbxss"]
 # instead of drifting; other crates are free to opt in the same way.
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
+schemars = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tack-core = { version = "0.0.2", features = ["schemars"] }
+tack-runtime-quickjs = "0.0.2"
 tokio = { version = "1", features = ["full"] }

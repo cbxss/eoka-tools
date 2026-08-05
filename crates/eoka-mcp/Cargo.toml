@@ -1,6 +1,6 @@
 [package]
 name = "eoka-mcp"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "MCP server and Rust session API for browser automation"
@@ -19,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 eoka-server = { path = "../eoka-server", version = "0.1.8" }
 eoka-proxy = { path = "../eoka-proxy", version = "0.1.0" }
+eoka-protocol = { path = "../eoka-protocol", version = "0.1.0" }
 captcha = { package = "eoka-captcha", version = "0.1.1", path = "../captcha" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

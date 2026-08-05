@@ -36,16 +36,25 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
           UA="eoka-tools-publish (${{ github.repository }})"
 
+          if grep -q '^\[patch.crates-io\]' Cargo.toml; then
+            echo "Remove local [patch.crates-io] overrides before publishing eoka-tools."
+            exit 1
+          fi
+
           # Stable publish order: leaf deps first so dependents resolve.
-          for crate in captcha eoka-proxy eoka-runner eoka-email eoka-server eoka-mcp eoka-cli; do
+          for crate in captcha eoka-proxy eoka-protocol eoka-sdk eoka-runner eoka-email eoka-server eoka-mcp eoka-tack eoka-cli; do
             manifest="crates/${crate}/Cargo.toml"
             [ -f "$manifest" ] || continue
 
-            package_name=$(grep '^name' "$manifest" | head -1 | sed 's/.*"\(.*\)"/\1/')
-            version=$(grep '^version' "$manifest" | head -1 | sed 's/.*"\(.*\)"/\1/')
+            package_name=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg manifest "$(realpath "$manifest")" \
+                '.packages[] | select(.manifest_path == $manifest) | .name')
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg manifest "$(realpath "$manifest")" \
+                '.packages[] | select(.manifest_path == $manifest) | .version')
             tag="${crate}-v${version}"
             echo "::group::${package_name} @ ${version}"
 

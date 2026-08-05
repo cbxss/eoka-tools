@@ -1,6 +1,18 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+pub type TargetRequest = eoka_protocol::TargetArgs;
+pub type FillRequest = eoka_protocol::FillArgs;
+pub type SelectRequest = eoka_protocol::SelectArgs;
+pub type TypeKeyRequest = eoka_protocol::KeyArgs;
+pub type ScrollRequest = eoka_protocol::TargetArgs;
+pub type FindTextRequest = eoka_protocol::TextArgs;
+pub type NewTabRequest = eoka_protocol::TabNewArgs;
+pub type TabIdRequest = eoka_protocol::TabIdArgs;
+pub type SpaNavigateRequest = eoka_protocol::PathStringArgs;
+pub type ObserveRequest = eoka_protocol::ObserveArgs;
+pub type SaveStateRequest = eoka_protocol::PathArgs;
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NavigateRequest {
     #[schemars(description = "URL to navigate to")]
@@ -13,52 +25,6 @@ pub struct NavigateRequest {
     pub user_agent: Option<String>,
     #[schemars(description = "Disable CSP enforcement before navigating (useful for XSS testing)")]
     pub bypass_csp: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct TargetRequest {
-    #[schemars(
-        description = "Target element. Supports: index (0), text:Submit, placeholder:Email, role:button, css:form button, id:my-btn, or plain text search"
-    )]
-    pub target: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct FillRequest {
-    #[schemars(
-        description = "Target input. Supports: index (0), text:Email, placeholder:Enter code, css:input.search, id:email-field, or plain text search"
-    )]
-    pub target: String,
-    #[schemars(description = "Text to type into the element")]
-    pub text: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SelectRequest {
-    #[schemars(description = "Element index (number) OR text to find")]
-    pub target: String,
-    #[schemars(description = "Option value or visible text to select")]
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct TypeKeyRequest {
-    #[schemars(description = "Key to press (e.g. Enter, Tab, Escape, ArrowDown, Backspace)")]
-    pub key: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ScrollRequest {
-    #[schemars(
-        description = "Direction: up, down, top, bottom, or element index/text to scroll into view"
-    )]
-    pub target: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct FindTextRequest {
-    #[schemars(description = "Text substring to search for (case-insensitive)")]
-    pub text: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -106,24 +72,6 @@ pub struct SetCookieRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct NewTabRequest {
-    #[schemars(description = "Optional URL to navigate to. If omitted, opens about:blank.")]
-    pub url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct TabIdRequest {
-    #[schemars(description = "Tab ID (from list_tabs)")]
-    pub tab_id: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SpaNavigateRequest {
-    #[schemars(description = "Target path to navigate to (e.g. '/docs', '/about')")]
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HistoryGoRequest {
     #[schemars(description = "History delta: -1 for back, 1 for forward, -2 for back twice, etc.")]
     pub delta: i32,
@@ -135,16 +83,6 @@ pub struct SnapshotRequest {
         description = "Include all nodes (generic, presentation, StaticText). Default false for cleaner output."
     )]
     pub include_all: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ObserveRequest {
-    #[schemars(
-        description = "Filter: 'inputs' (form elements), 'buttons' (buttons/links), 'all' (default)"
-    )]
-    pub filter: Option<String>,
-    #[schemars(description = "Maximum elements to return (default: unlimited)")]
-    pub max: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -292,12 +230,6 @@ pub struct ErrorsRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SaveStateRequest {
-    #[schemars(description = "File path to save state to (JSON). Absolute path required.")]
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadStateRequest {
     #[schemars(description = "File path to load state from (JSON). Absolute path required.")]
     pub path: String,
@@ -305,4 +237,34 @@ pub struct LoadStateRequest {
         description = "Navigate to the saved URL after loading state (default: true). Set false to restore state then navigate somewhere else."
     )]
     pub navigate: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use eoka_protocol::operation_by_cmd;
+
+    #[test]
+    fn shared_mcp_protocol_operations_are_cataloged() {
+        let shared_commands = [
+            "click",
+            "fill",
+            "select",
+            "key",
+            "scroll",
+            "find",
+            "tab_new",
+            "tab_switch",
+            "tab_close",
+            "spa_navigate",
+            "observe",
+            "save_state",
+        ];
+
+        for command in shared_commands {
+            assert!(
+                operation_by_cmd(command).is_some(),
+                "MCP shared request type is not represented in protocol catalog: {command}"
+            );
+        }
+    }
 }

@@ -9,6 +9,9 @@ Companion tools for [eoka](https://github.com/shrimp-software/eoka), the low-lev
 | [**eoka-mcp**](crates/eoka-mcp) | Stdio MCP server and Rust `Session` API with observe/act browser tools |
 | [**eoka-cli**](crates/eoka-cli) | Interactive shell CLI for browser automation and debugging |
 | [**eoka-server**](crates/eoka-server) | Shared browser runtime used by eoka-mcp and the [Go client](clients/go) |
+| [**eoka-protocol**](crates/eoka-protocol) | Shared daemon protocol types and tool catalog metadata |
+| [**eoka-sdk**](crates/eoka-sdk) | Rust SDK for typed Eoka browser sessions |
+| [**eoka-tack**](crates/eoka-tack) | Tack `ToolSet` adapter generated from the Eoka protocol catalog |
 | [**eoka-runner**](crates/eoka-runner) | Declarative YAML automation runner |
 | [**eoka-captcha**](crates/captcha) | Optional Anti-Captcha integrations |
 | [**eoka-email**](crates/eoka-email) | IMAP helpers for OTP and verification-link flows |
@@ -73,6 +76,20 @@ The client starts `eoka-server` and can download a verified prebuilt server bina
 ```sh
 cargo test --workspace
 cd clients/go && go test ./...
+```
+
+Before Tack `0.0.2` is published, local checks for the Tack integration can use
+the sibling checkout explicitly:
+
+```sh
+bash scripts/release-check.sh --with-local-tack
+```
+
+After Tack `0.0.2` is available in crates.io, run the release check without the
+local override:
+
+```sh
+bash scripts/release-check.sh
 ```
 
 ## Documentation

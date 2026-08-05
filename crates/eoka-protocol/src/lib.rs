@@ -1,0 +1,1669 @@
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationExposure {
+    DefaultAgent,
+    OptIn,
+    Lifecycle,
+}
+
+impl OperationExposure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DefaultAgent => "defaultAgent",
+            Self::OptIn => "optIn",
+            Self::Lifecycle => "lifecycle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationCapability {
+    Navigation,
+    Observation,
+    Interaction,
+    JavaScript,
+    BrowserState,
+    Tabs,
+    Spa,
+    Wasm,
+    Network,
+    Policy,
+    Media,
+    Captcha,
+    Lifecycle,
+}
+
+impl OperationCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Navigation => "navigation",
+            Self::Observation => "observation",
+            Self::Interaction => "interaction",
+            Self::JavaScript => "javascript",
+            Self::BrowserState => "browser-state",
+            Self::Tabs => "tabs",
+            Self::Spa => "spa",
+            Self::Wasm => "wasm",
+            Self::Network => "network",
+            Self::Policy => "policy",
+            Self::Media => "media",
+            Self::Captcha => "captcha",
+            Self::Lifecycle => "lifecycle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolManifestEntry {
+    pub path: String,
+    pub cmd: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub capability: &'static str,
+    pub exposure: &'static str,
+    pub read_only: bool,
+    pub destructive: bool,
+    pub input_schema: serde_json::Value,
+    pub tags: Vec<&'static str>,
+}
+
+macro_rules! define_operations {
+    (
+        $(
+            $variant:ident {
+                path: $path:literal,
+                cmd: $cmd:literal,
+                name: $name:literal,
+                description: $description:literal,
+                capability: $capability:ident,
+                exposure: $exposure:ident,
+                read_only: $read_only:literal,
+                destructive: $destructive:literal
+                $(, input: $input:ty)?
+                $(,)?
+            }
+        ),+ $(,)?
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum OperationId {
+            $($variant),+
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        pub struct OperationSpec {
+            pub id: OperationId,
+            pub path: &'static str,
+            pub cmd: &'static str,
+            pub name: &'static str,
+            pub description: &'static str,
+            pub capability: OperationCapability,
+            pub exposure: OperationExposure,
+            pub read_only: bool,
+            pub destructive: bool,
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+        #[serde(tag = "cmd", content = "args")]
+        pub enum Request {
+            $(
+                #[serde(rename = $cmd)]
+                $variant$(($input))?,
+            )+
+        }
+
+        pub const OPERATIONS: &[OperationSpec] = &[
+            $(OperationSpec {
+                id: OperationId::$variant,
+                path: $path,
+                cmd: $cmd,
+                name: $name,
+                description: $description,
+                capability: OperationCapability::$capability,
+                exposure: OperationExposure::$exposure,
+                read_only: $read_only,
+                destructive: $destructive,
+            }),+
+        ];
+        pub fn all_operations() -> &'static [OperationSpec] {
+            OPERATIONS
+        }
+
+        pub fn operation_by_path(path: &str) -> Option<&'static OperationSpec> {
+            OPERATIONS.iter().find(|operation| operation.path == path)
+        }
+
+        pub fn operation_by_cmd(cmd: &str) -> Option<&'static OperationSpec> {
+            OPERATIONS.iter().find(|operation| operation.cmd == cmd)
+        }
+
+        pub fn default_agent_operations() -> impl Iterator<Item = &'static OperationSpec> {
+            OPERATIONS
+                .iter()
+                .filter(|operation| operation.exposure == OperationExposure::DefaultAgent)
+        }
+
+        pub fn exposed_operations(
+            include_opt_in: bool,
+        ) -> impl Iterator<Item = &'static OperationSpec> {
+            OPERATIONS.iter().filter(move |operation| {
+                operation.exposure == OperationExposure::DefaultAgent
+                    || (include_opt_in && operation.exposure == OperationExposure::OptIn)
+            })
+        }
+
+        pub fn request_from_operation_path(
+            path: &str,
+            input: serde_json::Value,
+        ) -> Result<Request, String> {
+            let operation = operation_by_path(path)
+                .ok_or_else(|| format!("unknown eoka operation path: {path}"))?;
+            request_from_cmd(operation.cmd, input)
+        }
+
+        pub fn request_from_cmd(cmd: &str, input: serde_json::Value) -> Result<Request, String> {
+            match cmd {
+                $(
+                    $cmd => Ok(define_operations!(@request Request::$variant, input $(, $input)?)),
+                )+
+                _ => Err(format!("unknown eoka protocol command: {cmd}")),
+            }
+        }
+
+        pub fn input_schema_for_cmd(cmd: &str) -> serde_json::Value {
+            match cmd {
+                $(
+                    $cmd => define_operations!(@schema $( $input )?),
+                )+
+                _ => serde_json::json!({ "type": "object", "additionalProperties": false }),
+            }
+        }
+
+        pub fn input_schema_for_operation(operation: &OperationSpec) -> serde_json::Value {
+            input_schema_for_cmd(operation.cmd)
+        }
+
+        pub fn tags_for_operation(operation: &OperationSpec) -> Vec<&'static str> {
+            vec!["eoka", operation.capability.as_str()]
+        }
+
+        pub fn manifest_entry_for_operation(
+            namespace: &str,
+            operation: &OperationSpec,
+        ) -> ToolManifestEntry {
+            ToolManifestEntry {
+                path: format!("{}.{}", namespace, operation.path),
+                cmd: operation.cmd,
+                name: operation.name,
+                description: operation.description,
+                capability: operation.capability.as_str(),
+                exposure: operation.exposure.as_str(),
+                read_only: operation.read_only,
+                destructive: operation.destructive,
+                input_schema: input_schema_for_operation(operation),
+                tags: tags_for_operation(operation),
+            }
+        }
+
+        pub fn manifest_for_operations(
+            namespace: &str,
+            include_opt_in: bool,
+        ) -> Vec<ToolManifestEntry> {
+            exposed_operations(include_opt_in)
+                .map(|operation| manifest_entry_for_operation(namespace, operation))
+                .collect()
+        }
+
+        impl Request {
+            pub fn cmd(&self) -> &'static str {
+                match self {
+                    $(
+                        define_operations!(@match_variant Self::$variant $(, $input)?) => $cmd,
+                    )+
+                }
+            }
+
+            pub fn args_json(&self) -> serde_json::Value {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| value.get("args").cloned())
+                    .unwrap_or_else(|| serde_json::json!({}))
+            }
+        }
+    };
+
+    (@request $variant:path, $input:ident, $ty:ty) => {{
+        serde_json::from_value::<$ty>($input)
+            .map($variant)
+            .map_err(|error| error.to_string())?
+    }};
+
+    (@request $variant:path, $input:ident) => {{
+        if $input != serde_json::json!({}) && $input != serde_json::Value::Null {
+            return Err("expected empty object for zero-argument command".to_string());
+        }
+        $variant
+    }};
+
+    (@schema $ty:ty) => {
+        schema_for::<$ty>()
+    };
+
+    (@schema) => {
+        serde_json::json!({ "type": "object", "additionalProperties": false })
+    };
+
+    (@match_variant $variant:path, $ty:ty) => {
+        $variant(_)
+    };
+
+    (@match_variant $variant:path) => {
+        $variant
+    };
+
+}
+
+define_operations! {
+    Open {
+        path: "open",
+        cmd: "open",
+        name: "open",
+        description: "Navigate to URL",
+        capability: Navigation,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: OpenArgs,
+    },
+    Back {
+        path: "back",
+        cmd: "back",
+        name: "back",
+        description: "Go back",
+        capability: Navigation,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+    },
+    Forward {
+        path: "forward",
+        cmd: "forward",
+        name: "forward",
+        description: "Go forward",
+        capability: Navigation,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+    },
+    Reload {
+        path: "reload",
+        cmd: "reload",
+        name: "reload",
+        description: "Reload page",
+        capability: Navigation,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+    },
+    Snapshot {
+        path: "snapshot",
+        cmd: "snapshot",
+        name: "snapshot",
+        description: "Accessibility snapshot",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: SnapshotArgs,
+    },
+    Observe {
+        path: "observe",
+        cmd: "observe",
+        name: "observe",
+        description: "Observe interactive elements",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: ObserveArgs,
+    },
+    Screenshot {
+        path: "screenshot",
+        cmd: "screenshot",
+        name: "screenshot",
+        description: "Take screenshot",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: ScreenshotArgs,
+    },
+    Emulate {
+        path: "emulate",
+        cmd: "emulate",
+        name: "emulate",
+        description: "Emulate viewport",
+        capability: Navigation,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: EmulateArgs,
+    },
+    Info {
+        path: "info",
+        cmd: "info",
+        name: "info",
+        description: "Page URL and title",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    Text {
+        path: "text",
+        cmd: "text",
+        name: "text",
+        description: "Visible page text",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    Find {
+        path: "find",
+        cmd: "find",
+        name: "find",
+        description: "Find elements by text",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: TextArgs,
+    },
+    Click {
+        path: "click",
+        cmd: "click",
+        name: "click",
+        description: "Click target",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: TargetArgs,
+    },
+    DblClick {
+        path: "double_click",
+        cmd: "dblclick",
+        name: "double_click",
+        description: "Double click target",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: TargetArgs,
+    },
+    Fill {
+        path: "fill",
+        cmd: "fill",
+        name: "fill",
+        description: "Fill input",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: FillArgs,
+    },
+    Select {
+        path: "select",
+        cmd: "select",
+        name: "select",
+        description: "Select option",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: SelectArgs,
+    },
+    Hover {
+        path: "hover",
+        cmd: "hover",
+        name: "hover",
+        description: "Hover target",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: TargetArgs,
+    },
+    Key {
+        path: "key",
+        cmd: "key",
+        name: "key",
+        description: "Press key",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: KeyArgs,
+    },
+    Scroll {
+        path: "scroll",
+        cmd: "scroll",
+        name: "scroll",
+        description: "Scroll page or target",
+        capability: Interaction,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: TargetArgs,
+    },
+    Eval {
+        path: "eval",
+        cmd: "eval",
+        name: "eval",
+        description: "Evaluate JavaScript",
+        capability: JavaScript,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: ScriptArgs,
+    },
+    Exec {
+        path: "exec",
+        cmd: "exec",
+        name: "exec",
+        description: "Execute JavaScript",
+        capability: JavaScript,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: ScriptArgs,
+    },
+    Fetch {
+        path: "fetch",
+        cmd: "fetch",
+        name: "fetch",
+        description: "Fetch URL in page context",
+        capability: Network,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: FetchArgs,
+    },
+    Cookies {
+        path: "cookies",
+        cmd: "cookies",
+        name: "cookies",
+        description: "List cookies",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    SetCookie {
+        path: "set_cookie",
+        cmd: "set_cookie",
+        name: "set_cookie",
+        description: "Set cookie",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: SetCookieArgs,
+    },
+    DeleteCookie {
+        path: "delete_cookie",
+        cmd: "delete_cookie",
+        name: "delete_cookie",
+        description: "Delete cookie",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: DeleteCookieArgs,
+    },
+    ClearCookies {
+        path: "clear_cookies",
+        cmd: "clear_cookies",
+        name: "clear_cookies",
+        description: "Clear cookies",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+    },
+    Storage {
+        path: "storage",
+        cmd: "storage",
+        name: "storage",
+        description: "Read storage",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: StorageArgs,
+    },
+    SetStorage {
+        path: "set_storage",
+        cmd: "set_storage",
+        name: "set_storage",
+        description: "Set storage",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: SetStorageArgs,
+    },
+    DumpStorage {
+        path: "dump_storage",
+        cmd: "dump_storage",
+        name: "dump_storage",
+        description: "Dump storage",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    SaveState {
+        path: "save_state",
+        cmd: "save_state",
+        name: "save_state",
+        description: "Save browser state",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: PathArgs,
+    },
+    LoadState {
+        path: "load_state",
+        cmd: "load_state",
+        name: "load_state",
+        description: "Load browser state",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: LoadStateArgs,
+    },
+    Headers {
+        path: "headers",
+        cmd: "headers",
+        name: "headers",
+        description: "Set extra headers",
+        capability: Network,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: HeadersArgs,
+    },
+    Console {
+        path: "console",
+        cmd: "console",
+        name: "console",
+        description: "Read console output",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: ConsoleArgs,
+    },
+    Errors {
+        path: "errors",
+        cmd: "errors",
+        name: "errors",
+        description: "Read JavaScript errors",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: ClearFlagArgs,
+    },
+    TabList {
+        path: "tab.list",
+        cmd: "tab_list",
+        name: "tab.list",
+        description: "List tabs",
+        capability: Tabs,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    TabNew {
+        path: "tab.new",
+        cmd: "tab_new",
+        name: "tab.new",
+        description: "Open new tab",
+        capability: Tabs,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: TabNewArgs,
+    },
+    TabSwitch {
+        path: "tab.switch",
+        cmd: "tab_switch",
+        name: "tab.switch",
+        description: "Switch tab",
+        capability: Tabs,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: TabIdArgs,
+    },
+    TabClose {
+        path: "tab.close",
+        cmd: "tab_close",
+        name: "tab.close",
+        description: "Close tab",
+        capability: Tabs,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: TabIdArgs,
+    },
+    TabAttach {
+        path: "tab.attach",
+        cmd: "tab_attach",
+        name: "tab.attach",
+        description: "Attach tab",
+        capability: Tabs,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: TabIdArgs,
+    },
+    CloneFrom {
+        path: "clone_from",
+        cmd: "clone_from",
+        name: "clone_from",
+        description: "Clone browser state",
+        capability: BrowserState,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: CloneFromArgs,
+    },
+    Wait {
+        path: "wait",
+        cmd: "wait",
+        name: "wait",
+        description: "Wait for page condition",
+        capability: Observation,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: WaitArgs,
+    },
+    SpaInfo {
+        path: "spa.info",
+        cmd: "spa_info",
+        name: "spa.info",
+        description: "SPA routing info",
+        capability: Spa,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    SpaNavigate {
+        path: "spa.navigate",
+        cmd: "spa_navigate",
+        name: "spa.navigate",
+        description: "SPA navigation",
+        capability: Spa,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: PathStringArgs,
+    },
+    FakeCamera {
+        path: "fake_camera",
+        cmd: "fake_camera",
+        name: "fake_camera",
+        description: "Inject fake camera",
+        capability: Media,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: FakeCameraArgs,
+    },
+    WasmInfo {
+        path: "wasm.info",
+        cmd: "wasm_info",
+        name: "wasm.info",
+        description: "WASM memory info",
+        capability: Wasm,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    WasmRead {
+        path: "wasm.read",
+        cmd: "wasm_read",
+        name: "wasm.read",
+        description: "Read WASM memory",
+        capability: Wasm,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: WasmReadArgs,
+    },
+    WasmWrite {
+        path: "wasm.write",
+        cmd: "wasm_write",
+        name: "wasm.write",
+        description: "Write WASM memory",
+        capability: Wasm,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: WasmWriteArgs,
+    },
+    WasmFind {
+        path: "wasm.find",
+        cmd: "wasm_find",
+        name: "wasm.find",
+        description: "Find WASM memory pattern",
+        capability: Wasm,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+        input: WasmFindArgs,
+    },
+    InterceptAdd {
+        path: "intercept.add",
+        cmd: "intercept_add",
+        name: "intercept.add",
+        description: "Add network interception rule",
+        capability: Network,
+        exposure: OptIn,
+        read_only: false,
+        destructive: true,
+        input: InterceptAddArgs,
+    },
+    InterceptList {
+        path: "intercept.list",
+        cmd: "intercept_list",
+        name: "intercept.list",
+        description: "List network interception rules",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+    },
+    InterceptRemove {
+        path: "intercept.remove",
+        cmd: "intercept_remove",
+        name: "intercept.remove",
+        description: "Remove network interception rule",
+        capability: Network,
+        exposure: OptIn,
+        read_only: false,
+        destructive: true,
+        input: IdArgs,
+    },
+    InterceptLog {
+        path: "intercept.log",
+        cmd: "intercept_log",
+        name: "intercept.log",
+        description: "Read intercepted request log",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: ClearFlagArgs,
+    },
+    JsMode {
+        path: "js.mode",
+        cmd: "js_mode",
+        name: "js.mode",
+        description: "Set JavaScript policy mode",
+        capability: Policy,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: ModeArgs,
+    },
+    JsAllow {
+        path: "js.allow",
+        cmd: "js_allow",
+        name: "js.allow",
+        description: "Allow JavaScript domain",
+        capability: Policy,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: DomainArgs,
+    },
+    JsBlock {
+        path: "js.block",
+        cmd: "js_block",
+        name: "js.block",
+        description: "Block JavaScript domain",
+        capability: Policy,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: false,
+        input: DomainArgs,
+    },
+    JsRemove {
+        path: "js.remove",
+        cmd: "js_remove",
+        name: "js.remove",
+        description: "Remove JavaScript domain rule",
+        capability: Policy,
+        exposure: DefaultAgent,
+        read_only: false,
+        destructive: true,
+        input: DomainArgs,
+    },
+    JsList {
+        path: "js.list",
+        cmd: "js_list",
+        name: "js.list",
+        description: "List JavaScript policy",
+        capability: Policy,
+        exposure: DefaultAgent,
+        read_only: true,
+        destructive: false,
+    },
+    NetworkRecordStart {
+        path: "network.record.start",
+        cmd: "network_record_start",
+        name: "network.record.start",
+        description: "Start network recording",
+        capability: Network,
+        exposure: OptIn,
+        read_only: false,
+        destructive: false,
+        input: NetworkRecordStartArgs,
+    },
+    NetworkRecordStop {
+        path: "network.record.stop",
+        cmd: "network_record_stop",
+        name: "network.record.stop",
+        description: "Stop network recording",
+        capability: Network,
+        exposure: OptIn,
+        read_only: false,
+        destructive: false,
+    },
+    NetworkRecordStatus {
+        path: "network.record.status",
+        cmd: "network_record_status",
+        name: "network.record.status",
+        description: "Network recorder status",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+    },
+    NetworkLog {
+        path: "network.log",
+        cmd: "network_log",
+        name: "network.log",
+        description: "Read network log",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: NetworkLogArgs,
+    },
+    NetworkShow {
+        path: "network.show",
+        cmd: "network_show",
+        name: "network.show",
+        description: "Show network entry details",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: NetworkShowArgs,
+    },
+    NetworkWait {
+        path: "network.wait",
+        cmd: "network_wait",
+        name: "network.wait",
+        description: "Wait for a matching network request",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: NetworkWaitArgs,
+    },
+    NetworkSaveHar {
+        path: "network.save_har",
+        cmd: "network_save_har",
+        name: "network.save_har",
+        description: "Save network traffic as HAR",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: NetworkExportArgs,
+    },
+    NetworkExport {
+        path: "network.export",
+        cmd: "network_export",
+        name: "network.export",
+        description: "Export network traffic",
+        capability: Network,
+        exposure: OptIn,
+        read_only: true,
+        destructive: false,
+        input: NetworkExportArgs,
+    },
+    NetworkClear {
+        path: "network.clear",
+        cmd: "network_clear",
+        name: "network.clear",
+        description: "Clear network log",
+        capability: Network,
+        exposure: OptIn,
+        read_only: false,
+        destructive: true,
+    },
+    Close {
+        path: "close",
+        cmd: "close",
+        name: "close",
+        description: "Close browser session",
+        capability: Lifecycle,
+        exposure: Lifecycle,
+        read_only: false,
+        destructive: true,
+    },
+    Shutdown {
+        path: "shutdown",
+        cmd: "shutdown",
+        name: "shutdown",
+        description: "Shut down daemon",
+        capability: Lifecycle,
+        exposure: Lifecycle,
+        read_only: false,
+        destructive: true,
+    },
+    CaptchaInject {
+        path: "captcha.inject",
+        cmd: "captcha_inject",
+        name: "captcha.inject",
+        description: "Inject a solved CAPTCHA token",
+        capability: Captcha,
+        exposure: OptIn,
+        read_only: false,
+        destructive: true,
+        input: CaptchaInjectArgs,
+    },
+}
+
+fn schema_for<T: schemars::JsonSchema>() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(T))
+        .unwrap_or_else(|_| serde_json::json!({ "type": "object", "additionalProperties": true }))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct OpenArgs {
+    pub url: String,
+    pub headers: Option<serde_json::Value>,
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub bypass_csp: bool,
+    pub inject_js: Option<String>,
+    pub load_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct SnapshotArgs {
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ObserveArgs {
+    #[schemars(
+        description = "Filter: 'inputs' for form elements, 'buttons' for buttons and links, or 'all' for all observed elements."
+    )]
+    pub filter: Option<String>,
+    #[schemars(description = "Maximum elements to return.")]
+    pub max: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ScreenshotArgs {
+    pub output: Option<String>,
+    #[serde(default)]
+    pub annotate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EmulateArgs {
+    #[serde(default = "default_viewport_width")]
+    pub width: u32,
+    #[serde(default = "default_viewport_height")]
+    pub height: u32,
+    #[serde(default = "default_device_pixel_ratio")]
+    pub dpr: f64,
+    #[serde(default)]
+    pub desktop: bool,
+    #[serde(default)]
+    pub reset: bool,
+}
+
+impl Default for EmulateArgs {
+    fn default() -> Self {
+        Self {
+            width: default_viewport_width(),
+            height: default_viewport_height(),
+            dpr: default_device_pixel_ratio(),
+            desktop: false,
+            reset: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct TextArgs {
+    #[schemars(description = "Text substring to search for, matched case-insensitively.")]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct TargetArgs {
+    #[schemars(
+        description = "Target element. Supports index, snapshot refs like @e1, text:Submit, placeholder:Email, role:button, css:form button, id:my-btn, or plain text search."
+    )]
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct FillArgs {
+    #[schemars(
+        description = "Target input. Supports index, text:Email, placeholder:Enter code, css:input.search, id:email-field, or plain text search."
+    )]
+    pub target: String,
+    #[schemars(description = "Text to type into the element.")]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct SelectArgs {
+    #[schemars(description = "Target select element by index, text, CSS selector, id, or role.")]
+    pub target: String,
+    #[schemars(description = "Option value or visible text to select.")]
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct KeyArgs {
+    #[schemars(
+        description = "Key to press, for example Enter, Tab, Escape, ArrowDown, or Backspace."
+    )]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ScriptArgs {
+    pub code: Option<String>,
+    pub file: Option<String>,
+    pub max_size: Option<usize>,
+    #[serde(default)]
+    pub no_await: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct FetchArgs {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<serde_json::Value>,
+    pub body: Option<String>,
+    pub redirect: Option<String>,
+    #[serde(default)]
+    pub body_only: bool,
+    pub max_body: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct SetCookieArgs {
+    pub name: String,
+    pub value: String,
+    pub domain: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct DeleteCookieArgs {
+    pub name: String,
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct StorageArgs {
+    pub key: Option<String>,
+    #[serde(default)]
+    pub session_storage: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct SetStorageArgs {
+    pub key: String,
+    pub value: String,
+    #[serde(default)]
+    pub session_storage: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct PathArgs {
+    #[schemars(description = "File path.")]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct LoadStateArgs {
+    pub path: String,
+    #[serde(default)]
+    pub no_navigate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct HeadersArgs {
+    pub headers_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ConsoleArgs {
+    #[serde(default)]
+    pub clear: bool,
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ClearFlagArgs {
+    #[serde(default)]
+    pub clear: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct TabNewArgs {
+    #[schemars(description = "Optional URL to navigate to. If omitted, opens a blank tab.")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct TabIdArgs {
+    #[schemars(description = "Tab ID from list_tabs.")]
+    pub tab_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct CloneFromArgs {
+    pub source: String,
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct WaitArgs {
+    pub ms: Option<u64>,
+    pub text: Option<String>,
+    pub url: Option<String>,
+    pub load: Option<String>,
+    pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct PathStringArgs {
+    #[schemars(description = "Target path, for example /docs or /about.")]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct FakeCameraArgs {
+    pub file: String,
+    #[serde(default)]
+    pub loop_video: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct WasmReadArgs {
+    pub addr: String,
+    pub len: usize,
+    pub memory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct WasmWriteArgs {
+    pub addr: String,
+    pub hex: String,
+    pub memory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WasmFindArgs {
+    pub pattern: String,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    #[serde(default = "default_wasm_find_max")]
+    pub max: usize,
+    pub memory: Option<String>,
+}
+
+impl Default for WasmFindArgs {
+    fn default() -> Self {
+        Self {
+            pattern: String::new(),
+            start: None,
+            end: None,
+            max: default_wasm_find_max(),
+            memory: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InterceptAddArgs {
+    pub url_pattern: String,
+    pub capture: Option<String>,
+    pub respond: Option<String>,
+    #[serde(default = "default_intercept_status")]
+    pub status: u16,
+}
+
+impl Default for InterceptAddArgs {
+    fn default() -> Self {
+        Self {
+            url_pattern: String::new(),
+            capture: None,
+            respond: None,
+            status: default_intercept_status(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct IdArgs {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct ModeArgs {
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct DomainArgs {
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct CaptchaInjectArgs {
+    pub token: String,
+    #[serde(default = "default_captcha_type")]
+    pub captcha_type: String,
+    pub callback: Option<String>,
+    pub click_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct NetworkRecordStartArgs {
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub no_bodies: bool,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default)]
+    pub clear: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct NetworkLogArgs {
+    pub limit: Option<usize>,
+    pub pattern: Option<String>,
+    pub method: Option<String>,
+    pub status: Option<u16>,
+    pub since: Option<u64>,
+    #[serde(default)]
+    pub compact: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct NetworkShowArgs {
+    pub id: u64,
+    #[serde(default)]
+    pub body: bool,
+    pub max_body: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+pub struct NetworkWaitArgs {
+    pub pattern: Option<String>,
+    pub method: Option<String>,
+    pub status: Option<u16>,
+    pub timeout: Option<u64>,
+    pub since: Option<u64>,
+    #[serde(default)]
+    pub include_existing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NetworkExportArgs {
+    pub path: String,
+    #[serde(default = "default_network_export_format")]
+    pub format: String,
+    pub settle_ms: Option<u64>,
+}
+
+impl Default for NetworkExportArgs {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            format: default_network_export_format(),
+            settle_ms: None,
+        }
+    }
+}
+
+fn default_max_body_bytes() -> usize {
+    10 * 1024 * 1024
+}
+
+fn default_network_export_format() -> String {
+    "har".to_string()
+}
+
+fn default_viewport_width() -> u32 {
+    390
+}
+
+fn default_viewport_height() -> u32 {
+    844
+}
+
+fn default_device_pixel_ratio() -> f64 {
+    2.0
+}
+
+fn default_wasm_find_max() -> usize {
+    20
+}
+
+fn default_intercept_status() -> u16 {
+    200
+}
+
+fn default_captcha_type() -> String {
+    "auto".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Response {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Response {
+    pub fn ok(data: impl Into<serde_json::Value>) -> Self {
+        Self {
+            ok: true,
+            data: Some(data.into()),
+            error: None,
+        }
+    }
+
+    pub fn ok_text(msg: impl Into<String>) -> Self {
+        Self::ok(serde_json::Value::String(msg.into()))
+    }
+
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            data: None,
+            error: Some(msg.into()),
+        }
+    }
+}
+pub async fn write_msg<W: AsyncWriteExt + Unpin>(
+    writer: &mut W,
+    msg: &impl Serialize,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec(msg).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let len = (payload.len() as u32).to_be_bytes();
+    writer.write_all(&len).await?;
+    writer.write_all(&payload).await?;
+    writer.flush().await?;
+    Ok(())
+}
+pub async fn read_msg<R: AsyncReadExt + Unpin, T: for<'de> Deserialize<'de>>(
+    reader: &mut R,
+) -> std::io::Result<T> {
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+
+    if len > 64 * 1024 * 1024 {
+        return Err(std::io::Error::other("message too large (>64MB)"));
+    }
+
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf).await?;
+    serde_json::from_slice(&buf).map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::{UnixListener, UnixStream};
+
+    fn temp_socket_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "eoka-protocol-test-{}-{}.sock",
+            std::process::id(),
+            name
+        ))
+    }
+
+    #[tokio::test]
+    async fn round_trip_over_unix_socket() {
+        let sock_path = temp_socket_path("roundtrip");
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, mut writer) = stream.into_split();
+            let req: Request = read_msg(&mut reader).await.unwrap();
+            assert_eq!(req.cmd(), "click");
+            assert_eq!(req.args_json(), serde_json::json!({ "target": "@e1" }));
+            write_msg(&mut writer, &Response::ok_text("pong"))
+                .await
+                .unwrap();
+        });
+
+        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let (mut reader, mut writer) = stream.into_split();
+        write_msg(
+            &mut writer,
+            &Request::Click(TargetArgs {
+                target: "@e1".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        let response: Response = read_msg(&mut reader).await.unwrap();
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+
+        assert!(response.ok);
+        assert_eq!(
+            response.data,
+            Some(serde_json::Value::String("pong".into()))
+        );
+        assert_eq!(response.error, None);
+    }
+
+    #[tokio::test]
+    async fn read_msg_rejects_oversized_length_prefix() {
+        let sock_path = temp_socket_path("oversized");
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            let result: std::io::Result<Request> = read_msg(&mut reader).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("too large"));
+        });
+
+        let mut stream = UnixStream::connect(&sock_path).await.unwrap();
+        let oversized_len: u32 = 65 * 1024 * 1024;
+        stream
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+    }
+
+    #[test]
+    fn typed_network_request_round_trips_with_cmd_and_args() {
+        let request = Request::NetworkWait(NetworkWaitArgs {
+            pattern: Some("*/api/*".into()),
+            method: Some("POST".into()),
+            status: Some(201),
+            timeout: Some(5000),
+            since: Some(10),
+            include_existing: false,
+        });
+
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["cmd"], "network_wait");
+        assert_eq!(value["args"]["pattern"], "*/api/*");
+
+        let parsed: Request = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.cmd(), "network_wait");
+        assert_eq!(parsed.args_json()["status"], 201);
+    }
+
+    #[test]
+    fn typed_request_rejects_unknown_command() {
+        let result: Result<Request, _> =
+            serde_json::from_value(serde_json::json!({ "cmd": "not_real", "args": {} }));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_network_save_har_request_is_still_accepted() {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "cmd": "network_save_har",
+            "args": { "path": "/tmp/session.har" }
+        }))
+        .unwrap();
+
+        assert_eq!(request.cmd(), "network_save_har");
+        assert_eq!(request.args_json()["format"], "har");
+    }
+
+    #[test]
+    fn operation_catalog_maps_stable_paths_to_protocol_commands() {
+        let tab = operation_by_path("tab.new").unwrap();
+        assert_eq!(tab.cmd, "tab_new");
+        assert_eq!(tab.exposure, OperationExposure::DefaultAgent);
+
+        let request = request_from_operation_path(
+            "tab.new",
+            serde_json::json!({"url":"https://example.com"}),
+        )
+        .unwrap();
+        assert_eq!(request.cmd(), "tab_new");
+        assert_eq!(request.args_json()["url"], "https://example.com");
+    }
+
+    #[test]
+    fn default_catalog_excludes_opt_in_and_lifecycle_operations() {
+        let paths: Vec<&str> = default_agent_operations()
+            .map(|operation| operation.path)
+            .collect();
+
+        assert!(paths.contains(&"open"));
+        assert!(paths.contains(&"tab.list"));
+        assert!(!paths.contains(&"network.log"));
+        assert!(!paths.contains(&"close"));
+    }
+
+    #[test]
+    fn operation_catalog_has_unique_paths_and_commands() {
+        let mut paths = std::collections::BTreeSet::new();
+        let mut commands = std::collections::BTreeSet::new();
+        let mut ids = std::collections::BTreeSet::new();
+
+        for operation in all_operations() {
+            assert!(ids.insert(operation.id), "duplicate id {:?}", operation.id);
+            assert!(
+                paths.insert(operation.path),
+                "duplicate path {}",
+                operation.path
+            );
+            assert!(
+                commands.insert(operation.cmd),
+                "duplicate cmd {}",
+                operation.cmd
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_uses_catalog_metadata_and_schemas() {
+        let default_manifest = manifest_for_operations("eoka", false);
+        let paths: std::collections::BTreeSet<&str> = default_manifest
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+
+        assert!(paths.contains("eoka.open"));
+        assert!(paths.contains("eoka.tab.list"));
+        assert!(!paths.contains("eoka.network.log"));
+        assert!(!paths.contains("eoka.close"));
+
+        let open = default_manifest
+            .iter()
+            .find(|entry| entry.path == "eoka.open")
+            .unwrap();
+        assert_eq!(open.capability, "navigation");
+        assert_eq!(open.exposure, "defaultAgent");
+        assert_eq!(open.tags, vec!["eoka", "navigation"]);
+        assert!(open.input_schema.get("properties").is_some());
+
+        let all_manifest = manifest_for_operations("eoka", true);
+        let all_paths: std::collections::BTreeSet<&str> = all_manifest
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert!(all_paths.contains("eoka.network.log"));
+        assert!(!all_paths.contains("eoka.close"));
+    }
+
+    #[test]
+    fn shared_mcp_inputs_keep_schema_descriptions() {
+        let click_schema = input_schema_for_cmd("click");
+        assert_eq!(
+            click_schema["properties"]["target"]["description"],
+            "Target element. Supports index, snapshot refs like @e1, text:Submit, placeholder:Email, role:button, css:form button, id:my-btn, or plain text search."
+        );
+
+        let tab_schema = input_schema_for_cmd("tab_switch");
+        assert_eq!(
+            tab_schema["properties"]["tab_id"]["description"],
+            "Tab ID from list_tabs."
+        );
+    }
+}

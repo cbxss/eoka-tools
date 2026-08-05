@@ -14,7 +14,8 @@ mod session;
 mod sessions;
 
 use clap::Parser;
-use cli::{CaptchaAction, Cli, Command};
+use cli::{CaptchaAction, Cli, Command, ToolsAction};
+use eoka_protocol::manifest_for_operations;
 use launch_spec::LaunchSpec;
 use serde_json::json;
 
@@ -182,6 +183,12 @@ async fn main() {
             }
             return;
         }
+        Command::Tools {
+            action: ToolsAction::Manifest { all, json },
+        } => {
+            print_tools_manifest(*all, *json || json_mode);
+            return;
+        }
         _ => {}
     }
 
@@ -236,4 +243,18 @@ fn parse_port_from_ws(ws_url: &str) -> Option<u16> {
         .trim_start_matches("wss://");
     let host_port = after_scheme.split('/').next()?;
     host_port.rsplit(':').next()?.parse().ok()
+}
+
+fn print_tools_manifest(include_opt_in: bool, json_mode: bool) {
+    let manifest = manifest_for_operations("eoka", include_opt_in);
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "tools": manifest })).unwrap_or_default()
+        );
+        return;
+    }
+    for tool in manifest {
+        println!("{}\t{}", tool.path, tool.description);
+    }
 }

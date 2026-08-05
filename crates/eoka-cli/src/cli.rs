@@ -277,6 +277,12 @@ pub enum Command {
         raw_json: bool,
     },
 
+    /// Inspect the generated eoka tool catalog
+    Tools {
+        #[command(subcommand)]
+        action: ToolsAction,
+    },
+
     // ── Network ─────────────────────────────────────────────────────
     /// Fetch URL from browser context (with cookies/TLS)
     Fetch {
@@ -557,6 +563,19 @@ pub enum NetworkAction {
     Intercept {
         #[command(subcommand)]
         action: InterceptAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ToolsAction {
+    /// Print the generated tool manifest
+    Manifest {
+        /// Include opt-in tools. Lifecycle tools stay hidden.
+        #[arg(long)]
+        all: bool,
+        /// Emit JSON instead of a compact text listing.
+        #[arg(long)]
+        json: bool,
     },
 }
 

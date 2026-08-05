@@ -576,6 +576,7 @@ impl Session {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_element(
         index: usize,
         tag: &str,
