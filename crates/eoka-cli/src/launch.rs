@@ -23,6 +23,9 @@ pub(crate) fn resolve_launch_spec(cli: &Cli) -> Result<LaunchSpec, String> {
         clone_state_from: cli.clone_state_from.clone(),
         no_stealth: cli.no_stealth,
         proxy: launch_spec::resolve_proxy_spec(cli.proxy.as_deref(), cli.proxy_file.as_deref())?,
+        no_js: cli.no_js,
+        js_allow: cli.js_allow.clone(),
+        js_block: cli.js_block.clone(),
     })
 }
 

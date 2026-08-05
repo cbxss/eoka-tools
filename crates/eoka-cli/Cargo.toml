@@ -1,6 +1,6 @@
 [package]
 name = "eoka-cli"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 license = "MIT"
 description = "Browser automation CLI for AI agents and pentesting"
@@ -22,3 +22,4 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 base64 = "0.22"
 anyhow = { workspace = true }
+url = "2"

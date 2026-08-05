@@ -228,6 +228,33 @@ eoka spa-info                           # Detect router (React, Next.js, Vue, et
 eoka spa-navigate /dashboard            # Navigate without page reload
 ```
 
+### Script Blocking (NoScript-style)
+
+Disable JS execution by default and allow it only on specific domains — the
+same idea as the NoScript extension, applied per top-level navigation (CDP
+has no per-frame equivalent, so a third-party iframe on an allowed page runs
+JS too; there's no way to allow the main frame while blocking an embedded
+one).
+
+```bash
+eoka --no-js open https://target.com                   # start blocked (Safest-style)
+eoka js allow example.com                               # exception: JS runs here (and subdomains)
+eoka js mode allow-all                                  # flip default: run JS everywhere...
+eoka js block evil.example                               # ...except this domain
+eoka js remove example.com                               # drop an allow/block exception
+eoka js list                                             # current mode + exception lists
+```
+
+`--js-allow <DOMAIN>` / `--js-block <DOMAIN>` (repeatable) seed exceptions at
+launch instead of adding them after the fact. All of `--no-js`,
+`--js-allow`, `--js-block` are ignored in `--cdp`/`--auto-connect` mode,
+same as `--proxy`/`--headed`/etc. — eoka never touches your own live tabs.
+
+The policy is re-evaluated on `open` and `reload` (against the destination
+and current URL respectively). `back`/`forward` don't re-evaluate it — CDP
+doesn't expose the destination URL before they complete, so they carry
+whatever was last applied.
+
 ## Sessions
 
 Run multiple isolated browsers — each `--session` name gets its own daemon,
@@ -323,6 +350,9 @@ Caveats:
 | `--from-profile <auto\|PATH>` | Clone an existing Chrome profile and launch against the copy |
 | `--proxy <URL>` | Proxy for the launched browser: `socks5://host:port` or `http://host:port`, optionally with `user:pass@`. Conflicts with `--proxy-file` |
 | `--proxy-file <FILE>` | Pick a proxy at random from a file (one per line, `#` comments allowed). Conflicts with `--proxy` |
+| `--no-js` | Start with JS execution blocked by default (see Script Blocking) |
+| `--js-allow <DOMAIN>` | Seed a JS allow exception at launch. Repeatable |
+| `--js-block <DOMAIN>` | Seed a JS block exception at launch. Repeatable |
 
 ## Environment Variables
 
@@ -331,6 +361,7 @@ Caveats:
 | `EOKA_HEADLESS` | `false` or `0` to show browser window |
 | `EOKA_PROXY` | Fallback for `--proxy` when the flag isn't passed: `socks5://user:pass@host:port` or `http://user:pass@host:port`; legacy `host:port[:user:pass]` is supported |
 | `EOKA_PROXY_FILE` | Fallback for `--proxy-file` when the flag isn't passed |
+| `EOKA_NO_JS` | Fallback for `--no-js` when the flag isn't passed |
 | `EOKA_PATCH_BINARY` | `true` to apply stealth binary patches |
 | `EOKA_CHROME_ARGS` | Extra Chrome flags, colon-separated (e.g. `--use-fake-ui-for-media-stream:--allow-insecure-localhost`) |
 | `EOKA_IDLE_TIMEOUT` | Daemon idle timeout in ms (default: 1800000 = 30min) |

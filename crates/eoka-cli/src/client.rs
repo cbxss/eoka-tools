@@ -63,6 +63,9 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             clone_state_from,
             no_stealth,
             proxy,
+            no_js,
+            js_allow,
+            js_block,
         } => {
             if !*headless {
                 cmd.arg("--headed");
@@ -81,6 +84,15 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             // doesn't re-resolve --proxy-file and pick a different line.
             if let Some(p) = proxy {
                 cmd.arg("--proxy").arg(p);
+            }
+            if *no_js {
+                cmd.arg("--no-js");
+            }
+            for domain in js_allow {
+                cmd.arg("--js-allow").arg(domain);
+            }
+            for domain in js_block {
+                cmd.arg("--js-block").arg(domain);
             }
         }
         LaunchSpec::Connect { ws_url } => {
