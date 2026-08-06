@@ -121,6 +121,12 @@ eoka tack 'return await tools.invoke({ path: "eoka.info", input: {} });'
 - [Go client](clients/go/README.md)
 - [server protocol](PROTOCOL.md)
 
+Install the Codex skill with the open skills CLI:
+
+```sh
+npx skills add https://github.com/shrimp-software/eoka-tools/tree/main/crates/eoka-cli --skill eoka -a codex -y
+```
+
 ## License
 
 MIT
