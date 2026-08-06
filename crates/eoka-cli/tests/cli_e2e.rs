@@ -138,6 +138,80 @@ fn tack_executes_without_browser_tools() {
     assert_eq!(actual["data"]["result"], serde_json::json!(5));
 }
 
+#[test]
+fn agent_mode_implies_json_and_meta() {
+    let session = format!("eoka-agent-test-{}", std::process::id());
+    let output = run(&session, &["--agent", "doctor"]);
+    assert_success(&output, "doctor");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor output should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(true));
+    assert_eq!(actual["meta"]["session"], serde_json::json!(session));
+    assert_eq!(actual["meta"]["cmd"], serde_json::json!("doctor"));
+    assert!(actual["data"]["tools"]["default"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn agent_mode_formats_early_launch_errors_as_json() {
+    let session = format!("eoka-agent-early-error-test-{}", std::process::id());
+    let output = run(&session, &["--agent", "--cdp", "not-a-cdp-spec", "doctor"]);
+
+    assert!(!output.status.success());
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("early error should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(false));
+    assert_eq!(
+        actual["error_detail"]["code"],
+        serde_json::json!("invalid_input")
+    );
+}
+
+#[test]
+fn tack_capability_exposes_opt_in_network_tools() {
+    let session = format!("eoka-tack-network-test-{}", std::process::id());
+    let output = run(
+        &session,
+        &[
+            "tack",
+            "--raw-json",
+            "--capability",
+            "network",
+            "const hits = await tools.search({ query: \"network.record\", limit: 5 }); return hits.data.map(t => t.path);",
+        ],
+    );
+    assert_success(&output, "tack network capability");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("tack output should be JSON");
+    let paths = actual["data"]["result"].as_array().unwrap();
+
+    assert!(paths
+        .iter()
+        .any(|path| path.as_str() == Some("eoka.network.record.start")));
+}
+
+#[test]
+fn tack_rejects_unknown_capability() {
+    let session = format!("eoka-tack-bad-capability-test-{}", std::process::id());
+    let output = run(
+        &session,
+        &["tack", "--raw-json", "--capability", "nope", "return 1"],
+    );
+
+    assert!(!output.status.success());
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("error output should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(false));
+    assert_eq!(
+        actual["error_detail"]["code"],
+        serde_json::json!("invalid_input")
+    );
+}
+
 fn local_har_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
     let addr = listener.local_addr().expect("test server address");
@@ -326,6 +400,7 @@ fn network_record_exports_local_fetch_to_har() {
             "201",
             "--timeout",
             "5000",
+            "--include-existing",
         ],
     );
     assert_success(&wait, "network wait");

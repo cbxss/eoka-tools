@@ -6,7 +6,7 @@ mod response;
 pub use args::*;
 pub use io::{read_msg, write_msg};
 pub use metadata::{OperationCapability, OperationExposure, ToolManifestEntry};
-pub use response::Response;
+pub use response::{ErrorDetail, Response, ResponseMeta};
 
 use serde::{Deserialize, Serialize};
 

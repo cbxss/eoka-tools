@@ -1,12 +1,18 @@
-//! IPC client: connect to daemon, send command, receive response.
-
 use std::process::Command as StdCommand;
 use std::time::Duration;
 use tokio::net::UnixStream;
 
 use crate::launch_spec::LaunchSpec;
 use crate::session;
-use eoka_protocol::{read_msg, write_msg, Request, Response};
+use eoka_protocol::{
+    read_msg, write_msg, CaptchaInjectArgs, ClearFlagArgs, CloneFromArgs, ConsoleArgs,
+    DeleteCookieArgs, DomainArgs, EmulateArgs, FakeCameraArgs, FetchArgs, FillArgs, HeadersArgs,
+    IdArgs, InterceptAddArgs, KeyArgs, LoadStateArgs, ModeArgs, NetworkExportArgs, NetworkLogArgs,
+    NetworkRecordStartArgs, NetworkShowArgs, NetworkWaitArgs, ObserveArgs, OpenArgs, PathArgs,
+    PathStringArgs, Request, Response, ScreenshotArgs, ScriptArgs, SelectArgs, SetCookieArgs,
+    SetStorageArgs, SnapshotArgs, StorageArgs, TabIdArgs, TabNewArgs, TargetArgs, TextArgs,
+    WaitArgs, WasmFindArgs, WasmReadArgs, WasmWriteArgs,
+};
 
 #[derive(Debug, Clone)]
 pub struct EokaClient {
@@ -33,9 +39,278 @@ impl EokaClient {
     pub async fn call(&self, request: Request) -> anyhow::Result<Response> {
         send_command(&self.session_name, request, self.spec.clone()).await
     }
-}
 
-/// Connect to the daemon for a session. Auto-launches if needed.
+    pub async fn open(&self, args: OpenArgs) -> anyhow::Result<Response> {
+        self.call(Request::Open(args)).await
+    }
+
+    pub async fn back(&self) -> anyhow::Result<Response> {
+        self.call(Request::Back).await
+    }
+
+    pub async fn forward(&self) -> anyhow::Result<Response> {
+        self.call(Request::Forward).await
+    }
+
+    pub async fn reload(&self) -> anyhow::Result<Response> {
+        self.call(Request::Reload).await
+    }
+
+    pub async fn snapshot(&self, args: SnapshotArgs) -> anyhow::Result<Response> {
+        self.call(Request::Snapshot(args)).await
+    }
+
+    pub async fn observe(&self, args: ObserveArgs) -> anyhow::Result<Response> {
+        self.call(Request::Observe(args)).await
+    }
+
+    pub async fn screenshot(&self, args: ScreenshotArgs) -> anyhow::Result<Response> {
+        self.call(Request::Screenshot(args)).await
+    }
+
+    pub async fn emulate(&self, args: EmulateArgs) -> anyhow::Result<Response> {
+        self.call(Request::Emulate(args)).await
+    }
+
+    pub async fn info(&self) -> anyhow::Result<Response> {
+        self.call(Request::Info).await
+    }
+
+    pub async fn text(&self) -> anyhow::Result<Response> {
+        self.call(Request::Text).await
+    }
+
+    pub async fn find(&self, args: TextArgs) -> anyhow::Result<Response> {
+        self.call(Request::Find(args)).await
+    }
+
+    pub async fn click(&self, args: TargetArgs) -> anyhow::Result<Response> {
+        self.call(Request::Click(args)).await
+    }
+
+    pub async fn double_click(&self, args: TargetArgs) -> anyhow::Result<Response> {
+        self.call(Request::DblClick(args)).await
+    }
+
+    pub async fn fill(&self, args: FillArgs) -> anyhow::Result<Response> {
+        self.call(Request::Fill(args)).await
+    }
+
+    pub async fn select(&self, args: SelectArgs) -> anyhow::Result<Response> {
+        self.call(Request::Select(args)).await
+    }
+
+    pub async fn hover(&self, args: TargetArgs) -> anyhow::Result<Response> {
+        self.call(Request::Hover(args)).await
+    }
+
+    pub async fn key(&self, args: KeyArgs) -> anyhow::Result<Response> {
+        self.call(Request::Key(args)).await
+    }
+
+    pub async fn scroll(&self, args: TargetArgs) -> anyhow::Result<Response> {
+        self.call(Request::Scroll(args)).await
+    }
+
+    pub async fn eval(&self, args: ScriptArgs) -> anyhow::Result<Response> {
+        self.call(Request::Eval(args)).await
+    }
+
+    pub async fn exec(&self, args: ScriptArgs) -> anyhow::Result<Response> {
+        self.call(Request::Exec(args)).await
+    }
+
+    pub async fn fetch(&self, args: FetchArgs) -> anyhow::Result<Response> {
+        self.call(Request::Fetch(args)).await
+    }
+
+    pub async fn cookies(&self) -> anyhow::Result<Response> {
+        self.call(Request::Cookies).await
+    }
+
+    pub async fn set_cookie(&self, args: SetCookieArgs) -> anyhow::Result<Response> {
+        self.call(Request::SetCookie(args)).await
+    }
+
+    pub async fn delete_cookie(&self, args: DeleteCookieArgs) -> anyhow::Result<Response> {
+        self.call(Request::DeleteCookie(args)).await
+    }
+
+    pub async fn clear_cookies(&self) -> anyhow::Result<Response> {
+        self.call(Request::ClearCookies).await
+    }
+
+    pub async fn storage(&self, args: StorageArgs) -> anyhow::Result<Response> {
+        self.call(Request::Storage(args)).await
+    }
+
+    pub async fn set_storage(&self, args: SetStorageArgs) -> anyhow::Result<Response> {
+        self.call(Request::SetStorage(args)).await
+    }
+
+    pub async fn dump_storage(&self) -> anyhow::Result<Response> {
+        self.call(Request::DumpStorage).await
+    }
+
+    pub async fn save_state(&self, args: PathArgs) -> anyhow::Result<Response> {
+        self.call(Request::SaveState(args)).await
+    }
+
+    pub async fn load_state(&self, args: LoadStateArgs) -> anyhow::Result<Response> {
+        self.call(Request::LoadState(args)).await
+    }
+
+    pub async fn headers(&self, args: HeadersArgs) -> anyhow::Result<Response> {
+        self.call(Request::Headers(args)).await
+    }
+
+    pub async fn console(&self, args: ConsoleArgs) -> anyhow::Result<Response> {
+        self.call(Request::Console(args)).await
+    }
+
+    pub async fn errors(&self, args: ClearFlagArgs) -> anyhow::Result<Response> {
+        self.call(Request::Errors(args)).await
+    }
+
+    pub async fn tab_list(&self) -> anyhow::Result<Response> {
+        self.call(Request::TabList).await
+    }
+
+    pub async fn tab_new(&self, args: TabNewArgs) -> anyhow::Result<Response> {
+        self.call(Request::TabNew(args)).await
+    }
+
+    pub async fn tab_switch(&self, args: TabIdArgs) -> anyhow::Result<Response> {
+        self.call(Request::TabSwitch(args)).await
+    }
+
+    pub async fn tab_close(&self, args: TabIdArgs) -> anyhow::Result<Response> {
+        self.call(Request::TabClose(args)).await
+    }
+
+    pub async fn tab_attach(&self, args: TabIdArgs) -> anyhow::Result<Response> {
+        self.call(Request::TabAttach(args)).await
+    }
+
+    pub async fn clone_from(&self, args: CloneFromArgs) -> anyhow::Result<Response> {
+        self.call(Request::CloneFrom(args)).await
+    }
+
+    pub async fn wait(&self, args: WaitArgs) -> anyhow::Result<Response> {
+        self.call(Request::Wait(args)).await
+    }
+
+    pub async fn spa_info(&self) -> anyhow::Result<Response> {
+        self.call(Request::SpaInfo).await
+    }
+
+    pub async fn spa_navigate(&self, args: PathStringArgs) -> anyhow::Result<Response> {
+        self.call(Request::SpaNavigate(args)).await
+    }
+
+    pub async fn fake_camera(&self, args: FakeCameraArgs) -> anyhow::Result<Response> {
+        self.call(Request::FakeCamera(args)).await
+    }
+
+    pub async fn wasm_info(&self) -> anyhow::Result<Response> {
+        self.call(Request::WasmInfo).await
+    }
+
+    pub async fn wasm_read(&self, args: WasmReadArgs) -> anyhow::Result<Response> {
+        self.call(Request::WasmRead(args)).await
+    }
+
+    pub async fn wasm_write(&self, args: WasmWriteArgs) -> anyhow::Result<Response> {
+        self.call(Request::WasmWrite(args)).await
+    }
+
+    pub async fn wasm_find(&self, args: WasmFindArgs) -> anyhow::Result<Response> {
+        self.call(Request::WasmFind(args)).await
+    }
+
+    pub async fn intercept_add(&self, args: InterceptAddArgs) -> anyhow::Result<Response> {
+        self.call(Request::InterceptAdd(args)).await
+    }
+
+    pub async fn intercept_list(&self) -> anyhow::Result<Response> {
+        self.call(Request::InterceptList).await
+    }
+
+    pub async fn intercept_remove(&self, args: IdArgs) -> anyhow::Result<Response> {
+        self.call(Request::InterceptRemove(args)).await
+    }
+
+    pub async fn intercept_log(&self, args: ClearFlagArgs) -> anyhow::Result<Response> {
+        self.call(Request::InterceptLog(args)).await
+    }
+
+    pub async fn network_record_start(
+        &self,
+        args: NetworkRecordStartArgs,
+    ) -> anyhow::Result<Response> {
+        self.call(Request::NetworkRecordStart(args)).await
+    }
+
+    pub async fn network_record_stop(&self) -> anyhow::Result<Response> {
+        self.call(Request::NetworkRecordStop).await
+    }
+
+    pub async fn network_record_status(&self) -> anyhow::Result<Response> {
+        self.call(Request::NetworkRecordStatus).await
+    }
+
+    pub async fn network_log(&self, args: NetworkLogArgs) -> anyhow::Result<Response> {
+        self.call(Request::NetworkLog(args)).await
+    }
+
+    pub async fn network_show(&self, args: NetworkShowArgs) -> anyhow::Result<Response> {
+        self.call(Request::NetworkShow(args)).await
+    }
+
+    pub async fn network_wait(&self, args: NetworkWaitArgs) -> anyhow::Result<Response> {
+        self.call(Request::NetworkWait(args)).await
+    }
+
+    pub async fn network_export(&self, args: NetworkExportArgs) -> anyhow::Result<Response> {
+        self.call(Request::NetworkExport(args)).await
+    }
+
+    pub async fn network_clear(&self) -> anyhow::Result<Response> {
+        self.call(Request::NetworkClear).await
+    }
+
+    pub async fn js_mode(&self, args: ModeArgs) -> anyhow::Result<Response> {
+        self.call(Request::JsMode(args)).await
+    }
+
+    pub async fn js_allow(&self, args: DomainArgs) -> anyhow::Result<Response> {
+        self.call(Request::JsAllow(args)).await
+    }
+
+    pub async fn js_block(&self, args: DomainArgs) -> anyhow::Result<Response> {
+        self.call(Request::JsBlock(args)).await
+    }
+
+    pub async fn js_remove(&self, args: DomainArgs) -> anyhow::Result<Response> {
+        self.call(Request::JsRemove(args)).await
+    }
+
+    pub async fn js_list(&self) -> anyhow::Result<Response> {
+        self.call(Request::JsList).await
+    }
+
+    pub async fn close(&self) -> anyhow::Result<Response> {
+        self.call(Request::Close).await
+    }
+
+    pub async fn shutdown(&self) -> anyhow::Result<Response> {
+        self.call(Request::Shutdown).await
+    }
+
+    pub async fn captcha_inject(&self, args: CaptchaInjectArgs) -> anyhow::Result<Response> {
+        self.call(Request::CaptchaInject(args)).await
+    }
+}
 pub async fn send_command(
     session_name: &str,
     request: Request,
@@ -56,8 +331,6 @@ pub async fn send_command(
     let response: Response = read_msg(&mut reader).await?;
     Ok(response)
 }
-
-/// Wait for daemon socket to appear (up to 5s).
 async fn wait_for_socket(session_name: &str) -> anyhow::Result<UnixStream> {
     let sock = session::socket_path(session_name);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -74,8 +347,6 @@ async fn wait_for_socket(session_name: &str) -> anyhow::Result<UnixStream> {
         }
     }
 }
-
-/// Spawn daemon as a background process.
 fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
     session::ensure_runtime_dir()?;
 
@@ -106,9 +377,6 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             if *no_stealth {
                 cmd.arg("--no-stealth");
             }
-            // Already resolved (literal value or the one line picked from
-            // --proxy-file) — forward as --proxy so the daemon subprocess
-            // doesn't re-resolve --proxy-file and pick a different line.
             if let Some(p) = proxy {
                 cmd.arg("--proxy").arg(p);
             }
@@ -148,30 +416,18 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
     );
     Ok(())
 }
-
-/// Check if daemon is running for a session using the socket file.
 pub fn is_daemon_running(session_name: &str) -> bool {
     let sock = session::socket_path(session_name);
-    // Try a synchronous connect to the socket; if it succeeds, the daemon is alive
     std::os::unix::net::UnixStream::connect(&sock).is_ok()
 }
-
-/// Kill daemon for a session by sending shutdown command, falling back to SIGTERM.
 pub fn kill_daemon(session_name: &str) -> anyhow::Result<bool> {
     let sock = session::socket_path(session_name);
-
-    // Try graceful shutdown via the protocol
     if let Ok(stream) = std::os::unix::net::UnixStream::connect(&sock) {
-        // We can't easily do length-prefixed IO synchronously, so just drop and
-        // fall through to PID-based kill. The daemon will clean up on disconnect.
         drop(stream);
     }
-
-    // PID-based kill as fallback
     let pid_path = session::pid_path(session_name);
     let killed = if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            // Use `kill` command instead of unsafe libc
             StdCommand::new("kill")
                 .arg(pid.to_string())
                 .output()
@@ -183,9 +439,61 @@ pub fn kill_daemon(session_name: &str) -> anyhow::Result<bool> {
     } else {
         false
     };
-
-    // Clean up stale files
     let _ = std::fs::remove_file(&sock);
     let _ = std::fs::remove_file(&pid_path);
     Ok(killed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    fn test_client(session: &str) -> EokaClient {
+        EokaClient::new(
+            session,
+            LaunchSpec::Launch {
+                headless: true,
+                from_profile: None,
+                clone_state_from: None,
+                no_stealth: false,
+                proxy: None,
+                no_js: false,
+                js_allow: Vec::new(),
+                js_block: Vec::new(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn typed_open_helper_sends_protocol_request() {
+        let session = format!("eoka-sdk-helper-test-{}", std::process::id());
+        session::ensure_runtime_dir().unwrap();
+        let sock = session::socket_path(&session);
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, mut writer) = stream.into_split();
+            let request: Request = read_msg(&mut reader).await.unwrap();
+            assert_eq!(request.cmd(), "open");
+            assert_eq!(request.args_json()["url"], "https://example.com");
+            write_msg(&mut writer, &Response::ok_text("ok"))
+                .await
+                .unwrap();
+        });
+
+        let response = test_client(&session)
+            .open(OpenArgs {
+                url: "https://example.com".to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(response.ok);
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
 }

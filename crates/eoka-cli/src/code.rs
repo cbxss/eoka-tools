@@ -5,7 +5,7 @@ use tack_runtime_quickjs::QuickJsRuntime;
 use tokio::io::AsyncReadExt;
 
 use eoka_sdk::EokaClient;
-use eoka_tack::EokaToolSet;
+use eoka_tack::{EokaToolFilter, EokaToolSet};
 
 use crate::launch_spec::LaunchSpec;
 use crate::protocol::Response;
@@ -17,6 +17,7 @@ pub async fn run_code_command(
     file: Option<&Path>,
     timeout_ms: Option<u64>,
     raw_json: bool,
+    filter: EokaToolFilter,
 ) -> Result<Response, String> {
     let source = resolve_source(inline_code, file).await?;
     let mut limits = RuntimeLimits::default();
@@ -25,6 +26,7 @@ pub async fn run_code_command(
     }
     let client = EokaClient::new(session_name, spec);
     let catalog = EokaToolSet::new(client)
+        .with_filter(filter)
         .catalog("eoka")
         .map_err(|error| error.to_string())?;
     let engine = ExecutionEngine::from_catalog(catalog, QuickJsRuntime).with_limits(limits);

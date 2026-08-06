@@ -27,6 +27,8 @@ pub struct ObserveArgs {
     pub filter: Option<String>,
     #[schemars(description = "Maximum elements to return.")]
     pub max: Option<usize>,
+    #[serde(default)]
+    pub structured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]

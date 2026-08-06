@@ -414,6 +414,8 @@ mod tests {
             input_type: None,
             selector: format!("[data-idx=\"{}\"]", index),
             checked: false,
+            disabled: false,
+            visible: true,
             value: None,
             bbox: eoka_server::eoka::BoundingBox {
                 x: 0.0,

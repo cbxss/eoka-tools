@@ -2,8 +2,6 @@
     const INTERACTIVE = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [onclick], [contenteditable="true"]';
     const results = [];
     const seen = new Set();
-
-    // Helper: find associated label for a form element
     function getLabel(el) {
         if (el.id) {
             const label = document.querySelector('label[for=' + JSON.stringify(el.id) + ']');
@@ -26,7 +24,6 @@
         return '';
     }
 
-    // Collect elements from a root (document or shadowRoot)
     function collect(root) {
         const all = root.querySelectorAll('*');
         for (const node of all) {
@@ -41,8 +38,6 @@
 
         const style = getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) return;
-
-        // Viewport filtering
         if (typeof __eoka_viewport_only !== 'undefined' && __eoka_viewport_only) {
             if (rect.bottom < 0 || rect.top > window.innerHeight) return;
             if (rect.right < 0 || rect.left > window.innerWidth) return;
@@ -51,8 +46,6 @@
         const tag = el.tagName.toLowerCase();
         const isFormEl = tag === 'input' || tag === 'select' || tag === 'textarea';
         const inputType = el.getAttribute('type') || '';
-
-        // Get meaningful text
         let text = el.getAttribute('aria-label') || '';
         if (!text) {
             if (tag === 'a' || tag === 'button') {
@@ -63,7 +56,6 @@
                 if (label) {
                     text = label;
                 } else if (tag === 'select') {
-                    // Show selected option text
                     const opt = el.options && el.options[el.selectedIndex];
                     text = opt ? opt.text : '';
                 }
@@ -79,15 +71,11 @@
         if (!text && !placeholder && !ariaLabel && !title && !isFormEl) {
             return;
         }
-
-        // Skip redundant nested wrappers
         if ((tag === 'a' || tag === 'button') && el.children.length === 1) {
             const child = el.children[0];
             const childTag = child.tagName.toLowerCase();
             if (childTag === 'button' || childTag === 'input') return;
         }
-
-        // Build unique selector
         let selector;
         if (el.id) {
             selector = '#' + CSS.escape(el.id);
@@ -127,8 +115,6 @@
 
         if (seen.has(selector)) return;
         seen.add(selector);
-
-        // Get current value for form elements
         let value = '';
         if (isFormEl && inputType !== 'password') {
             if (tag === 'select') {
@@ -148,6 +134,7 @@
             input_type: tag === 'input' ? (inputType || 'text') : (tag === 'select' ? 'select' : null),
             selector,
             checked: !!el.checked,
+            disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
             value,
             x: Math.round(rect.x),
             y: Math.round(rect.y),
