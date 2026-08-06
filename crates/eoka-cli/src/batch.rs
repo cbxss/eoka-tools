@@ -1,5 +1,3 @@
-//! `eoka batch` — run a sequence of commands from JSON (argv, file, or stdin).
-
 use std::io::Read;
 
 use serde_json::{json, Value};
@@ -46,7 +44,10 @@ pub(crate) async fn run_batch(
     Ok(Response {
         ok: all_ok,
         data: Some(data),
-        error: first_error,
+        error: first_error.clone(),
+        error_detail: first_error
+            .map(|message| eoka_protocol::ErrorDetail::new("batch_error", message)),
+        meta: None,
     })
 }
 

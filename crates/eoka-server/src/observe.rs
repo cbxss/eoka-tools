@@ -12,6 +12,8 @@ struct RawElement {
     input_type: Option<String>,
     selector: String,
     checked: bool,
+    #[serde(default)]
+    disabled: bool,
     value: String,
     x: f64,
     y: f64,
@@ -46,6 +48,8 @@ pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<Interactive
                 input_type: r.input_type,
                 selector: r.selector,
                 checked: r.checked,
+                disabled: r.disabled,
+                visible: true,
                 value: if r.value.is_empty() {
                     None
                 } else {

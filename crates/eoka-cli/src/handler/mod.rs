@@ -276,9 +276,6 @@ impl Handler {
         let bypass_csp = args["bypass_csp"].as_bool().unwrap_or(false);
         let inject_js = args["inject_js"].as_str();
         let script_enabled = self.script_policy.is_active().then(|| {
-            // No host (data:, about:blank, ...) can't match any allow/block
-            // entry, so this falls through to the mode's own default —
-            // never silently allows JS under block-all.
             let host = url::Url::parse(&url)
                 .ok()
                 .and_then(|parsed| parsed.host_str().map(str::to_owned));
@@ -434,9 +431,6 @@ impl Handler {
 
     async fn cmd_reload(&mut self) -> Result<Response, String> {
         let page = self.require_tab()?.page.clone();
-        // Re-resolve the script policy against the current URL before
-        // reloading, so a policy change (e.g. `eoka js allow`) since the
-        // last navigation takes effect without a full re-open.
         let script_enabled = if self.script_policy.is_active() {
             let current_url = page.url().await.map_err(|e| e.to_string())?;
             let host = url::Url::parse(&current_url)
@@ -493,6 +487,7 @@ impl Handler {
             .as_u64()
             .map(|v| v as usize)
             .unwrap_or(usize::MAX);
+        let structured = args["structured"].as_bool().unwrap_or(false);
 
         if let Some(f) = filter {
             if !matches!(f, "inputs" | "buttons" | "all") {
@@ -520,15 +515,48 @@ impl Handler {
             }
             _ => |_| true,
         };
+        let elements: Vec<&eoka_server::InteractiveElement> =
+            tab.elements.iter().filter(filter_fn).take(max).collect();
         let mut list = String::new();
-        for el in tab.elements.iter().filter(filter_fn).take(max) {
+        for el in &elements {
             let _ = writeln!(list, "{}", el);
         }
-        Ok(Response::ok_text(if list.is_empty() {
+        let text = if list.is_empty() {
             "No interactive elements found.".into()
         } else {
             list
-        }))
+        };
+        if !structured {
+            return Ok(Response::ok_text(text));
+        }
+        let elements_json: Vec<serde_json::Value> = elements
+            .into_iter()
+            .map(|el| {
+                serde_json::json!({
+                    "index": el.index,
+                    "selector": &el.selector,
+                    "text": &el.text,
+                    "role": &el.role,
+                    "tag": &el.tag,
+                    "visible": el.visible,
+                    "disabled": el.disabled,
+                    "checked": el.checked,
+                    "placeholder": &el.placeholder,
+                    "input_type": &el.input_type,
+                    "value": &el.value,
+                    "bbox": {
+                        "x": el.bbox.x,
+                        "y": el.bbox.y,
+                        "width": el.bbox.width,
+                        "height": el.bbox.height,
+                    }
+                })
+            })
+            .collect();
+        Ok(Response::ok(serde_json::json!({
+            "text": text,
+            "elements": elements_json,
+        })))
     }
 
     async fn cmd_screenshot(&mut self, args: &Value) -> Result<Response, String> {
@@ -1119,10 +1147,6 @@ impl Handler {
         };
         let parsed = eval_json_or_string(&tab.page, &js).await?;
         if clear {
-            // `x = []` evaluates to the array, not a string, so this
-            // routinely fails to deserialize as String even though the
-            // clear itself succeeded — best-effort by design, not a real
-            // failure to surface.
             let _: String = tab
                 .page
                 .evaluate_sync("__eoka_console = []")
@@ -1389,11 +1413,6 @@ impl Handler {
             )
             .await
             .map_err(|e| e.to_string())?;
-
-        // fake_camera.js is a side-effecting IIFE with no return value, so
-        // evaluate_sync::<String> routinely "fails" to deserialize a String
-        // even when the injection succeeded. addScriptToEvaluateOnNewDocument
-        // above is what needs to succeed; this just seeds the current page too.
         let _: String = tab.page.evaluate_sync(&js).await.unwrap_or_default();
 
         let _ = tab
@@ -1862,15 +1881,10 @@ impl Handler {
         Ok(Response::ok_text("Browser closed"))
     }
 }
-
-/// Evaluate `js` and parse its string result as JSON, falling back to a JSON
-/// string value if the result isn't valid JSON (e.g. a raw storage value).
 async fn eval_json_or_string(page: &eoka::Page, js: &str) -> Result<Value, String> {
     let result: String = page.evaluate_sync(js).await.map_err(|e| e.to_string())?;
     Ok(serde_json::from_str(&result).unwrap_or(Value::String(result)))
 }
-
-/// Current URL and title of a tab, for tab-switching command responses.
 async fn tab_summary(tab: &TabState) -> Result<(String, String), String> {
     let url = tab.page.url().await.map_err(|e| e.to_string())?;
     let title = title_nonblocking(&tab.page).await;

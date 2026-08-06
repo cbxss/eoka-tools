@@ -20,7 +20,7 @@ fn parse_headers_json(raw: &str) -> serde_json::Value {
     }
 }
 
-pub(crate) fn command_to_request(cmd: &Command) -> Request {
+pub(crate) fn command_to_request(cmd: &Command, agent_mode: bool) -> Request {
     match cmd {
         Command::Open {
             url,
@@ -46,9 +46,14 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
             interactive: *interactive,
             all: *all,
         }),
-        Command::Observe { filter, max } => Request::Observe(ObserveArgs {
+        Command::Observe {
+            filter,
+            max,
+            structured,
+        } => Request::Observe(ObserveArgs {
             filter: filter.clone(),
             max: *max,
+            structured: *structured || agent_mode,
         }),
         Command::Screenshot { output, annotate } => Request::Screenshot(ScreenshotArgs {
             output: output
@@ -290,6 +295,7 @@ pub(crate) fn command_to_request(cmd: &Command) -> Request {
         }
         | Command::Sessions
         | Command::Status
+        | Command::Doctor
         | Command::Kill
         | Command::CdpUrl { .. }
         | Command::Batch { .. } => {
@@ -311,7 +317,7 @@ mod tests {
 
     fn assert_command_maps_to_cataloged_operation(args: &[&str]) {
         let (_cli, command) = parsed_command(args);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
         assert!(
             operation_by_cmd(request.cmd()).is_some(),
             "command {:?} mapped to uncataloged protocol command {}",
@@ -323,7 +329,7 @@ mod tests {
     #[test]
     fn click_accepts_bracketed_observe_target_at_cli_layer() {
         let (_cli, command) = parsed_command(&["eoka", "click", "[38]"]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "click");
         assert_eq!(request.args_json()["target"], "[38]");
@@ -339,7 +345,7 @@ mod tests {
             "--max-body",
             "16",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "fetch");
         assert_eq!(request.args_json()["body_only"], true);
@@ -355,11 +361,20 @@ mod tests {
             "--load-state",
             "auth.json",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "open");
         assert_eq!(request.args_json()["url"], "/camping/campsites/71576");
         assert_eq!(request.args_json()["load_state"], "auth.json");
+    }
+
+    #[test]
+    fn agent_mode_requests_structured_observe() {
+        let (_cli, command) = parsed_command(&["eoka", "observe"]);
+        let request = command_to_request(&command, true);
+
+        assert_eq!(request.cmd(), "observe");
+        assert_eq!(request.args_json()["structured"], true);
     }
 
     #[test]
@@ -376,7 +391,7 @@ mod tests {
             "--click-after",
             "text:Continue Booking",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "captcha_inject");
         assert_eq!(request.args_json()["token"], "token-123");
@@ -389,7 +404,7 @@ mod tests {
     fn network_intercept_subcommand_accepts_trailing_json_flag() {
         let (cli, command) =
             parsed_command(&["eoka", "network", "intercept", "add", "*api*", "--json"]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert!(cli.json);
         assert_eq!(request.cmd(), "intercept_add");
@@ -407,7 +422,7 @@ mod tests {
             "*/api/*",
             "--clear",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "network_record_start");
         assert_eq!(request.args_json()["patterns"], json!(["*/api/*"]));
@@ -427,7 +442,7 @@ mod tests {
             "--timeout",
             "5000",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "network_wait");
         assert_eq!(request.args_json()["pattern"], "*/api/*");
@@ -446,7 +461,7 @@ mod tests {
             "--format",
             "json",
         ]);
-        let request = command_to_request(&command);
+        let request = command_to_request(&command, false);
 
         assert_eq!(request.cmd(), "network_export");
         assert_eq!(request.args_json()["format"], "json");

@@ -52,6 +52,25 @@ impl OperationCapability {
             Self::Lifecycle => "lifecycle",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "navigation" => Some(Self::Navigation),
+            "observation" => Some(Self::Observation),
+            "interaction" => Some(Self::Interaction),
+            "javascript" => Some(Self::JavaScript),
+            "browser-state" | "browser_state" => Some(Self::BrowserState),
+            "tabs" => Some(Self::Tabs),
+            "spa" => Some(Self::Spa),
+            "wasm" => Some(Self::Wasm),
+            "network" => Some(Self::Network),
+            "policy" => Some(Self::Policy),
+            "media" => Some(Self::Media),
+            "captcha" => Some(Self::Captcha),
+            "lifecycle" => Some(Self::Lifecycle),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

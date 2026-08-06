@@ -20,6 +20,8 @@ pub struct InteractiveElement {
     pub input_type: Option<String>,
     pub selector: String,
     pub checked: bool,
+    pub disabled: bool,
+    pub visible: bool,
     pub value: Option<String>,
     pub bbox: BoundingBox,
     pub fingerprint: u64,
@@ -596,6 +598,8 @@ mod tests {
             value: value.map(|s| s.to_string()),
             checked,
             selector,
+            disabled: false,
+            visible: true,
             bbox: BoundingBox {
                 x: 0.0,
                 y: 0.0,
