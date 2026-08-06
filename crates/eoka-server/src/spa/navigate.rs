@@ -1,4 +1,4 @@
-use eoka_server::eoka::{Page, Result};
+use crate::eoka::{Page, Result};
 
 use super::RouterType;
 
@@ -21,7 +21,7 @@ pub async fn spa_navigate(page: &Page, router_type: &RouterType, path: &str) -> 
         RouterType::VueRouter => "vue-router",
         RouterType::AngularRouter => "angular-router",
         RouterType::HistoryApi => "history-api",
-        RouterType::Unknown => "history-api", // Fallback
+        RouterType::Unknown => "history-api",
     };
 
     let js = format!(
@@ -33,14 +33,14 @@ pub async fn spa_navigate(page: &Page, router_type: &RouterType, path: &str) -> 
 
     let json: String = page.evaluate(&js).await?;
     let result: NavResult = serde_json::from_str(&json).map_err(|e| {
-        eoka_server::eoka::Error::cdp_msg(format!("Failed to parse navigation result: {}", e))
+        crate::eoka::Error::cdp_msg(format!("Failed to parse navigation result: {}", e))
     })?;
 
     if result.success {
         page.wait(100).await;
         Ok(result.new_path.unwrap_or_else(|| path.to_string()))
     } else {
-        Err(eoka_server::eoka::Error::cdp_msg(format!(
+        Err(crate::eoka::Error::cdp_msg(format!(
             "SPA navigation failed: {}",
             result.error.unwrap_or_else(|| "unknown error".into())
         )))
@@ -52,14 +52,14 @@ pub async fn history_go(page: &Page, delta: i32) -> Result<()> {
 
     let json: String = page.evaluate(&js).await?;
     let result: NavResult = serde_json::from_str(&json).map_err(|e| {
-        eoka_server::eoka::Error::cdp_msg(format!("Failed to parse history result: {}", e))
+        crate::eoka::Error::cdp_msg(format!("Failed to parse history result: {}", e))
     })?;
 
     if result.success {
         page.wait(200).await;
         Ok(())
     } else {
-        Err(eoka_server::eoka::Error::cdp_msg(format!(
+        Err(crate::eoka::Error::cdp_msg(format!(
             "History navigation failed: {}",
             result.error.unwrap_or_else(|| "unknown error".into())
         )))

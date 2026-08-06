@@ -1,4 +1,4 @@
-use eoka_server::eoka::{Page, Result};
+use crate::eoka::{Page, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ const DETECT_JS: &str = include_str!("../js/spa_detect.js");
 pub async fn detect_router(page: &Page) -> Result<SpaRouterInfo> {
     let json: String = page.evaluate(DETECT_JS).await?;
     let raw: JsDetectionResult = serde_json::from_str(&json).map_err(|e| {
-        eoka_server::eoka::Error::cdp_msg(format!("Failed to parse router detection: {}", e))
+        crate::eoka::Error::cdp_msg(format!("Failed to parse router detection: {}", e))
     })?;
 
     let router_type = match raw.router_type.as_str() {

@@ -1,6 +1,6 @@
-use eoka_mcp::Session;
+use eoka_server::Session;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> eoka_server::eoka::Result<()> {
     let mut agent = Session::launch().await?;
 
@@ -13,7 +13,7 @@ async fn main() -> eoka_server::eoka::Result<()> {
     std::fs::write("demo_form.png", &png)?;
     println!("Saved demo_form.png");
 
-    agent.observe().await?; // re-observe after screenshot cleared elements
+    agent.observe().await?;
     agent.fill(0, "Agent Smith").await?;
     agent.observe().await?;
     agent.fill(1, "555-0123").await?;
@@ -21,10 +21,10 @@ async fn main() -> eoka_server::eoka::Result<()> {
     agent.fill(2, "agent@example.com").await?;
 
     agent.observe().await?;
-    agent.click(4).await?; // Medium
+    agent.click(4).await?;
 
     agent.observe().await?;
-    agent.click(6).await?; // Bacon
+    agent.click(6).await?;
 
     agent.observe().await?;
     agent.submit(12).await?;

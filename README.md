@@ -6,9 +6,9 @@ Companion tools for [eoka](https://github.com/shrimp-software/eoka), the low-lev
 
 | Component | Purpose |
 |---|---|
-| [**eoka-mcp**](crates/eoka-mcp) | Stdio MCP server and Rust `Session` API with observe/act browser tools |
+| [**eoka-mcp**](crates/eoka-mcp) | Stdio MCP server for browser tools |
 | [**eoka-cli**](crates/eoka-cli) | Interactive shell CLI for browser automation and debugging |
-| [**eoka-server**](crates/eoka-server) | Shared browser runtime used by eoka-mcp and the [Go client](clients/go) |
+| [**eoka-server**](crates/eoka-server) | Shared browser runtime, `Session` API, and browser helper primitives |
 | [**eoka-protocol**](crates/eoka-protocol) | Shared daemon protocol types and tool catalog metadata |
 | [**eoka-sdk**](crates/eoka-sdk) | Rust SDK for typed Eoka browser sessions |
 | [**eoka-tack**](crates/eoka-tack) | Tack `ToolSet` adapter generated from the Eoka protocol catalog |
@@ -21,6 +21,8 @@ Companion tools for [eoka](https://github.com/shrimp-software/eoka), the low-lev
 
 - Use `eoka-mcp` when an MCP client needs browser tools.
 - Use `eoka-cli` for interactive exploration and debugging.
+- Use `eoka tack` when an agent needs Tack TypeScript execution
+  against the active browser session.
 - Use `eoka-runner` for versioned, repeatable YAML workflows.
 - Use the Go client and `eoka-server` when embedding browser automation in a Go service.
 
@@ -31,12 +33,12 @@ cargo install eoka-mcp
 claude mcp add eoka -- eoka-mcp
 ```
 
-The MCP server communicates over standard input and output. It supports MCP `2026-07-28` through stateless `server/discover` requests while retaining compatibility with legacy stdio clients. It creates and closes its browser through the shared eoka-server runtime for the lifetime of the MCP connection.
+The MCP server communicates over standard input and output. It supports MCP `2026-07-28` through stateless `server/discover` requests. It creates and closes its browser through the shared eoka-server runtime for the lifetime of the MCP connection.
 
 ## Rust session API
 
 ```rust
-use eoka_mcp::Session;
+use eoka_server::Session;
 
 let mut session = Session::launch().await?;
 session.goto("https://example.com").await?;
@@ -74,22 +76,41 @@ The client starts `eoka-server` and can download a verified prebuilt server bina
 ## Development
 
 ```sh
-cargo test --workspace
+mise run conformance
+mise run release-check
 cd clients/go && go test ./...
 ```
 
-Before Tack `0.0.2` is published, local checks for the Tack integration can use
-the sibling checkout explicitly:
+Without mise:
+
+```sh
+cargo test --workspace
+bash scripts/release-check.sh
+```
+
+Use the local Tack override when testing unpublished Tack changes from a sibling
+checkout:
 
 ```sh
 bash scripts/release-check.sh --with-local-tack
 ```
 
-After Tack `0.0.2` is available in crates.io, run the release check without the
-local override:
+Install the local CLI from this checkout:
 
 ```sh
-bash scripts/release-check.sh
+mise run install-cli
+```
+
+Inspect the generated protocol-backed tool catalog:
+
+```sh
+eoka tools manifest --json
+```
+
+Run Tack TypeScript against the active browser session:
+
+```sh
+eoka tack 'return await tools.invoke({ path: "eoka.info", input: {} });'
 ```
 
 ## Documentation

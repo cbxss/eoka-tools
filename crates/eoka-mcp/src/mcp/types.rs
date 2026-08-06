@@ -241,7 +241,12 @@ pub struct LoadStateRequest {
 
 #[cfg(test)]
 mod tests {
-    use eoka_protocol::operation_by_cmd;
+    use eoka_protocol::{input_schema_for_cmd, operation_by_cmd};
+
+    use super::{
+        FillRequest, NewTabRequest, ObserveRequest, SaveStateRequest, SelectRequest,
+        SpaNavigateRequest, TabIdRequest, TargetRequest, TypeKeyRequest,
+    };
 
     #[test]
     fn shared_mcp_protocol_operations_are_cataloged() {
@@ -266,5 +271,45 @@ mod tests {
                 "MCP shared request type is not represented in protocol catalog: {command}"
             );
         }
+    }
+
+    #[test]
+    fn shared_mcp_protocol_request_schemas_match_catalog() {
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(TargetRequest)).unwrap(),
+            input_schema_for_cmd("click")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(FillRequest)).unwrap(),
+            input_schema_for_cmd("fill")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(SelectRequest)).unwrap(),
+            input_schema_for_cmd("select")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(TypeKeyRequest)).unwrap(),
+            input_schema_for_cmd("key")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(NewTabRequest)).unwrap(),
+            input_schema_for_cmd("tab_new")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(TabIdRequest)).unwrap(),
+            input_schema_for_cmd("tab_switch")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(SpaNavigateRequest)).unwrap(),
+            input_schema_for_cmd("spa_navigate")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(ObserveRequest)).unwrap(),
+            input_schema_for_cmd("observe")
+        );
+        assert_eq!(
+            serde_json::to_value(schemars::schema_for!(SaveStateRequest)).unwrap(),
+            input_schema_for_cmd("save_state")
+        );
     }
 }

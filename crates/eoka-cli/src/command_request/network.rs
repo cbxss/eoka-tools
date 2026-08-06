@@ -43,9 +43,6 @@ pub(super) fn network_action_to_request(action: &NetworkAction) -> Request {
             body: *body,
             max_body: *max_body,
         }),
-        NetworkAction::SaveHar { path, settle_ms } => {
-            network_save_har_request(path, "har", *settle_ms)
-        }
         NetworkAction::Har { path, settle_ms } => network_export_request(path, "har", *settle_ms),
         NetworkAction::Export {
             path,
@@ -74,10 +71,6 @@ pub(super) fn network_action_to_request(action: &NetworkAction) -> Request {
 
 fn network_export_request(path: &Path, format: &str, settle_ms: Option<u64>) -> Request {
     Request::NetworkExport(network_export_args(path, format, settle_ms))
-}
-
-fn network_save_har_request(path: &Path, format: &str, settle_ms: Option<u64>) -> Request {
-    Request::NetworkSaveHar(network_export_args(path, format, settle_ms))
 }
 
 fn network_export_args(path: &Path, format: &str, settle_ms: Option<u64>) -> NetworkExportArgs {

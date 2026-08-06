@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eoka_mcp::{InteractiveElement, ObserveConfig};
 use eoka_server::eoka::{Browser, Page, TabInfo};
 use eoka_server::{dispatch::dispatch, state::AppState};
+use eoka_server::{InteractiveElement, ObserveConfig};
 use serde_json::json;
 
 pub(crate) struct TabState {

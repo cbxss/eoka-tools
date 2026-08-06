@@ -1,0 +1,41 @@
+[tasks.fmt]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.check]
+description = "Check all workspace crates"
+run = "cargo check --workspace --all-features"
+
+[tasks.test]
+description = "Run all workspace tests"
+run = "cargo test --workspace --all-features"
+
+[tasks.clippy]
+description = "Lint all workspace targets"
+run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks.conformance]
+description = "Run protocol projection conformance tests"
+run = [
+  "cargo test -p eoka-protocol operation_catalog",
+  "cargo test -p eoka-protocol manifest_uses_catalog_metadata_and_schemas",
+  "cargo test -p eoka-protocol shared_mcp_inputs_keep_schema_descriptions",
+  "cargo test -p eoka-tack default_descriptors_match_protocol_manifest_projection",
+  "cargo test -p eoka-mcp shared_mcp_protocol_operations_are_cataloged",
+  "cargo test -p eoka-mcp shared_mcp_protocol_request_schemas_match_catalog",
+  "! cargo tree -p eoka-cli -e normal --depth 1 | grep -q 'eoka-mcp'",
+  "cargo test -p eoka-cli tools_manifest_matches_protocol_catalog",
+  "cargo test -p eoka-cli tack_executes_without_browser_tools",
+]
+
+[tasks.release-check]
+description = "Run the full release check"
+run = "bash scripts/release-check.sh"
+
+[tasks.release-check-local-tack]
+description = "Run the full release check with a local tack-rs override"
+run = "bash scripts/release-check.sh --with-local-tack"
+
+[tasks.install-cli]
+description = "Install the local eoka CLI"
+run = "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target} cargo install --path crates/eoka-cli --force"

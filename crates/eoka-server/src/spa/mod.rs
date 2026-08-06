@@ -1,14 +1,3 @@
-//! SPA router detection and manipulation.
-//!
-//! This module provides tools for detecting and navigating Single Page Applications
-//! without requiring page reloads. It supports:
-//!
-//! - React Router (v5 and v6)
-//! - Next.js (App Router and Pages Router)
-//! - Vue Router
-//! - Remix
-//! - History API fallback (works with any SPA)
-
 mod detect;
 mod navigate;
 
@@ -18,21 +7,14 @@ pub use navigate::{history_go, spa_navigate};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Detected SPA router type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RouterType {
-    /// React Router v6 or Remix
     ReactRouter,
-    /// Next.js (App or Pages router)
     NextJs,
-    /// Vue Router
     VueRouter,
-    /// Angular Router
     AngularRouter,
-    /// History API (fallback, works with most SPAs)
     HistoryApi,
-    /// Could not detect any SPA router
     Unknown,
 }
 
@@ -49,20 +31,13 @@ impl std::fmt::Display for RouterType {
     }
 }
 
-/// Information about the detected SPA router.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpaRouterInfo {
-    /// Detected router type.
     pub router_type: RouterType,
-    /// Current path (from location.pathname).
     pub current_path: String,
-    /// Query parameters as key-value pairs.
     pub query_params: HashMap<String, String>,
-    /// Hash fragment (without #).
     pub hash: String,
-    /// Whether programmatic navigation is available.
     pub can_navigate: bool,
-    /// Additional router-specific details.
     pub details: Option<String>,
 }
 

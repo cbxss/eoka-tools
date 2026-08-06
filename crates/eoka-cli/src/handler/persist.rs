@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use eoka::Page;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::state::TabState;
@@ -16,13 +16,10 @@ use super::state::TabState;
 pub struct SavedState {
     pub url: String,
     pub cookies: Vec<SavedCookie>,
-    #[serde(alias = "localStorage")]
     pub local_storage: HashMap<String, String>,
-    #[serde(alias = "sessionStorage")]
     pub session_storage: HashMap<String, String>,
-    #[serde(alias = "userAgent")]
     pub user_agent: String,
-    #[serde(default, alias = "savedAt")]
+    #[serde(default)]
     pub saved_at: String,
 }
 
@@ -32,23 +29,10 @@ pub struct SavedCookie {
     pub value: String,
     pub domain: String,
     pub path: String,
-    #[serde(default, deserialize_with = "expiry_or_zero")]
     pub expires: f64,
-    #[serde(alias = "httpOnly")]
     pub http_only: bool,
     pub secure: bool,
-    #[serde(alias = "sameSite")]
     pub same_site: Option<String>,
-}
-
-/// Browser-state exports from the Go client represent session-cookie expiry as
-/// `null`; the CLI format historically used zero. Accept both forms while
-/// continuing to write the stable numeric representation.
-fn expiry_or_zero<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0))
 }
 
 impl From<eoka::SessionCookie> for SavedCookie {
@@ -252,21 +236,21 @@ mod tests {
     use super::SavedState;
 
     #[test]
-    fn loads_go_client_browser_state_shape() {
+    fn loads_saved_state_shape() {
         let state: SavedState = serde_json::from_str(
             r#"{
                 "url": "https://www.recreation.gov/cart",
                 "cookies": [{
                     "name": "session", "value": "redacted", "domain": ".recreation.gov",
-                    "path": "/", "expires": null, "http_only": true,
+                    "path": "/", "expires": 0.0, "http_only": true,
                     "secure": true, "same_site": null
                 }],
-                "localStorage": {"recaccount": "value"},
-                "sessionStorage": {"key": "value"},
-                "userAgent": "Mozilla/5.0"
+                "local_storage": {"recaccount": "value"},
+                "session_storage": {"key": "value"},
+                "user_agent": "Mozilla/5.0"
             }"#,
         )
-        .expect("Go client state should be accepted");
+        .expect("saved state should be accepted");
 
         assert_eq!(state.cookies[0].expires, 0.0);
         assert_eq!(state.local_storage["recaccount"], "value");

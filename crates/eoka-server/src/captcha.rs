@@ -4,7 +4,7 @@ pub struct CaptchaInfo {
     pub sitekey: String,
 }
 
-pub async fn detect_captcha_on_page(page: &eoka_server::eoka::Page) -> Option<CaptchaInfo> {
+pub async fn detect_captcha_on_page(page: &crate::eoka::Page) -> Option<CaptchaInfo> {
     let hcaptcha_script = r#"
         (() => document.querySelector('[data-sitekey]')?.getAttribute('data-sitekey') || null)()
     "#;

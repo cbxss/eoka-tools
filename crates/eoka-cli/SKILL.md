@@ -1,6 +1,6 @@
 ---
 name: eoka
-description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, protected-site sessions and AWS WAF CAPTCHA solving, headless screenshots, network recording, HAR export, CDP fetch interception, WASM memory, fake-camera injection, and SPA navigation. Triggers on: eoka, browser cli, AWS WAF, captcha, anti-captcha, headless screenshot, network record, save har, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
+description: "Drive a real Chrome browser from the shell via the eoka CLI. Persistent daemon keeps Chrome alive between commands (~10ms per call). Use for browser automation, protected-site sessions and AWS WAF CAPTCHA solving, headless screenshots, network recording, HAR export, CDP fetch interception, WASM memory, fake-camera injection, and SPA navigation. Triggers on: eoka, browser cli, AWS WAF, captcha, anti-captcha, headless screenshot, network record, HAR export, intercept request, fake camera, wasm memory, cdp fetch, browser daemon, eoka snapshot, eoka click, eoka fill."
 ---
 
 # eoka — Browser Automation CLI
@@ -90,6 +90,18 @@ eoka exec "localStorage.clear()"       # Execute for side effects (no return)
 
 Use `--no-return` or `--max-size` when evaluating scripts that produce large results (e.g. dumping buffers, DOM trees). Without these, CDP can crash on responses exceeding ~10MB.
 
+### Tack TypeScript
+
+```bash
+eoka tools manifest --json
+eoka tack 'return await tools.invoke({ path: "eoka.info", input: {} });'
+eoka tack --raw-json 'const hits = await tools.search({ query: "info", limit: 3 }); return hits.data.map(t => t.path);'
+```
+
+`eoka tack` runs Tack TypeScript through `tack-runtime-quickjs` with Eoka tools
+auto-registered from `eoka-protocol` through `eoka-tack`. Use `tools.search`,
+`tools.describe.tool`, and `tools.invoke` for discovery and calls.
+
 ### Network (Pentesting)
 
 ```bash
@@ -107,7 +119,6 @@ eoka network show 12 --body --max-body 65536
 eoka network wait --pattern "*/api/*" --status 200 --timeout 10000
 eoka network har /tmp/session.har
 eoka network export /tmp/session.json --format json
-eoka network save-har /tmp/session.har --settle-ms 5000
 eoka network record stop
 eoka network clear
 eoka network intercept add "*/api/data*"
@@ -120,7 +131,7 @@ eoka network intercept remove 1
 eoka network intercept remove all
 ```
 
-`fetch` runs from the browser context with the active session's cookies and TLS fingerprint. `network record start` passively records the active tab and follows explicit `eoka tab switch`, `tab attach`, `tab new`, and `open` operations. Recording appends until `network clear`, or starts fresh with `network record start --clear`. `network har`, `network export --format har`, and `network save-har` snapshot without stopping or clearing; `network export --format json` writes the same captured entries in eoka JSON form. Bodies are captured unredacted by default up to 10 MiB each, with a shared 512 MiB in-memory body pool and bounded concurrent body capture.
+`fetch` runs from the browser context with the active session's cookies and TLS fingerprint. `network record start` passively records the active tab and follows explicit `eoka tab switch`, `tab attach`, `tab new`, and `open` operations. Recording appends until `network clear`, or starts fresh with `network record start --clear`. `network har` and `network export --format har` snapshot without stopping or clearing; `network export --format json` writes the same captured entries in eoka JSON form. Bodies are captured unredacted by default up to 10 MiB each, with a shared 512 MiB in-memory body pool and bounded concurrent body capture.
 
 `network intercept` uses the CDP Fetch domain to pause matching requests. Intercept logs include `network_entry_id` when passive recording is active, so agents can jump from an intercepted request to `eoka network show <id>` or the exported HAR entry.
 
@@ -204,7 +215,7 @@ Inject a fake video stream into `getUserMedia` — replaces the real camera with
 
 ```bash
 eoka fake-camera /path/to/face.mp4              # Inject fake camera from video
-eoka fake-camera /path/to/face.webm --loop      # Loop the video
+eoka fake-camera /path/to/face.webm --loop-video # Loop the video
 eoka open https://app-with-camera.com            # Page sees fake stream from getUserMedia
 eoka eval "navigator.mediaDevices.getUserMedia({video:true}).then(s => s.getVideoTracks().length)"
 # Returns 1
@@ -284,7 +295,7 @@ eoka --session regular open https://example.com
 List every session (running or stale), like `tmux ls`:
 
 ```bash
-eoka sessions                           # or: eoka ls
+eoka sessions
 eoka --json sessions                    # structured output
 ```
 
@@ -366,7 +377,7 @@ Caveats:
 | Variable | Description |
 |----------|-------------|
 | `EOKA_HEADLESS` | `false` or `0` to show browser window |
-| `EOKA_PROXY` | Fallback for `--proxy` when the flag isn't passed: `socks5://user:pass@host:port` or `http://user:pass@host:port`; legacy `host:port[:user:pass]` is supported |
+| `EOKA_PROXY` | Fallback for `--proxy` when the flag isn't passed: `socks5://user:pass@host:port` or `http://user:pass@host:port` |
 | `EOKA_PROXY_FILE` | Fallback for `--proxy-file` when the flag isn't passed |
 | `EOKA_NO_JS` | Fallback for `--no-js` when the flag isn't passed |
 | `EOKA_PATCH_BINARY` | `true` to apply stealth binary patches |
@@ -380,7 +391,7 @@ Caveats:
 
 ```bash
 eoka status                             # Check if daemon is running (for --session)
-eoka sessions                           # List every session, running or stale (alias: ls)
+eoka sessions                           # List every session, running or stale
 eoka kill                               # Force-kill daemon
 eoka close                              # Graceful close (browser + daemon)
 ```

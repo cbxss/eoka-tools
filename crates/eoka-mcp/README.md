@@ -1,33 +1,8 @@
 # eoka-mcp
 
-Stdio MCP server and Rust session API for browser automation. The MCP binary supports MCP `2026-07-28` with stateless `server/discover` requests and remains compatible with legacy stdio clients. It owns browser lifecycle through the shared eoka-server runtime; the Rust Session API remains a direct in-process interface.
+Stdio MCP server for Eoka browser automation. The MCP binary supports MCP `2026-07-28` with stateless `server/discover` requests. Shared browser primitives and the Rust `Session` API live in `eoka-server`.
 
 Part of the [eoka-tools](https://github.com/shrimp-software/eoka-tools) workspace.
-
-## Quick Start
-
-```rust
-use eoka_mcp::Session;
-
-let mut session = Session::launch().await?;
-session.goto("https://example.com").await?;
-
-session.observe().await?;
-println!("{}", session.element_list());
-session.click(0).await?;
-
-session.close().await?;
-```
-
-## Features
-
-- **Observe/act loop** — `observe()` enumerates interactive elements, act by index
-- **Annotated screenshots** — numbered red boxes on each element
-- **Auto-wait + stale detection** — actions wait for stability, detect moved/removed elements
-- **Live targeting** — `text:Submit`, `css:button.primary`, `id:btn`, `placeholder:Email`
-- **SPA support** — detect and navigate React Router, Next.js, Vue Router, etc.
-- **Extract** — run JS expressions and get typed results back
-- **CAPTCHA solving** — hCaptcha, reCAPTCHA v2/v3, and AWS WAF via Anti-Captcha
 
 ## MCP Server
 

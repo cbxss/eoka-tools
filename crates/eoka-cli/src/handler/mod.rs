@@ -15,7 +15,7 @@ use std::fmt::Write as FmtWrite;
 use base64::Engine;
 use captcha::{build_captcha_inject_js, parse_captcha_inject_kind};
 use eoka::cdp::{transport::CdpMessage, Session as CdpSession};
-use eoka_mcp::{annotate, observe, snapshot};
+use eoka_server::{annotate, observe, snapshot};
 use serde_json::{json, Value};
 
 use crate::launch_spec::LaunchSpec;
@@ -232,7 +232,6 @@ impl Handler {
             "network_record_status" => self.cmd_network_record_status().await,
             "network_log" => self.cmd_network_log(args).await,
             "network_show" => self.cmd_network_show(args).await,
-            "network_save_har" => self.cmd_network_save_har(args).await,
             "network_export" => self.cmd_network_export(args).await,
             "network_wait" => self.cmd_network_wait(args).await,
             "network_clear" => self.cmd_network_clear().await,
@@ -509,7 +508,7 @@ impl Handler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let filter_fn: fn(&&eoka_mcp::InteractiveElement) -> bool = match filter {
+        let filter_fn: fn(&&eoka_server::InteractiveElement) -> bool = match filter {
             Some("inputs") => |e| {
                 matches!(
                     e.tag.as_str(),
@@ -1327,7 +1326,7 @@ impl Handler {
 
     async fn cmd_spa_info(&mut self) -> Result<Response, String> {
         let tab = self.require_tab()?;
-        let info = eoka_mcp::spa::detect_router(&tab.page)
+        let info = eoka_server::spa::detect_router(&tab.page)
             .await
             .map_err(|e: eoka::Error| e.to_string())?;
         Ok(Response::ok(json!({
@@ -1342,10 +1341,10 @@ impl Handler {
         let drain = self.start_fetch_drain();
         let result = async {
             let tab = self.require_tab_mut()?;
-            let info = eoka_mcp::spa::detect_router(&tab.page)
+            let info = eoka_server::spa::detect_router(&tab.page)
                 .await
                 .map_err(|e: eoka::Error| e.to_string())?;
-            eoka_mcp::spa::spa_navigate(&tab.page, &info.router_type, path)
+            eoka_server::spa::spa_navigate(&tab.page, &info.router_type, path)
                 .await
                 .map_err(|e: eoka::Error| e.to_string())?;
             let _ = wait_for_stable(&tab.page).await;
@@ -1687,10 +1686,6 @@ impl Handler {
             .await
             .map(Response::ok)
             .ok_or_else(|| format!("Network entry #{} not found", id))
-    }
-
-    async fn cmd_network_save_har(&mut self, args: &Value) -> Result<Response, String> {
-        self.cmd_network_export(args).await
     }
 
     async fn cmd_network_export(&mut self, args: &Value) -> Result<Response, String> {

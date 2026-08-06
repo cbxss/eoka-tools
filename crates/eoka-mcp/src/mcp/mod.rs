@@ -12,7 +12,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use eoka_mcp::{annotate, captcha, observe, snapshot, spa, InteractiveElement};
+use eoka_server::{annotate, captcha, observe, snapshot, spa, InteractiveElement};
 
 use error::{internal, invalid, is_transport_error_msg, AgentError};
 use helpers::{

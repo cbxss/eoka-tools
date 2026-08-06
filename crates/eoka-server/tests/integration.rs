@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use eoka_mcp::{target, LivePattern, ObserveConfig, Session};
+use eoka_server::{target, LivePattern, ObserveConfig, Session};
 
 fn chrome_available() -> bool {
     eoka_server::eoka::stealth::patcher::find_chrome().is_ok()
@@ -424,13 +424,13 @@ async fn test_session_basic() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_text() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>Submit Form</button><button>Cancel</button>"#)
         .await
@@ -455,13 +455,13 @@ async fn test_live_resolve_text() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_placeholder() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<input placeholder="Enter your email"><input placeholder="Password">"#)
         .await
@@ -484,13 +484,13 @@ async fn test_live_resolve_placeholder() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_css() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button class="primary">OK</button><button class="secondary">Cancel</button>"#)
         .await
@@ -514,13 +514,13 @@ async fn test_live_resolve_css() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_id() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button id="submit-btn">Submit</button>"#)
         .await
@@ -539,13 +539,13 @@ async fn test_live_resolve_id() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_role() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<div role="button" tabindex="0">Custom Button</div>"#)
         .await
@@ -563,13 +563,13 @@ async fn test_live_resolve_role() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_not_found() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<button>OK</button>"#)
         .await
@@ -587,13 +587,13 @@ async fn test_live_resolve_not_found() {
 #[tokio::test]
 #[ignore = "requires Chrome"]
 async fn test_live_resolve_bbox() {
-    use eoka_mcp::{target, LivePattern};
+    use eoka_server::{target, LivePattern};
 
     if !chrome_available() {
         return;
     }
 
-    let browser = eoka_mcp::Browser::launch().await.unwrap();
+    let browser = eoka_server::Browser::launch().await.unwrap();
     let page = browser
         .new_page(r#"data:text/html,<style>body{margin:0}</style><button style="width:100px;height:50px">Click</button>"#)
         .await

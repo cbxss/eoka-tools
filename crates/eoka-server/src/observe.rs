@@ -1,4 +1,4 @@
-use eoka_server::eoka::{Page, Result};
+use crate::eoka::{Page, Result};
 use serde::Deserialize;
 
 use crate::InteractiveElement;
@@ -51,7 +51,7 @@ pub fn parse_raw_elements(json_str: &str) -> std::result::Result<Vec<Interactive
                 } else {
                     Some(r.value)
                 },
-                bbox: eoka_server::eoka::BoundingBox {
+                bbox: crate::eoka::BoundingBox {
                     x: r.x,
                     y: r.y,
                     width: r.width,
@@ -70,7 +70,7 @@ pub async fn observe(page: &Page, viewport_only: bool) -> Result<Vec<Interactive
     );
     let json_str: String = page.evaluate(&js).await?;
 
-    parse_raw_elements(&json_str).map_err(eoka_server::eoka::Error::cdp_msg)
+    parse_raw_elements(&json_str).map_err(crate::eoka::Error::cdp_msg)
 }
 
 #[cfg(test)]
