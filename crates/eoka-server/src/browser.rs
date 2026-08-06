@@ -1,19 +1,14 @@
-pub mod annotate;
-pub mod captcha;
-pub mod observe;
-pub mod snapshot;
-pub mod spa;
-pub mod target;
+use crate::{annotate, observe, snapshot, spa};
 
-pub use spa::{RouterType, SpaRouterInfo};
-pub use target::{BBox, LivePattern, Resolved, Target};
+pub use crate::spa::{RouterType, SpaRouterInfo};
+pub use crate::target::{BBox, LivePattern, Resolved, Target};
 
 use std::collections::HashSet;
 use std::fmt;
 
-use eoka_server::eoka::{BoundingBox, Page, Result};
+use crate::eoka::{BoundingBox, Page, Result};
 
-pub use eoka_server::eoka::{Browser, Error, StealthConfig};
+pub use crate::eoka::{Browser, Error, StealthConfig};
 
 #[derive(Debug, Clone)]
 pub struct InteractiveElement {
@@ -281,10 +276,7 @@ impl Session {
 
             if exists {
                 return self.elements.get(index).ok_or_else(|| {
-                    eoka_server::eoka::Error::ElementNotFound(format!(
-                        "element [{}] disappeared",
-                        index
-                    ))
+                    crate::eoka::Error::ElementNotFound(format!("element [{}] disappeared", index))
                 });
             }
 
@@ -295,19 +287,19 @@ impl Session {
                 .iter()
                 .position(|e| e.fingerprint == el.fingerprint)
             {
-                return Err(eoka_server::eoka::Error::ElementNotFound(format!(
+                return Err(crate::eoka::Error::ElementNotFound(format!(
                     "element [{}] \"{}\" moved to [{}] - call observe() to refresh",
                     index, el.text, new_idx
                 )));
             }
 
-            return Err(eoka_server::eoka::Error::ElementNotFound(format!(
+            return Err(crate::eoka::Error::ElementNotFound(format!(
                 "element [{}] \"{}\" no longer exists on page",
                 index, el.text
             )));
         }
 
-        Err(eoka_server::eoka::Error::ElementNotFound(format!(
+        Err(crate::eoka::Error::ElementNotFound(format!(
             "element [{}] not found (observed {} elements)",
             index,
             self.elements.len()
@@ -350,7 +342,7 @@ impl Session {
         );
         let selected: bool = self.page.evaluate(&js).await?;
         if !selected {
-            return Err(eoka_server::eoka::Error::ElementNotFound(format!(
+            return Err(crate::eoka::Error::ElementNotFound(format!(
                 "option \"{}\" in element [{}]",
                 value, index
             )));
@@ -422,9 +414,8 @@ impl Session {
             serde_json::to_string(&selector).unwrap()
         );
         let json_str: String = self.page.evaluate(&js).await?;
-        let pairs: Vec<(String, String)> = serde_json::from_str(&json_str).map_err(|e| {
-            eoka_server::eoka::Error::cdp_msg(format!("options parse error: {}", e))
-        })?;
+        let pairs: Vec<(String, String)> = serde_json::from_str(&json_str)
+            .map_err(|e| crate::eoka::Error::cdp_msg(format!("options parse error: {}", e)))?;
         Ok(pairs)
     }
 
@@ -522,13 +513,12 @@ impl Session {
     }
 
     pub async fn extract<T: serde::de::DeserializeOwned>(&self, js_expression: &str) -> Result<T> {
-        let escaped_js = serde_json::to_string(js_expression).map_err(|e| {
-            eoka_server::eoka::Error::cdp_msg(format!("Failed to escape JS: {}", e))
-        })?;
+        let escaped_js = serde_json::to_string(js_expression)
+            .map_err(|e| crate::eoka::Error::cdp_msg(format!("Failed to escape JS: {}", e)))?;
         let js = format!("JSON.stringify(eval({}))", escaped_js);
         let json_str: String = self.page.evaluate(&js).await?;
         if json_str == "null" || json_str == "undefined" || json_str.is_empty() {
-            return Err(eoka_server::eoka::Error::cdp_msg(format!(
+            return Err(crate::eoka::Error::cdp_msg(format!(
                 "extract returned null/undefined for: {}",
                 if js_expression.len() > 60 {
                     &js_expression[..60]
@@ -538,7 +528,7 @@ impl Session {
             )));
         }
         serde_json::from_str(&json_str).map_err(|e| {
-            eoka_server::eoka::Error::cdp_msg(format!(
+            crate::eoka::Error::cdp_msg(format!(
                 "extract parse error: {} (got: {})",
                 e,
                 if json_str.len() > 80 {

@@ -27,9 +27,7 @@ pub async fn run_code_command(
     let catalog = EokaToolSet::new(client)
         .catalog("eoka")
         .map_err(|error| error.to_string())?;
-    let engine = ExecutionEngine::from_catalog(catalog, QuickJsRuntime)
-        .with_limits(limits)
-        .with_alias("eoka", "eoka");
+    let engine = ExecutionEngine::from_catalog(catalog, QuickJsRuntime).with_limits(limits);
     let result = engine.execute(source).await;
     if raw_json {
         return serde_json::to_value(result)

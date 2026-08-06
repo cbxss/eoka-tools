@@ -127,7 +127,7 @@ struct SolveCaptchaParams {
     api_key: String,
     captcha_type: String,
     captcha_mode: String,
-    #[serde(rename = "websiteURL", alias = "websiteUrl")]
+    #[serde(rename = "websiteURL")]
     website_url: String,
     website_key: String,
     #[serde(default)]

@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-default-members = ["crates/eoka-mcp", "crates/eoka-server"]
 
 [workspace.package]
 edition = "2021"
@@ -10,10 +9,6 @@ repository = "https://github.com/shrimp-software/eoka-tools"
 homepage = "https://github.com/shrimp-software/eoka-tools"
 authors = ["cbxss"]
 
-# Not adopted workspace-wide yet — individual crates tune feature sets
-# independently (e.g. eoka-server's slimmer tokio features). These entries
-# exist so eoka-cli's own dependency declarations have one source of truth
-# instead of drifting; other crates are free to opt in the same way.
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"

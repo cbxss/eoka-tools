@@ -109,6 +109,35 @@ fn assert_success(output: &std::process::Output, context: &str) {
     );
 }
 
+#[test]
+fn tools_manifest_matches_protocol_catalog() {
+    let session = format!("eoka-manifest-test-{}", std::process::id());
+    let output = run(&session, &["tools", "manifest", "--json"]);
+    assert_success(&output, "tools manifest");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("manifest output should be JSON");
+    let expected = serde_json::json!({
+        "tools": eoka_protocol::manifest_for_operations("eoka", false)
+    });
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn tack_executes_without_browser_tools() {
+    let session = format!("eoka-tack-test-{}", std::process::id());
+    let output = run(&session, &["tack", "--raw-json", "return 5"]);
+    assert_success(&output, "tack");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("tack output should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(true));
+    assert_eq!(actual["data"]["ok"], serde_json::json!(true));
+    assert_eq!(actual["data"]["result"], serde_json::json!(5));
+}
+
 fn local_har_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
     let addr = listener.local_addr().expect("test server address");

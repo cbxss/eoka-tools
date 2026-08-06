@@ -13,6 +13,25 @@ when you touch a file, strip comments you find in the code you're editing.
 Markdown docs (README.md, PROTOCOL.md, this file) are not code comments and
 are unaffected by this rule.
 
+## Tool protocol source of truth
+
+Use `crates/eoka-protocol` as the canonical definition point for Eoka tools,
+operation metadata, request/input types, schema generation, manifests, and tool
+exposure rules. Do not duplicate tool descriptors independently in the CLI, MCP
+server, SDK, or Tack adapter.
+
+When adding or changing a tool, update the protocol catalog first and project
+the downstream surfaces from it. The CLI `tools manifest` output, `eoka-tack`
+tool registration, SDK request helpers, and MCP input types should stay derived
+from `eoka-protocol` so paths, schemas, tags, exposure, and capability metadata
+cannot drift.
+
+## Tasks
+
+Use `mise` for repo workflows. Prefer `mise run conformance` after protocol,
+CLI, MCP, SDK, or Tack changes, and `mise run release-check` before release or
+PR handoff.
+
 ## Self-hosted runners
 
 Only workflows that cannot be triggered by `pull_request` or

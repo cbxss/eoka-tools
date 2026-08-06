@@ -1,4 +1,4 @@
-use eoka_server::eoka::{Page, Result};
+use crate::eoka::{Page, Result};
 
 use crate::InteractiveElement;
 

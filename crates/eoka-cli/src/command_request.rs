@@ -330,12 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn fetch_raw_sets_body_only_and_preserves_max_body() {
+    fn fetch_body_only_sets_body_only_and_preserves_max_body() {
         let (_cli, command) = parsed_command(&[
             "eoka",
             "fetch",
             "https://example.com/app.js",
-            "--raw",
+            "--body-only",
             "--max-body",
             "16",
         ]);
@@ -457,42 +457,9 @@ mod tests {
     }
 
     #[test]
-    fn network_save_har_keeps_legacy_wire_command() {
-        let (_cli, command) = parsed_command(&[
-            "eoka",
-            "network",
-            "save-har",
-            "capture.har",
-            "--settle-ms",
-            "1",
-        ]);
-        let request = command_to_request(&command);
-
-        assert_eq!(request.cmd(), "network_save_har");
-        assert_eq!(request.args_json()["format"], "har");
-        assert_eq!(request.args_json()["settle_ms"], 1);
-    }
-
-    #[test]
     fn top_level_intercept_is_rejected() {
         let err = match Cli::try_parse_from(["eoka", "intercept", "add", "*api*", "--json"]) {
             Ok(_) => panic!("top-level intercept should be rejected"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("unrecognized subcommand"));
-    }
-
-    #[test]
-    fn deprecated_json_intercept_spec_is_rejected() {
-        let err = match Cli::try_parse_from([
-            "eoka",
-            "network",
-            "intercept",
-            r#"{"urlPattern":"*api*","action":"log"}"#,
-            "--json",
-        ]) {
-            Ok(_) => panic!("deprecated JSON intercept spec should be rejected"),
             Err(err) => err,
         };
 
@@ -560,7 +527,7 @@ mod tests {
             &["eoka", "network", "log"],
             &["eoka", "network", "show", "1"],
             &["eoka", "network", "wait"],
-            &["eoka", "network", "save-har", "capture.har"],
+            &["eoka", "network", "har", "capture.har"],
             &["eoka", "network", "export", "capture.har"],
             &["eoka", "network", "clear"],
             &["eoka", "network", "intercept", "add", "*/api/*"],

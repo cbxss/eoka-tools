@@ -43,9 +43,9 @@ cargo check --workspace --all-features
 cargo test --workspace --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# eoka-protocol is the first new Eoka crate in the publish chain. Full
-# workspace packaging succeeds after Tack 0.0.2 and eoka-protocol 0.1.0 are
-# visible in crates.io.
+# eoka-protocol is the first Eoka crate in the publish chain. Full workspace
+# packaging succeeds after Tack and the Eoka crate dependency chain are visible
+# in crates.io.
 cargo package -p eoka-protocol --allow-dirty
 cargo package --workspace --allow-dirty --no-verify
 
@@ -56,8 +56,11 @@ Release check passed.
 Publish order:
   1. publish tack-rs 0.0.2 crates first
   2. cargo publish -p eoka-protocol
-  3. cargo publish -p eoka-sdk
-  4. cargo publish -p eoka-mcp
-  5. cargo publish -p eoka-tack
-  6. cargo publish -p eoka-cli
+  3. cargo publish -p eoka-proxy
+  4. cargo publish -p eoka-sdk
+  5. cargo publish -p eoka-server
+  6. cargo publish -p eoka-tack
+  7. cargo publish -p eoka-mcp
+  8. cargo publish -p eoka-cli
+  9. cargo publish -p eoka-runner
 MSG

@@ -120,7 +120,7 @@ impl AntiCaptchaSolver {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = dirs::home_dir()
         .ok_or("Cannot find home directory")?

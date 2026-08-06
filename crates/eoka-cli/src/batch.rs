@@ -97,9 +97,8 @@ fn batch_step_to_request(idx: usize, step: Value) -> Result<Request, String> {
         let cmd = cmd
             .as_str()
             .ok_or_else(|| format!("Batch step {} field 'cmd' must be a string", idx + 1))?;
-        let cmd = normalize_batch_cmd(cmd);
         let args = obj.remove("args").unwrap_or_else(|| json!({}));
-        return batch_request(idx, &cmd, normalize_batch_args(idx, &cmd, args)?);
+        return batch_request(idx, cmd, normalize_batch_args(idx, cmd, args)?);
     }
 
     if obj.len() != 1 {
@@ -110,7 +109,6 @@ fn batch_step_to_request(idx: usize, step: Value) -> Result<Request, String> {
     }
 
     let (cmd, value) = obj.into_iter().next().expect("len checked");
-    let cmd = normalize_batch_cmd(&cmd);
     let args = normalize_batch_args(idx, &cmd, value)?;
     batch_request(idx, &cmd, args)
 }
@@ -146,24 +144,6 @@ fn unit_batch_command(cmd: &str) -> bool {
             | "network_clear"
             | "close"
     )
-}
-
-fn normalize_batch_cmd(cmd: &str) -> String {
-    match cmd.replace('-', "_").as_str() {
-        "double_click" => "dblclick".into(),
-        "set_cookie" => "set_cookie".into(),
-        "delete_cookie" => "delete_cookie".into(),
-        "clear_cookies" => "clear_cookies".into(),
-        "set_storage" => "set_storage".into(),
-        "dump_storage" => "dump_storage".into(),
-        "save_state" => "save_state".into(),
-        "load_state" => "load_state".into(),
-        "captcha_inject" => "captcha_inject".into(),
-        "spa_info" => "spa_info".into(),
-        "spa_navigate" => "spa_navigate".into(),
-        "fake_camera" => "fake_camera".into(),
-        other => other.into(),
-    }
 }
 
 fn normalize_batch_args(idx: usize, cmd: &str, value: Value) -> Result<Value, String> {
@@ -333,8 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn batch_canonical_hyphen_aliases_use_normalized_args() {
-        let requests = parse_batch_requests(r#"[{"cmd":"spa-navigate","args":"/cart"}]"#).unwrap();
+    fn batch_canonical_cmd_args_scalar_uses_protocol_command() {
+        let requests = parse_batch_requests(r#"[{"cmd":"spa_navigate","args":"/cart"}]"#).unwrap();
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cmd(), "spa_navigate");
@@ -343,7 +323,7 @@ mod tests {
 
     #[test]
     fn batch_accepts_captcha_inject_shorthand() {
-        let requests = parse_batch_requests(r#"[{"captcha-inject":"token-123"}]"#).unwrap();
+        let requests = parse_batch_requests(r#"[{"captcha_inject":"token-123"}]"#).unwrap();
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cmd(), "captcha_inject");

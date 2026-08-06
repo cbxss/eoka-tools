@@ -1,74 +1,14 @@
+mod args;
+mod io;
+mod metadata;
+mod response;
+
+pub use args::*;
+pub use io::{read_msg, write_msg};
+pub use metadata::{OperationCapability, OperationExposure, ToolManifestEntry};
+pub use response::Response;
+
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationExposure {
-    DefaultAgent,
-    OptIn,
-    Lifecycle,
-}
-
-impl OperationExposure {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::DefaultAgent => "defaultAgent",
-            Self::OptIn => "optIn",
-            Self::Lifecycle => "lifecycle",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationCapability {
-    Navigation,
-    Observation,
-    Interaction,
-    JavaScript,
-    BrowserState,
-    Tabs,
-    Spa,
-    Wasm,
-    Network,
-    Policy,
-    Media,
-    Captcha,
-    Lifecycle,
-}
-
-impl OperationCapability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Navigation => "navigation",
-            Self::Observation => "observation",
-            Self::Interaction => "interaction",
-            Self::JavaScript => "javascript",
-            Self::BrowserState => "browser-state",
-            Self::Tabs => "tabs",
-            Self::Spa => "spa",
-            Self::Wasm => "wasm",
-            Self::Network => "network",
-            Self::Policy => "policy",
-            Self::Media => "media",
-            Self::Captcha => "captcha",
-            Self::Lifecycle => "lifecycle",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolManifestEntry {
-    pub path: String,
-    pub cmd: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-    pub capability: &'static str,
-    pub exposure: &'static str,
-    pub read_only: bool,
-    pub destructive: bool,
-    pub input_schema: serde_json::Value,
-    pub tags: Vec<&'static str>,
-}
 
 macro_rules! define_operations {
     (
@@ -933,17 +873,6 @@ define_operations! {
         destructive: false,
         input: NetworkWaitArgs,
     },
-    NetworkSaveHar {
-        path: "network.save_har",
-        cmd: "network_save_har",
-        name: "network.save_har",
-        description: "Save network traffic as HAR",
-        capability: Network,
-        exposure: OptIn,
-        read_only: true,
-        destructive: false,
-        input: NetworkExportArgs,
-    },
     NetworkExport {
         path: "network.export",
         cmd: "network_export",
@@ -1003,461 +932,10 @@ fn schema_for<T: schemars::JsonSchema>() -> serde_json::Value {
         .unwrap_or_else(|_| serde_json::json!({ "type": "object", "additionalProperties": true }))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct OpenArgs {
-    pub url: String,
-    pub headers: Option<serde_json::Value>,
-    pub user_agent: Option<String>,
-    #[serde(default)]
-    pub bypass_csp: bool,
-    pub inject_js: Option<String>,
-    pub load_state: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct SnapshotArgs {
-    #[serde(default)]
-    pub interactive: bool,
-    #[serde(default)]
-    pub all: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ObserveArgs {
-    #[schemars(
-        description = "Filter: 'inputs' for form elements, 'buttons' for buttons and links, or 'all' for all observed elements."
-    )]
-    pub filter: Option<String>,
-    #[schemars(description = "Maximum elements to return.")]
-    pub max: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ScreenshotArgs {
-    pub output: Option<String>,
-    #[serde(default)]
-    pub annotate: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct EmulateArgs {
-    #[serde(default = "default_viewport_width")]
-    pub width: u32,
-    #[serde(default = "default_viewport_height")]
-    pub height: u32,
-    #[serde(default = "default_device_pixel_ratio")]
-    pub dpr: f64,
-    #[serde(default)]
-    pub desktop: bool,
-    #[serde(default)]
-    pub reset: bool,
-}
-
-impl Default for EmulateArgs {
-    fn default() -> Self {
-        Self {
-            width: default_viewport_width(),
-            height: default_viewport_height(),
-            dpr: default_device_pixel_ratio(),
-            desktop: false,
-            reset: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct TextArgs {
-    #[schemars(description = "Text substring to search for, matched case-insensitively.")]
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct TargetArgs {
-    #[schemars(
-        description = "Target element. Supports index, snapshot refs like @e1, text:Submit, placeholder:Email, role:button, css:form button, id:my-btn, or plain text search."
-    )]
-    pub target: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct FillArgs {
-    #[schemars(
-        description = "Target input. Supports index, text:Email, placeholder:Enter code, css:input.search, id:email-field, or plain text search."
-    )]
-    pub target: String,
-    #[schemars(description = "Text to type into the element.")]
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct SelectArgs {
-    #[schemars(description = "Target select element by index, text, CSS selector, id, or role.")]
-    pub target: String,
-    #[schemars(description = "Option value or visible text to select.")]
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct KeyArgs {
-    #[schemars(
-        description = "Key to press, for example Enter, Tab, Escape, ArrowDown, or Backspace."
-    )]
-    pub key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ScriptArgs {
-    pub code: Option<String>,
-    pub file: Option<String>,
-    pub max_size: Option<usize>,
-    #[serde(default)]
-    pub no_await: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct FetchArgs {
-    pub url: String,
-    pub method: Option<String>,
-    pub headers: Option<serde_json::Value>,
-    pub body: Option<String>,
-    pub redirect: Option<String>,
-    #[serde(default)]
-    pub body_only: bool,
-    pub max_body: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct SetCookieArgs {
-    pub name: String,
-    pub value: String,
-    pub domain: Option<String>,
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct DeleteCookieArgs {
-    pub name: String,
-    pub domain: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct StorageArgs {
-    pub key: Option<String>,
-    #[serde(default)]
-    pub session_storage: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct SetStorageArgs {
-    pub key: String,
-    pub value: String,
-    #[serde(default)]
-    pub session_storage: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct PathArgs {
-    #[schemars(description = "File path.")]
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct LoadStateArgs {
-    pub path: String,
-    #[serde(default)]
-    pub no_navigate: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct HeadersArgs {
-    pub headers_json: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ConsoleArgs {
-    #[serde(default)]
-    pub clear: bool,
-    pub level: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ClearFlagArgs {
-    #[serde(default)]
-    pub clear: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct TabNewArgs {
-    #[schemars(description = "Optional URL to navigate to. If omitted, opens a blank tab.")]
-    pub url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct TabIdArgs {
-    #[schemars(description = "Tab ID from list_tabs.")]
-    pub tab_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct CloneFromArgs {
-    pub source: String,
-    pub to: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct WaitArgs {
-    pub ms: Option<u64>,
-    pub text: Option<String>,
-    pub url: Option<String>,
-    pub load: Option<String>,
-    pub timeout: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct PathStringArgs {
-    #[schemars(description = "Target path, for example /docs or /about.")]
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct FakeCameraArgs {
-    pub file: String,
-    #[serde(default)]
-    pub loop_video: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct WasmReadArgs {
-    pub addr: String,
-    pub len: usize,
-    pub memory: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct WasmWriteArgs {
-    pub addr: String,
-    pub hex: String,
-    pub memory: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WasmFindArgs {
-    pub pattern: String,
-    pub start: Option<String>,
-    pub end: Option<String>,
-    #[serde(default = "default_wasm_find_max")]
-    pub max: usize,
-    pub memory: Option<String>,
-}
-
-impl Default for WasmFindArgs {
-    fn default() -> Self {
-        Self {
-            pattern: String::new(),
-            start: None,
-            end: None,
-            max: default_wasm_find_max(),
-            memory: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct InterceptAddArgs {
-    pub url_pattern: String,
-    pub capture: Option<String>,
-    pub respond: Option<String>,
-    #[serde(default = "default_intercept_status")]
-    pub status: u16,
-}
-
-impl Default for InterceptAddArgs {
-    fn default() -> Self {
-        Self {
-            url_pattern: String::new(),
-            capture: None,
-            respond: None,
-            status: default_intercept_status(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct IdArgs {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ModeArgs {
-    pub mode: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct DomainArgs {
-    pub domain: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct CaptchaInjectArgs {
-    pub token: String,
-    #[serde(default = "default_captcha_type")]
-    pub captcha_type: String,
-    pub callback: Option<String>,
-    pub click_after: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct NetworkRecordStartArgs {
-    #[serde(default)]
-    pub patterns: Vec<String>,
-    #[serde(default)]
-    pub no_bodies: bool,
-    #[serde(default = "default_max_body_bytes")]
-    pub max_body_bytes: usize,
-    #[serde(default)]
-    pub clear: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct NetworkLogArgs {
-    pub limit: Option<usize>,
-    pub pattern: Option<String>,
-    pub method: Option<String>,
-    pub status: Option<u16>,
-    pub since: Option<u64>,
-    #[serde(default)]
-    pub compact: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct NetworkShowArgs {
-    pub id: u64,
-    #[serde(default)]
-    pub body: bool,
-    pub max_body: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct NetworkWaitArgs {
-    pub pattern: Option<String>,
-    pub method: Option<String>,
-    pub status: Option<u16>,
-    pub timeout: Option<u64>,
-    pub since: Option<u64>,
-    #[serde(default)]
-    pub include_existing: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct NetworkExportArgs {
-    pub path: String,
-    #[serde(default = "default_network_export_format")]
-    pub format: String,
-    pub settle_ms: Option<u64>,
-}
-
-impl Default for NetworkExportArgs {
-    fn default() -> Self {
-        Self {
-            path: String::new(),
-            format: default_network_export_format(),
-            settle_ms: None,
-        }
-    }
-}
-
-fn default_max_body_bytes() -> usize {
-    10 * 1024 * 1024
-}
-
-fn default_network_export_format() -> String {
-    "har".to_string()
-}
-
-fn default_viewport_width() -> u32 {
-    390
-}
-
-fn default_viewport_height() -> u32 {
-    844
-}
-
-fn default_device_pixel_ratio() -> f64 {
-    2.0
-}
-
-fn default_wasm_find_max() -> usize {
-    20
-}
-
-fn default_intercept_status() -> u16 {
-    200
-}
-
-fn default_captcha_type() -> String {
-    "auto".to_string()
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Response {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl Response {
-    pub fn ok(data: impl Into<serde_json::Value>) -> Self {
-        Self {
-            ok: true,
-            data: Some(data.into()),
-            error: None,
-        }
-    }
-
-    pub fn ok_text(msg: impl Into<String>) -> Self {
-        Self::ok(serde_json::Value::String(msg.into()))
-    }
-
-    pub fn err(msg: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
-}
-pub async fn write_msg<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    msg: &impl Serialize,
-) -> std::io::Result<()> {
-    let payload = serde_json::to_vec(msg).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let len = (payload.len() as u32).to_be_bytes();
-    writer.write_all(&len).await?;
-    writer.write_all(&payload).await?;
-    writer.flush().await?;
-    Ok(())
-}
-pub async fn read_msg<R: AsyncReadExt + Unpin, T: for<'de> Deserialize<'de>>(
-    reader: &mut R,
-) -> std::io::Result<T> {
-    let mut len_buf = [0u8; 4];
-    reader.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    if len > 64 * 1024 * 1024 {
-        return Err(std::io::Error::other("message too large (>64MB)"));
-    }
-
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).await?;
-    serde_json::from_slice(&buf).map_err(|e| std::io::Error::other(e.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::{UnixListener, UnixStream};
 
     fn temp_socket_path(name: &str) -> std::path::PathBuf {
@@ -1562,18 +1040,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_network_save_har_request_is_still_accepted() {
-        let request: Request = serde_json::from_value(serde_json::json!({
-            "cmd": "network_save_har",
-            "args": { "path": "/tmp/session.har" }
-        }))
-        .unwrap();
-
-        assert_eq!(request.cmd(), "network_save_har");
-        assert_eq!(request.args_json()["format"], "har");
-    }
-
-    #[test]
     fn operation_catalog_maps_stable_paths_to_protocol_commands() {
         let tab = operation_by_path("tab.new").unwrap();
         assert_eq!(tab.cmd, "tab_new");
@@ -1616,6 +1082,17 @@ mod tests {
             assert!(
                 commands.insert(operation.cmd),
                 "duplicate cmd {}",
+                operation.cmd
+            );
+            assert_eq!(operation_by_path(operation.path).unwrap().id, operation.id);
+            assert_eq!(operation_by_cmd(operation.cmd).unwrap().id, operation.id);
+            assert_eq!(
+                request_from_operation_path(
+                    operation.path,
+                    operation.representative_input_for_test()
+                )
+                .unwrap()
+                .cmd(),
                 operation.cmd
             );
         }
@@ -1665,5 +1142,61 @@ mod tests {
             tab_schema["properties"]["tab_id"]["description"],
             "Tab ID from list_tabs."
         );
+    }
+
+    impl OperationSpec {
+        fn representative_input_for_test(&self) -> serde_json::Value {
+            match self.cmd {
+                "open" => serde_json::json!({"url":"about:blank"}),
+                "find" => serde_json::json!({"text":"needle"}),
+                "click" | "dblclick" | "hover" | "scroll" => {
+                    serde_json::json!({"target":"body"})
+                }
+                "fill" => serde_json::json!({"target":"body","text":"value"}),
+                "select" => serde_json::json!({"target":"select","value":"A"}),
+                "key" => serde_json::json!({"key":"Enter"}),
+                "eval" | "exec" => serde_json::json!({"code":"return 1"}),
+                "emulate" => serde_json::json!({"width":390,"height":844}),
+                "fetch" => serde_json::json!({"url":"https://example.com"}),
+                "set_cookie" => serde_json::json!({"name":"a","value":"b"}),
+                "delete_cookie" => serde_json::json!({"name":"a"}),
+                "storage" => serde_json::json!({"key":"a"}),
+                "set_storage" => serde_json::json!({"key":"a","value":"b"}),
+                "save_state" | "load_state" | "network_har" | "network_export" => {
+                    serde_json::json!({"path":"/tmp/eoka-state.json"})
+                }
+                "headers" => serde_json::json!({"headers_json":"{}"}),
+                "console" | "errors" => serde_json::json!({"clear":false}),
+                "tab_new" => serde_json::json!({"url":"about:blank"}),
+                "tab_switch" | "tab_close" | "tab_attach" => serde_json::json!({"tab_id":"1"}),
+                "wait" => serde_json::json!({"text":"ready"}),
+                "spa_navigate" => serde_json::json!({"path":"/"}),
+                "fake_camera" => serde_json::json!({"file":"/tmp/video.y4m"}),
+                "wasm_read" => serde_json::json!({"addr":"0","len":1}),
+                "wasm_write" => serde_json::json!({"addr":"0","hex":"00"}),
+                "wasm_find" => serde_json::json!({"pattern":"00"}),
+                "network_record_start" => serde_json::json!({"patterns":["*"]}),
+                "network_log" => serde_json::json!({"limit":10}),
+                "network_show" => serde_json::json!({"id":1}),
+                "intercept_remove" => serde_json::json!({"id":"1"}),
+                "network_wait" => serde_json::json!({"pattern":"*"}),
+                "intercept_add" => serde_json::json!({"url_pattern":"*"}),
+                "intercept_log" => serde_json::json!({"clear":false}),
+                "js_mode" => serde_json::json!({"mode":"block"}),
+                "js_allow" | "js_block" | "js_remove" => {
+                    serde_json::json!({"domain":"example.com"})
+                }
+                "clone_from" => serde_json::json!({"source":"9222"}),
+                "captcha_solve" => serde_json::json!({
+                    "api_key":"key",
+                    "captcha_type":"hcaptcha",
+                    "website_url":"https://example.com",
+                    "website_key":"site"
+                }),
+                "captcha_detect" => serde_json::json!({}),
+                "captcha_inject" => serde_json::json!({"token":"token"}),
+                _ => serde_json::json!({}),
+            }
+        }
     }
 }

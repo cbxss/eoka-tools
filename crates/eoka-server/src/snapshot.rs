@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use crate::eoka::Page;
 use anyhow::Result;
-use eoka_server::eoka::Page;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -27,7 +27,7 @@ struct AXNode {
     #[serde(default)]
     properties: Vec<AXProperty>,
     parent_id: Option<String>,
-    #[serde(alias = "backendDOMNodeId")]
+    #[serde(rename = "backendDOMNodeId")]
     backend_dom_node_id: Option<i64>,
 }
 

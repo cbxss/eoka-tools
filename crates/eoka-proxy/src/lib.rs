@@ -28,7 +28,6 @@ pub enum ProxyError {
     MissingPort,
     InvalidPath,
     InvalidCredentials,
-    InvalidLegacyFormat,
 }
 
 impl fmt::Display for ProxyError {
@@ -42,7 +41,6 @@ impl fmt::Display for ProxyError {
             Self::InvalidCredentials => {
                 "proxy credentials must include both a username and password"
             }
-            Self::InvalidLegacyFormat => "proxy must be a URL or host:port[:username:password]",
         };
         formatter.write_str(message)
     }
@@ -51,11 +49,7 @@ impl fmt::Display for ProxyError {
 impl std::error::Error for ProxyError {}
 
 pub fn parse(value: &str) -> Result<ProxyConfig, ProxyError> {
-    if value.contains("://") {
-        parse_url(value)
-    } else {
-        parse_legacy(value)
-    }
+    parse_url(value)
 }
 
 pub fn parse_server(
@@ -108,29 +102,6 @@ fn parse_url(value: &str) -> Result<ProxyConfig, ProxyError> {
     })
 }
 
-fn parse_legacy(value: &str) -> Result<ProxyConfig, ProxyError> {
-    let parts: Vec<&str> = value.splitn(4, ':').collect();
-    let (server, username, password) = match parts.as_slice() {
-        [host, port] if !host.is_empty() && !port.is_empty() => {
-            (format!("http://{host}:{port}"), None, None)
-        }
-        [host, port, username, password]
-            if !host.is_empty()
-                && !port.is_empty()
-                && !username.is_empty()
-                && !password.is_empty() =>
-        {
-            (
-                format!("http://{host}:{port}"),
-                Some((*username).to_owned()),
-                Some((*password).to_owned()),
-            )
-        }
-        _ => return Err(ProxyError::InvalidLegacyFormat),
-    };
-    parse_server(&server, username, password)
-}
-
 fn decode_optional(value: &str) -> Result<Option<String>, ProxyError> {
     if value.is_empty() {
         Ok(None)
@@ -160,11 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_legacy_proxy() {
-        let proxy = parse("127.0.0.1:8080:user:password:with:colon").unwrap();
-        assert_eq!(proxy.server, "http://127.0.0.1:8080");
-        assert_eq!(proxy.username.as_deref(), Some("user"));
-        assert_eq!(proxy.password.as_deref(), Some("password:with:colon"));
+    fn rejects_bare_proxy_host_port() {
+        assert_eq!(parse("127.0.0.1:8080").unwrap_err(), ProxyError::InvalidUrl);
     }
 
     #[test]

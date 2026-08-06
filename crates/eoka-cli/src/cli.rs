@@ -99,7 +99,6 @@ pub struct Cli {
 pub enum Command {
     // ── Navigation ──────────────────────────────────────────────────
     /// Navigate to URL
-    #[command(alias = "goto", alias = "navigate")]
     Open {
         url: String,
         /// Extra HTTP headers as JSON (e.g. '{"Authorization": "Bearer ..."}')
@@ -167,7 +166,6 @@ pub enum Command {
 
     /// Emulate a device viewport (CDP Emulation.setDeviceMetricsOverride).
     /// Defaults to an iPhone-class 390x844 @2x mobile viewport.
-    #[command(alias = "viewport", alias = "device")]
     Emulate {
         /// Viewport width in CSS pixels
         #[arg(long, default_value = "390")]
@@ -206,7 +204,7 @@ pub enum Command {
     },
 
     /// Double-click element
-    #[command(alias = "dblclick")]
+    #[command(name = "dblclick")]
     DoubleClick { target: String },
 
     /// Clear and fill input
@@ -229,7 +227,6 @@ pub enum Command {
     Hover { target: String },
 
     /// Press keyboard key (Enter, Tab, Escape, ArrowDown, etc.)
-    #[command(alias = "press")]
     Key { key: String },
 
     /// Scroll page or element into view
@@ -266,7 +263,6 @@ pub enum Command {
     },
 
     /// Run Tack TypeScript against the active eoka browser session
-    #[command(alias = "code")]
     Tack {
         code: Option<String>,
         #[arg(short, long)]
@@ -299,8 +295,8 @@ pub enum Command {
         /// Redirect handling: follow, manual, error
         #[arg(long)]
         redirect: Option<String>,
-        /// Print only the response body. Alias: --raw
-        #[arg(long, alias = "raw")]
+        /// Print only the response body.
+        #[arg(long)]
         body_only: bool,
         /// Max response body chars (default: 8192, 0 for unlimited)
         #[arg(long)]
@@ -439,7 +435,7 @@ pub enum Command {
         /// Path to video file (mp4/webm)
         file: PathBuf,
         /// Loop the video
-        #[arg(long, alias = "loop")]
+        #[arg(long)]
         loop_video: bool,
     },
 
@@ -467,7 +463,6 @@ pub enum Command {
     // ── Session management ──────────────────────────────────────────
     /// List all sessions (running or stale) across every --session name,
     /// like `tmux ls`.
-    #[command(alias = "ls")]
     Sessions,
 
     /// Show daemon status
@@ -526,12 +521,6 @@ pub enum NetworkAction {
         body: bool,
         #[arg(long)]
         max_body: Option<usize>,
-    },
-    #[command(name = "save-har")]
-    SaveHar {
-        path: PathBuf,
-        #[arg(long)]
-        settle_ms: Option<u64>,
     },
     Har {
         path: PathBuf,

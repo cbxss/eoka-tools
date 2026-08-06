@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use eoka::Page;
-use eoka_mcp::{observe, target, Target};
+use eoka_server::{observe, target, Target};
 use serde_json::json;
 
 use super::state::TabState;
