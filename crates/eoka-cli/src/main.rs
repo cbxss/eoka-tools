@@ -67,7 +67,8 @@ async fn main() {
     };
     match &command {
         Command::Sessions => {
-            sessions::print_sessions(json_mode);
+            let meta = agent_mode.then(|| response_meta(&effective_session, "sessions"));
+            sessions::print_sessions(json_mode, meta);
             return;
         }
         Command::Captcha {
@@ -208,7 +209,8 @@ async fn main() {
         Command::Tools {
             action: ToolsAction::Manifest { all, json },
         } => {
-            print_tools_manifest(*all, *json || json_mode);
+            let meta = agent_mode.then(|| response_meta(&effective_session, "tools_manifest"));
+            print_tools_manifest(*all, *json || json_mode, meta);
             return;
         }
         _ => {}
@@ -221,6 +223,7 @@ async fn main() {
             input.as_deref(),
             file.as_ref(),
             *bail,
+            agent_mode,
         )
         .await
         {
@@ -332,8 +335,15 @@ fn parse_port_from_ws(ws_url: &str) -> Option<u16> {
     host_port.rsplit(':').next()?.parse().ok()
 }
 
-fn print_tools_manifest(include_opt_in: bool, json_mode: bool) {
+fn print_tools_manifest(include_opt_in: bool, json_mode: bool, meta: Option<ResponseMeta>) {
     let manifest = manifest_for_operations("eoka", include_opt_in);
+    if let Some(meta) = meta {
+        output::print_response(
+            &Response::ok(json!({ "tools": manifest })).with_meta(meta),
+            true,
+        );
+        return;
+    }
     if json_mode {
         println!(
             "{}",

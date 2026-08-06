@@ -14,6 +14,76 @@ use eoka_protocol::{
     WaitArgs, WasmFindArgs, WasmReadArgs, WasmWriteArgs,
 };
 
+pub const SDK_HELPER_COMMANDS: &[&str] = &[
+    "open",
+    "back",
+    "forward",
+    "reload",
+    "snapshot",
+    "observe",
+    "screenshot",
+    "emulate",
+    "info",
+    "text",
+    "find",
+    "click",
+    "dblclick",
+    "fill",
+    "select",
+    "hover",
+    "key",
+    "scroll",
+    "eval",
+    "exec",
+    "fetch",
+    "cookies",
+    "set_cookie",
+    "delete_cookie",
+    "clear_cookies",
+    "storage",
+    "set_storage",
+    "dump_storage",
+    "save_state",
+    "load_state",
+    "headers",
+    "console",
+    "errors",
+    "tab_list",
+    "tab_new",
+    "tab_switch",
+    "tab_close",
+    "tab_attach",
+    "clone_from",
+    "wait",
+    "spa_info",
+    "spa_navigate",
+    "fake_camera",
+    "wasm_info",
+    "wasm_read",
+    "wasm_write",
+    "wasm_find",
+    "intercept_add",
+    "intercept_list",
+    "intercept_remove",
+    "intercept_log",
+    "js_mode",
+    "js_allow",
+    "js_block",
+    "js_remove",
+    "js_list",
+    "network_record_start",
+    "network_record_stop",
+    "network_record_status",
+    "network_log",
+    "network_show",
+    "network_wait",
+    "network_export",
+    "network_clear",
+    "close",
+    "shutdown",
+    "captcha_inject",
+];
+
 #[derive(Debug, Clone)]
 pub struct EokaClient {
     session_name: String,
@@ -463,6 +533,18 @@ mod tests {
                 js_block: Vec::new(),
             },
         )
+    }
+
+    #[test]
+    fn typed_helper_commands_cover_protocol_catalog() {
+        let helpers: std::collections::BTreeSet<&str> =
+            SDK_HELPER_COMMANDS.iter().copied().collect();
+        let operations: std::collections::BTreeSet<&str> = eoka_protocol::all_operations()
+            .iter()
+            .map(|operation| operation.cmd)
+            .collect();
+
+        assert_eq!(helpers, operations);
     }
 
     #[tokio::test]

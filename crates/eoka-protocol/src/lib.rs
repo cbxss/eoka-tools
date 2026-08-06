@@ -1142,6 +1142,12 @@ mod tests {
             tab_schema["properties"]["tab_id"]["description"],
             "Tab ID from list_tabs."
         );
+
+        let observe_schema = input_schema_for_cmd("observe");
+        assert_eq!(
+            observe_schema["properties"]["structured"]["description"],
+            "Return structured element objects alongside the legacy text list."
+        );
     }
 
     impl OperationSpec {

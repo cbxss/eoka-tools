@@ -1,13 +1,8 @@
-//! `eoka sessions` — list every session with a socket in the runtime dir.
-
 use serde_json::{json, Value};
 
 use crate::{client, output, protocol, session};
 
-/// List every session with a socket file in the runtime dir, live or stale,
-/// like `tmux ls`. Names are the fully-qualified session ids (e.g.
-/// `default-headed`), matching what `--session`/`session_suffix` produce.
-pub(crate) fn print_sessions(json_mode: bool) {
+pub(crate) fn print_sessions(json_mode: bool, meta: Option<protocol::ResponseMeta>) {
     let sessions = session::list_sessions();
 
     if json_mode {
@@ -21,7 +16,11 @@ pub(crate) fn print_sessions(json_mode: bool) {
                 })
             })
             .collect();
-        output::print_response(&protocol::Response::ok(json!({ "sessions": rows })), true);
+        let response = match meta {
+            Some(meta) => protocol::Response::ok(json!({ "sessions": rows })).with_meta(meta),
+            None => protocol::Response::ok(json!({ "sessions": rows })),
+        };
+        output::print_response(&response, true);
         return;
     }
 

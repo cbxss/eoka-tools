@@ -2,9 +2,9 @@ use std::io::Read;
 
 use serde_json::{json, Value};
 
-use crate::client;
 use crate::launch_spec::LaunchSpec;
-use crate::protocol::{Request, Response};
+use crate::protocol::{Request, Response, ResponseMeta};
+use crate::{client, session};
 
 pub(crate) async fn run_batch(
     session_name: &str,
@@ -12,6 +12,7 @@ pub(crate) async fn run_batch(
     input: Option<&str>,
     file: Option<&std::path::PathBuf>,
     bail: bool,
+    agent_mode: bool,
 ) -> Result<Response, String> {
     let source = read_batch_source(input, file)?;
     let requests = parse_batch_requests(&source)?;
@@ -19,11 +20,17 @@ pub(crate) async fn run_batch(
     let mut first_error = None;
     let mut shutdown_daemon = false;
 
-    for request in requests {
+    for mut request in requests {
+        if agent_mode {
+            apply_agent_request_defaults(&mut request);
+        }
         let request_cmd = request.cmd().to_string();
-        let response = client::send_command(session_name, request, spec.clone())
+        let mut response = client::send_command(session_name, request, spec.clone())
             .await
             .map_err(|e| e.to_string())?;
+        if agent_mode {
+            response = response.with_meta(batch_step_meta(session_name, &request_cmd));
+        }
         if !response.ok && first_error.is_none() {
             first_error = response.error.clone();
         }
@@ -49,6 +56,30 @@ pub(crate) async fn run_batch(
             .map(|message| eoka_protocol::ErrorDetail::new("batch_error", message)),
         meta: None,
     })
+}
+
+fn apply_agent_request_defaults(request: &mut Request) {
+    if let Request::Observe(args) = request {
+        args.structured = true;
+    }
+}
+
+fn batch_step_meta(session_name: &str, cmd: &str) -> ResponseMeta {
+    ResponseMeta {
+        session: Some(session_name.to_string()),
+        cmd: Some(cmd.to_string()),
+        socket: Some(
+            session::socket_path(session_name)
+                .to_string_lossy()
+                .to_string(),
+        ),
+        log: Some(
+            session::socket_path(session_name)
+                .with_extension("log")
+                .to_string_lossy()
+                .to_string(),
+        ),
+    }
 }
 
 fn read_batch_source(
@@ -311,6 +342,16 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cmd(), "eval");
         assert_eq!(requests[0].args_json()["code"], "window.location.href");
+    }
+
+    #[test]
+    fn agent_defaults_make_batch_observe_structured() {
+        let mut requests = parse_batch_requests(r#"[{"cmd":"observe","args":{"max":1}}]"#).unwrap();
+
+        apply_agent_request_defaults(&mut requests[0]);
+
+        assert_eq!(requests[0].cmd(), "observe");
+        assert_eq!(requests[0].args_json()["structured"], true);
     }
 
     #[test]

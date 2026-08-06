@@ -28,6 +28,7 @@ pub struct ObserveArgs {
     #[schemars(description = "Maximum elements to return.")]
     pub max: Option<usize>,
     #[serde(default)]
+    #[schemars(description = "Return structured element objects alongside the legacy text list.")]
     pub structured: bool,
 }
 

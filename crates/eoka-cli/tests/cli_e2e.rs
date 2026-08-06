@@ -125,6 +125,36 @@ fn tools_manifest_matches_protocol_catalog() {
 }
 
 #[test]
+fn agent_tools_manifest_uses_response_envelope() {
+    let session = format!("eoka-agent-manifest-test-{}", std::process::id());
+    let output = run(&session, &["--agent", "tools", "manifest", "--json"]);
+    assert_success(&output, "agent tools manifest");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("manifest output should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(true));
+    assert!(!actual["data"]["tools"].as_array().unwrap().is_empty());
+    assert_eq!(actual["meta"]["session"], serde_json::json!(session));
+    assert_eq!(actual["meta"]["cmd"], serde_json::json!("tools_manifest"));
+}
+
+#[test]
+fn agent_sessions_use_response_envelope() {
+    let session = format!("eoka-agent-sessions-test-{}", std::process::id());
+    let output = run(&session, &["--agent", "sessions"]);
+    assert_success(&output, "agent sessions");
+
+    let actual: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("sessions output should be JSON");
+
+    assert_eq!(actual["ok"], serde_json::json!(true));
+    assert!(actual["data"]["sessions"].is_array());
+    assert_eq!(actual["meta"]["session"], serde_json::json!(session));
+    assert_eq!(actual["meta"]["cmd"], serde_json::json!("sessions"));
+}
+
+#[test]
 fn tack_executes_without_browser_tools() {
     let session = format!("eoka-tack-test-{}", std::process::id());
     let output = run(&session, &["tack", "--raw-json", "return 5"]);
