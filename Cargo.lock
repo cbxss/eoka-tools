@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "eoka",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "eoka-tack"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "eoka-protocol",
