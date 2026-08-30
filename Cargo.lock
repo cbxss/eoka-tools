@@ -520,9 +520,9 @@ dependencies = [
 
 [[package]]
 name = "eoka"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4616474737f44e51d3ae952cae6d2d276c84321a28e6dacb67723532736b1b4"
+checksum = "679e4e2c68d96d5d30a126c90e7f7dfea839755c4585b5cdd4e1c1a1da9ae8de"
 dependencies = [
  "aho-corasick",
  "base64 0.23.0",
@@ -694,7 +694,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2331,7 +2331,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2745,7 +2745,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -33,7 +33,11 @@ async fn main() {
                 std::process::exit(1);
             }
         };
-        if let Err(e) = daemon::run(&launch::effective_session(&cli, &spec), spec).await {
+        // The client already passes the suffixed session name (e.g. `foo-live`
+        // for connect mode); re-applying effective_session here double-appends
+        // the suffix (`foo-live-live`) and the socket never matches what the
+        // client waits for.
+        if let Err(e) = daemon::run(&cli.session, spec).await {
             eprintln!("[eoka] daemon error: {}", e);
             std::process::exit(1);
         }

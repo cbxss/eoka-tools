@@ -18,6 +18,25 @@ pub fn pid_path(session: &str) -> PathBuf {
     runtime_dir().join(format!("eoka-{}.pid", session))
 }
 
+/// Durable Chrome profile directory for a named session. Survives daemon
+/// restarts, unlike the runtime dir. Overridable via `EOKA_PROFILE_DIR`.
+pub fn profile_dir(session: &str) -> PathBuf {
+    if let Ok(base) = std::env::var("EOKA_PROFILE_DIR") {
+        return PathBuf::from(base).join(session);
+    }
+    let base = std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            if home.is_empty() {
+                std::env::temp_dir()
+            } else {
+                PathBuf::from(home).join(".local/state")
+            }
+        });
+    base.join("eoka/profiles").join(session)
+}
+
 /// Ensure the runtime directory exists.
 pub fn ensure_runtime_dir() -> std::io::Result<()> {
     std::fs::create_dir_all(runtime_dir())

@@ -86,13 +86,22 @@ impl Handler {
                 clone_state_from,
                 no_stealth,
                 proxy,
+                persist,
+                geo_align,
                 ..
             } => {
+                let persist_dir = if *persist {
+                    Some(crate::session::profile_dir(&self.session_name))
+                } else {
+                    None
+                };
                 let mut s = BrowserState::launched(
                     *headless,
                     from_profile.as_deref(),
                     *no_stealth,
                     proxy.clone(),
+                    persist_dir.as_deref(),
+                    *geo_align,
                 )
                 .await
                 .map_err(|e| e.to_string())?;

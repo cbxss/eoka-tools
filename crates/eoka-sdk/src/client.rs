@@ -316,12 +316,25 @@ pub async fn send_command(
     request: Request,
     spec: LaunchSpec,
 ) -> anyhow::Result<Response> {
-    let sock = session::socket_path(session_name);
+    let response = send_command_once(session_name, request.clone(), &spec).await?;
+    if should_restart_headed_daemon(&response, &spec) {
+        let _ = kill_daemon(session_name);
+        let retry = send_command_once(session_name, request, &spec).await?;
+        return Ok(retry);
+    }
+    Ok(response)
+}
 
+async fn send_command_once(
+    session_name: &str,
+    request: Request,
+    spec: &LaunchSpec,
+) -> anyhow::Result<Response> {
+    let sock = session::socket_path(session_name);
     let stream = match UnixStream::connect(&sock).await {
         Ok(s) => s,
         Err(_) => {
-            launch_daemon(session_name, &spec)?;
+            launch_daemon(session_name, spec)?;
             wait_for_socket(session_name).await?
         }
     };
@@ -330,6 +343,23 @@ pub async fn send_command(
     write_msg(&mut writer, &request).await?;
     let response: Response = read_msg(&mut reader).await?;
     Ok(response)
+}
+
+fn should_restart_headed_daemon(response: &Response, spec: &LaunchSpec) -> bool {
+    let LaunchSpec::Launch {
+        headless: false, ..
+    } = spec
+    else {
+        return false;
+    };
+    if std::env::var_os("DISPLAY").is_none() {
+        return false;
+    }
+    let Some(error) = response.error.as_deref() else {
+        return false;
+    };
+    error.contains("Missing X server or $DISPLAY")
+        || error.contains("channel is empty and sending half is closed")
 }
 async fn wait_for_socket(session_name: &str) -> anyhow::Result<UnixStream> {
     let sock = session::socket_path(session_name);
@@ -364,6 +394,8 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             no_js,
             js_allow,
             js_block,
+            persist,
+            geo_align,
         } => {
             if !*headless {
                 cmd.arg("--headed");
@@ -376,6 +408,12 @@ fn launch_daemon(session_name: &str, spec: &LaunchSpec) -> anyhow::Result<()> {
             }
             if *no_stealth {
                 cmd.arg("--no-stealth");
+            }
+            if *persist {
+                cmd.arg("--persist");
+            }
+            if !*geo_align {
+                cmd.arg("--no-geo-align");
             }
             if let Some(p) = proxy {
                 cmd.arg("--proxy").arg(p);
@@ -461,6 +499,8 @@ mod tests {
                 no_js: false,
                 js_allow: Vec::new(),
                 js_block: Vec::new(),
+                persist: false,
+                geo_align: false,
             },
         )
     }

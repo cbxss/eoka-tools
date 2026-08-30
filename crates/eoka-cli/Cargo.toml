@@ -18,7 +18,7 @@ eoka-server = { version = "0.2.0", path = "../eoka-server" }
 eoka-sdk = { version = "0.2.0", path = "../eoka-sdk" }
 eoka-tack = { version = "0.2.0", path = "../eoka-tack" }
 captcha = { package = "eoka-captcha", version = "0.1.1", path = "../captcha" }
-eoka = "0.5"
+eoka = "0.5.8"
 tack-core = { workspace = true }
 tack-runtime-quickjs = { workspace = true }
 clap = { workspace = true }

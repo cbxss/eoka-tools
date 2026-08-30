@@ -141,6 +141,8 @@ Common global flags:
 | `--auto-connect` | discover Chrome on 9222-9229 |
 | `--clone-state-from <PORT\|URL>` | hydrate launched browser from live Chrome |
 | `--from-profile <auto\|PATH>` | launch from copied profile |
+| `--persist` | durable Chrome profile for the session (survives restarts; `EOKA_PROFILE_DIR` overrides the location) |
+| `--no-geo-align` | disable IP-geolocation timezone/language alignment (on by default) |
 | `--proxy <URL>` / `--proxy-file <FILE>` | launched-browser proxy |
 | `--no-js`, `--js-allow`, `--js-block` | per-domain JavaScript policy |
 
