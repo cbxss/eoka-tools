@@ -520,8 +520,9 @@ dependencies = [
 
 [[package]]
 name = "eoka"
-version = "0.5.7"
-source = "git+https://github.com/shrimp-software/eoka?branch=feat%2Fstealth-hardening#e0a3d38ebb747f64e5c24f2af4fde824532f07b6"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "679e4e2c68d96d5d30a126c90e7f7dfea839755c4585b5cdd4e1c1a1da9ae8de"
 dependencies = [
  "aho-corasick",
  "base64 0.23.0",
