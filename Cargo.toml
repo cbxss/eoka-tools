@@ -2,6 +2,9 @@
 resolver = "2"
 members = ["crates/*"]
 
+[patch.crates-io]
+eoka = { git = "https://github.com/shrimp-software/eoka", branch = "feat/stealth-hardening" }
+
 [workspace.package]
 edition = "2021"
 license = "MIT"

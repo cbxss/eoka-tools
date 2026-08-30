@@ -7,20 +7,15 @@ pub enum LaunchSpec {
     /// Spawn a fresh Chrome via `Browser::launch_with_config`.
     Launch {
         headless: bool,
-        /// Optional: copy this profile dir before launching, point Chrome at the copy.
         from_profile: Option<PathBuf>,
-        /// Optional: after launch, hydrate from a running Chrome (port or ws:// URL).
         clone_state_from: Option<String>,
-        /// Disable stealth (filter_cdp + evasion script).
         no_stealth: bool,
-        /// Resolved proxy URL (already picked from --proxy-file if that was used).
         proxy: Option<String>,
-        /// Start in block-all JS mode (NoScript "Safest"-style).
         no_js: bool,
-        /// Domains to always run JS on, regardless of `no_js`.
         js_allow: Vec<String>,
-        /// Domains to always block JS on, even without `no_js`.
         js_block: Vec<String>,
+        persist: bool,
+        geo_align: bool,
     },
     /// Attach to a Chrome already running, via `Browser::connect_with_config`.
     Connect { ws_url: String },

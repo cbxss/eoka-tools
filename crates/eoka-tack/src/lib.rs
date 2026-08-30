@@ -246,6 +246,8 @@ mod tests {
                 no_js: false,
                 js_allow: Vec::new(),
                 js_block: Vec::new(),
+                persist: false,
+                geo_align: false,
             },
         ))
     }

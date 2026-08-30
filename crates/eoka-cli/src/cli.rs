@@ -61,6 +61,20 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        env = "EOKA_PERSIST",
+        help = "Keep a durable Chrome profile for this session across restarts"
+    )]
+    pub persist: bool,
+    #[arg(
+        long,
+        global = true,
+        env = "EOKA_NO_GEO_ALIGN",
+        help = "Disable IP-geolocation timezone/language alignment (on by default)"
+    )]
+    pub no_geo_align: bool,
+    #[arg(
+        long,
+        global = true,
         value_name = "URL",
         env = "EOKA_PROXY",
         conflicts_with = "proxy_file",

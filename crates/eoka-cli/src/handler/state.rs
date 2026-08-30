@@ -44,6 +44,8 @@ impl BrowserState {
         copy_profile_from: Option<&std::path::Path>,
         no_stealth: bool,
         proxy: Option<String>,
+        persist_profile_dir: Option<&std::path::Path>,
+        geo_align: bool,
     ) -> eoka::Result<Self> {
         let patch_binary = std::env::var("EOKA_PATCH_BINARY")
             .map(|v| v == "true" || v == "1")
@@ -73,21 +75,27 @@ impl BrowserState {
 
         let cdp_timeout = if proxy.is_some() { 90 } else { 30 };
 
-        let mut extra_args: Vec<String> = std::env::var("EOKA_CHROME_ARGS")
+        let extra_args: Vec<String> = std::env::var("EOKA_CHROME_ARGS")
             .unwrap_or_default()
             .split(':')
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
 
+        let mut user_data_dir = persist_profile_dir.map(|dir| dir.to_string_lossy().to_string());
         if let Some(src) = copy_profile_from {
             let dst = clone_profile_dir(src).map_err(eoka::Error::Io)?;
-            extra_args.push(format!("--user-data-dir={}", dst.display()));
+            user_data_dir = Some(dst.to_string_lossy().to_string());
             eprintln!(
                 "[eoka] cloned profile {} → {}",
                 src.display(),
                 dst.display()
             );
+        }
+
+        if let Some(ref dir) = user_data_dir {
+            std::fs::create_dir_all(dir).map_err(eoka::Error::Io)?;
+            eprintln!("[eoka] durable profile dir {}", dir);
         }
 
         eprintln!(
@@ -109,6 +117,8 @@ impl BrowserState {
             extra_args,
             live_session: no_stealth,
             filter_cdp: !no_stealth,
+            user_data_dir,
+            geo_align: geo_align && !no_stealth,
             ..Default::default()
         };
         let browser = Browser::launch_with_config(config).await?;

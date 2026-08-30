@@ -26,6 +26,8 @@ pub(crate) fn resolve_launch_spec(cli: &Cli) -> Result<LaunchSpec, String> {
         no_js: cli.no_js,
         js_allow: cli.js_allow.clone(),
         js_block: cli.js_block.clone(),
+        persist: cli.persist,
+        geo_align: !cli.no_geo_align,
     })
 }
 
